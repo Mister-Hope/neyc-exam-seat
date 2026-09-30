@@ -55,6 +55,7 @@ export type { ConstraintSeatSet, DomainBundle, StudentDomain } from "./domain";
 export { findRoomSubjectClashes, planAll } from "./plan-all";
 export type {
   PlanAllResult,
+  PlanAllUnmetConstraint,
   RoomSubjectClash,
   SeatingPlan,
   StudentRoomUsage,
@@ -68,7 +69,8 @@ export type { PrecheckResult } from "./precheck";
 export { collectConflicts, solve } from "./solver";
 export type { SolveInput, SolveOutput } from "./solver";
 
-export { validate } from "./validate";
+export { validate, validateAll } from "./validate";
+export type { PlanAllSeatingValidation, PlanAllValidation } from "./validate";
 
 export {
   DEFAULT_SEED,

@@ -1,4 +1,4 @@
-import { resolveConstraintStudents } from "./domain";
+import { hasAnySelector, resolveConstraintStudents } from "./domain";
 import { compileModel } from "./model";
 import type { CompiledModel } from "./model";
 import { roomCapacity } from "./numbering";
@@ -12,7 +12,16 @@ import {
   normalizeCombination,
   subjectLabel,
 } from "./subjects";
-import type { Diagnostic, GroupPreference, Job, PlanOptions, PlanResult, RoomSpec } from "./types";
+import type {
+  Constraint,
+  Diagnostic,
+  GroupPreference,
+  Job,
+  PlanOptions,
+  PlanResult,
+  RoomSpec,
+  UnmetConstraint,
+} from "./types";
 
 /** 一套座位方案：一个考场里的一批固定学生 + 一套固定座位 */
 export interface SeatingPlan {
@@ -73,7 +82,15 @@ export interface PlanAllResult {
   emptyRooms: string[];
   /** 考场数超过上限的学生（正常应为空） */
   overRoomLimit: { studentId: string; name: string; count: number }[];
+  /** 各套座位没满足的限定汇总（形状与单场一致，额外带上是哪个考场） */
+  unmetConstraints: PlanAllUnmetConstraint[];
   diagnostics: Diagnostic[];
+}
+
+/** 多场次里某条限定没被满足：单场的形状 + 发生在哪个考场。 */
+export interface PlanAllUnmetConstraint extends UnmetConstraint {
+  roomId: string;
+  roomName: string;
 }
 
 /** 一处「同一考场、同一时段出现多门科目」的硬规则违规（`docs/design.md` §5.1）。 */
@@ -152,6 +169,8 @@ interface SeatingDemand {
   key: string;
   students: number[];
   subjects: string[];
+  /** 被 `roomId` 限定到某个考场：只能放进它，放不下要明确诊断（绝不改成「不限考场」） */
+  requiredRoomId?: string;
 }
 
 /** 一套座位在每个时段的科目签名：`null` = 这个时段这批学生没有考试。 */
@@ -237,17 +256,96 @@ function groupIrregularDemands(
   }));
 }
 
+/** 一条能真正应用的限定 + 它命中的学生下标 */
+interface ApplicableConstraint {
+  constraint: Constraint;
+  hits: Set<number>;
+}
+
+/** 取某个学生在给定考场集合里被 roomId 限定到的考场；没有就 undefined。 */
+function requiredRoomIn(
+  required: readonly string[] | undefined,
+  allowed: ReadonlySet<string>,
+): string | undefined {
+  if (!required) return undefined;
+  return required.find((roomId) => allowed.has(roomId));
+}
+
+/**
+ * 按「被 roomId 限定到的考场」把一批学生拆开。
+ *
+ * 同一批次里不同学生可能被限定到不同考场（也可能没被限定）。拆开之后每个批次至多只有一个
+ * `requiredRoomId`，分房时才能真正把它们放进各自被要求的考场；没被限定的学生单独成批，正常按分房倾向铺。
+ */
+function splitByRequiredRoom(
+  demand: SeatingDemand,
+  pickRoom: (studentIndex: number) => string | undefined,
+): SeatingDemand[] {
+  const buckets = new Map<string, number[]>();
+  const unpinned: number[] = [];
+  for (const index of demand.students) {
+    const roomId = pickRoom(index);
+    if (roomId == null) {
+      unpinned.push(index);
+      continue;
+    }
+    const list = buckets.get(roomId) ?? [];
+    list.push(index);
+    buckets.set(roomId, list);
+  }
+  if (buckets.size === 0) return [demand];
+
+  const out: SeatingDemand[] = [];
+  for (const [roomId, students] of buckets) {
+    out.push({ ...demand, students, requiredRoomId: roomId });
+  }
+  if (unpinned.length > 0) out.push({ ...demand, students: unpinned });
+  return out;
+}
+
+/** 某套座位适用的限定：命中这套座位里的学生，且 roomId 为空或就是这套座位的考场。 */
+function constraintsForGroup(
+  applicable: readonly ApplicableConstraint[],
+  groupStudents: readonly number[],
+  roomId: string,
+): Constraint[] {
+  const members = new Set(groupStudents);
+  const out: Constraint[] = [];
+  for (const { constraint, hits } of applicable) {
+    if (constraint.roomId && constraint.roomId !== roomId) continue;
+    for (const index of hits) {
+      if (members.has(index)) {
+        out.push(constraint);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** 某个「被 roomId 限定」的批次没能放进指定考场的原因 */
+interface UnsatisfiedDemand {
+  key: string;
+  roomId: string;
+  students: number;
+  reason: "unknown-room" | "capacity" | "conflict";
+}
+
 interface Allocation {
   groups: SeatingGroup[];
   ok: boolean;
   missingSeats: number;
   /** 被多个批次共用的考场 id（按出现顺序） */
   sharedRooms: string[];
+  /** 被 roomId 限定、却没能进指定考场的批次（要变成明确诊断，绝不静默改成「不限考场」） */
+  unsatisfied: UnsatisfiedDemand[];
 }
 
 /**
- * 把若干「需求组」铺到普通考场里。
+ * 把若干「需求组」铺到给定考场里。
  *
+ * - `demand.requiredRoomId` 有值 = 这批学生被 `roomId` 限定：**只能**放进那个考场，放不下就记进 `unsatisfied`
+ *   由上层报错，绝不改放到别的考场（那等于把限定悄悄丢掉）。
  * - `sameCombination`：每个批次独占考场，绝不与别的批次同房；不够就报缺座，不偷偷混排。
  * - `fillRooms`：先把当前考场填满再换下一个；只允许与**逐时段不冲突**的批次共用， 共用时把那批学生**并进同一个座位方案**（并集、subjects 取并集、只排一次座位），
  *   这样同一考场同时段不会出现两套各自从 1 号开始的座位号。
@@ -261,94 +359,141 @@ function allocateDemands(
   const groups: SeatingGroup[] = [];
   const signatures = demands.map((demand) => slotSignature(demand.subjects, slots));
   const roomTakers = new Map<string, Set<number>>();
-  let roomIndex = 0;
-  let used = 0;
-  // fillRooms 下当前这个「还没填满」的座位方案；同一考场的兼容批次都并进它
-  let current: SeatingGroup | null = null;
-  let occupants: number[] = [];
+  const roomIndexOf = new Map(rooms.map((room, index) => [room.id, index]));
+  const state = rooms.map(() => ({ used: 0, occupants: [] as number[] }));
+  // fillRooms 下每个考场「还没填满」的那套座位；兼容批次都并进它
+  const openGroups = new Map<number, SeatingGroup>();
+  const unsatisfied: UnsatisfiedDemand[] = [];
+  let cursor = 0;
   let missingSeats = 0;
 
-  const markTaker = (roomId: string, demandIndex: number): void => {
-    const takers = roomTakers.get(roomId) ?? new Set<number>();
+  const place = (demandIndex: number, roomIndex: number, chunk: number[]): void => {
+    if (chunk.length === 0) return;
+    const demand = demands[demandIndex]!;
+    const room = rooms[roomIndex]!;
+    const roomState = state[roomIndex]!;
+    const takers = roomTakers.get(room.id) ?? new Set<number>();
     takers.add(demandIndex);
-    roomTakers.set(roomId, takers);
+    roomTakers.set(room.id, takers);
+    roomState.used += chunk.length;
+    if (!roomState.occupants.includes(demandIndex)) roomState.occupants.push(demandIndex);
+
+    const open = preference === "fillRooms" ? openGroups.get(roomIndex) : undefined;
+    if (open) {
+      open.students.push(...chunk);
+      for (const subject of demand.subjects) {
+        if (!open.subjects.includes(subject)) open.subjects.push(subject);
+      }
+      return;
+    }
+    const group: SeatingGroup = {
+      kind: demand.kind,
+      key: demand.key,
+      students: [...chunk],
+      subjects: [...demand.subjects],
+      room,
+    };
+    groups.push(group);
+    if (preference === "fillRooms") openGroups.set(roomIndex, group);
   };
 
-  const openRoom = (): void => {
-    roomIndex += 1;
-    used = 0;
-    current = null;
-    occupants = [];
+  const canEnter = (demandIndex: number, roomIndex: number): boolean => {
+    const roomState = state[roomIndex]!;
+    if (roomState.used === 0) return true;
+    // sameCombination：考场已被别的批次占用 → 不能进
+    if (preference === "sameCombination") return false;
+    return roomState.occupants.every((other) =>
+      canShareRoom(signatures[other]!, signatures[demandIndex]!),
+    );
   };
 
-  for (let di = 0; di < demands.length; di += 1) {
-    const demand = demands[di]!;
+  // 被 roomId 限定的批次先分房，保证它先拿到指定考场的座位
+  const order = demands
+    .map((_, index) => index)
+    .sort((a, b) => {
+      const pinnedA = demands[a]!.requiredRoomId == null ? 1 : 0;
+      const pinnedB = demands[b]!.requiredRoomId == null ? 1 : 0;
+      return pinnedA - pinnedB || a - b;
+    });
+
+  for (const demandIndex of order) {
+    const demand = demands[demandIndex]!;
     let remaining = demand.students;
 
+    if (demand.requiredRoomId != null) {
+      const roomIndex = roomIndexOf.get(demand.requiredRoomId);
+      if (roomIndex === undefined) {
+        unsatisfied.push({
+          key: demand.key,
+          roomId: demand.requiredRoomId,
+          students: remaining.length,
+          reason: "unknown-room",
+        });
+        missingSeats += remaining.length;
+        continue;
+      }
+      if (!canEnter(demandIndex, roomIndex)) {
+        unsatisfied.push({
+          key: demand.key,
+          roomId: demand.requiredRoomId,
+          students: remaining.length,
+          reason: "conflict",
+        });
+        missingSeats += remaining.length;
+        continue;
+      }
+      const free = roomCapacity(rooms[roomIndex]!) - state[roomIndex]!.used;
+      const chunk = remaining.slice(0, free);
+      remaining = remaining.slice(chunk.length);
+      place(demandIndex, roomIndex, chunk);
+      if (remaining.length > 0) {
+        unsatisfied.push({
+          key: demand.key,
+          roomId: demand.requiredRoomId,
+          students: remaining.length,
+          reason: "capacity",
+        });
+        missingSeats += remaining.length;
+      }
+      continue;
+    }
+
     while (remaining.length > 0) {
-      if (roomIndex >= rooms.length) {
+      if (cursor >= rooms.length) {
         missingSeats += remaining.length;
         break;
       }
-      const room = rooms[roomIndex]!;
-      const capacity = roomCapacity(room);
+      const roomIndex = cursor;
+      const capacity = roomCapacity(rooms[roomIndex]!);
 
       if (preference === "sameCombination") {
         // 每批次独占考场：一个考场只装同一个批次，同一个批次的后续学生另起考场
+        if (state[roomIndex]!.used > 0 || capacity <= 0) {
+          cursor += 1;
+          continue;
+        }
         const chunk = remaining.slice(0, capacity);
         remaining = remaining.slice(chunk.length);
-        groups.push({
-          kind: demand.kind,
-          key: demand.key,
-          students: chunk,
-          subjects: [...demand.subjects],
-          room,
-        });
-        markTaker(room.id, di);
-        openRoom();
+        place(demandIndex, roomIndex, chunk);
+        cursor += 1;
         continue;
       }
 
       // fillRooms：先把这个考场填满
-      if (used >= capacity) {
-        openRoom();
+      if (state[roomIndex]!.used >= capacity || !canEnter(demandIndex, roomIndex)) {
+        cursor += 1;
         continue;
       }
-      if (
-        current != null &&
-        !occupants.every((other) => canShareRoom(signatures[other]!, signatures[di]!))
-      ) {
-        // 与当前考场里的批次逐时段冲突 → 不共用，换下一个考场
-        openRoom();
-        continue;
-      }
-
-      const chunk = remaining.slice(0, capacity - used);
+      const chunk = remaining.slice(0, capacity - state[roomIndex]!.used);
       remaining = remaining.slice(chunk.length);
-      if (current == null) {
-        current = {
-          kind: demand.kind,
-          key: demand.key,
-          students: [],
-          subjects: [...demand.subjects],
-          room,
-        };
-        groups.push(current);
-      }
-      current.students.push(...chunk);
-      for (const subject of demand.subjects) {
-        if (!current.subjects.includes(subject)) current.subjects.push(subject);
-      }
-      markTaker(room.id, di);
-      occupants.push(di);
-      used += chunk.length;
+      place(demandIndex, roomIndex, chunk);
     }
   }
 
   const sharedRooms = [...roomTakers.entries()]
     .filter(([, takers]) => takers.size > 1)
     .map(([roomId]) => roomId);
-  return { groups, ok: missingSeats === 0, missingSeats, sharedRooms };
+  return { groups, ok: missingSeats === 0, missingSeats, sharedRooms, unsatisfied };
 }
 
 function roomName(room: RoomSpec): string {
@@ -381,23 +526,6 @@ function interleaveByClass(members: readonly number[], classOfStudent: Int32Arra
       const item = list[round];
       if (item !== undefined) out.push(item);
     }
-  }
-  return out;
-}
-
-/** 把一批学生按考场容量依次填满给定考场 */
-function fillRooms(
-  students: number[],
-  rooms: RoomSpec[],
-): { students: number[]; room: RoomSpec }[] {
-  const out: { students: number[]; room: RoomSpec }[] = [];
-  let cursor = 0;
-  for (const room of rooms) {
-    if (cursor >= students.length) break;
-    const capacity = roomCapacity(room);
-    const chunk = students.slice(cursor, cursor + capacity);
-    cursor += chunk.length;
-    if (chunk.length > 0) out.push({ students: chunk, room });
   }
   return out;
 }
@@ -481,28 +609,139 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     });
   }
 
-  // 多场次是「按组合分组分房」，目前没有把限定纳入分房的算法（docs/design.md §5.4）。
-  // 绝不静默：只要 job 带了限定就明确告诉老师「这次没应用」，需要限定请改走单场。
+  /* ---------- 3b. 限定：能应用的进求解，不能应用的明确报错（绝不静默） ---------- */
   const constraints = job.constraints ?? [];
-  if (hasSelection && constraints.length > 0) {
-    const affected = new Set<number>();
-    for (const constraint of constraints) {
-      for (const index of resolveConstraintStudents(model, constraint)) affected.add(index);
+  const roomIdSet = new Set(model.rooms.map((r) => r.spec.id));
+  const applicableConstraints: ApplicableConstraint[] = [];
+
+  for (const constraint of constraints) {
+    if (!hasAnySelector(constraint)) {
+      diagnostics.push({
+        code: "CONSTRAINT_NO_SELECTOR",
+        severity: "error",
+        message: `限定「${constraint.id}」没有写任何选择器（studentIds / classes / combinations / subjects），它不会生效`,
+        evidence: { constraintId: constraint.id },
+        suggestions: [],
+      });
+      continue;
     }
-    diagnostics.push({
-      code: "CONSTRAINTS_IGNORED_MULTI",
-      severity: "warning",
-      message: `多场次排考暂不支持限定：本次没有应用 job 里的 ${constraints.length} 条限定（涉及 ${affected.size} 名学生）；需要限定请用 --single 单场排`,
-      evidence: { constraints: constraints.length, students: affected.size },
-      suggestions: [
-        {
-          id: "use-single-plan",
-          label: "改用单场排考以应用限定：exam-seat plan --single",
-          effect: "限定会作为硬约束生效；但不再按选科分时段、分考场",
-        },
-      ],
+    if (constraint.roomId && !roomIdSet.has(constraint.roomId)) {
+      diagnostics.push({
+        code: "UNKNOWN_ROOM_ID",
+        severity: "error",
+        message: `限定「${constraint.id}」引用了不存在的考场 ${constraint.roomId}`,
+        evidence: { constraintId: constraint.id, roomId: constraint.roomId },
+        suggestions: [],
+      });
+      continue;
+    }
+    applicableConstraints.push({
+      constraint,
+      hits: new Set(resolveConstraintStudents(model, constraint)),
     });
   }
+
+  // 学生 → 被 roomId 限定到的考场（去重、按限定出现顺序）
+  const requiredRoomsByStudent = new Map<number, string[]>();
+  for (const entry of applicableConstraints) {
+    const roomId = entry.constraint.roomId;
+    if (!roomId) continue;
+    for (const index of entry.hits) {
+      const list = requiredRoomsByStudent.get(index) ?? [];
+      if (!list.includes(roomId)) list.push(roomId);
+      requiredRoomsByStudent.set(index, list);
+    }
+  }
+
+  const generalRoomIds = new Set(generalRooms.map((room) => room.id));
+  const dedicatedRoomsOfStudent = (index: number): Set<string> => {
+    const out = new Set<string>();
+    for (const subject of model.subjectOfStudent[index] ?? []) {
+      for (const room of dedicatedRooms.get(subject) ?? []) out.add(room.id);
+    }
+    return out;
+  };
+
+  const conflictingStudents: string[] = [];
+  const inapplicableRoomLimits: { studentId: string; roomId: string }[] = [];
+  for (const [index, rooms] of requiredRoomsByStudent) {
+    const generalRequired = rooms.filter((roomId) => generalRoomIds.has(roomId));
+    if (generalRequired.length > 1 && conflictingStudents.length < 20) {
+      conflictingStudents.push(`${students[index]!.id}（${generalRequired.join(" / ")}）`);
+    }
+    const usable = new Set([...generalRequired, ...dedicatedRoomsOfStudent(index)]);
+    for (const roomId of rooms) {
+      if (!usable.has(roomId) && inapplicableRoomLimits.length < 20) {
+        inapplicableRoomLimits.push({ studentId: students[index]!.id, roomId });
+      }
+    }
+  }
+  if (conflictingStudents.length > 0) {
+    diagnostics.push({
+      code: "RULE_INTERSECT_EMPTY",
+      severity: "error",
+      message: `有 ${conflictingStudents.length} 名学生被多条限定要求去不同的普通考场，同一套座位不可能同时满足`,
+      evidence: { students: conflictingStudents },
+      suggestions: [],
+    });
+  }
+  if (inapplicableRoomLimits.length > 0) {
+    diagnostics.push({
+      code: "CONSTRAINT_EMPTY_DOMAIN",
+      severity: "error",
+      message: `有 ${inapplicableRoomLimits.length} 名学生被 roomId 限定到他们不会去的考场（既不属于主考场，也不属于他们会考的专用考场）`,
+      evidence: { students: inapplicableRoomLimits },
+      suggestions: [],
+    });
+  }
+
+  /**
+   * 把「被 roomId 限定却没能进指定考场」的批次变成明确诊断。
+   *
+   * 绝不静默改成「不限考场」：要么进得去，要么报错且 `ok=false`（该结果不得导出）。
+   */
+  const reportUnsatisfiedRooms = (allocation: Allocation): void => {
+    for (const item of allocation.unsatisfied) {
+      const room = model.rooms.find((r) => r.spec.id === item.roomId)?.spec;
+      const name = room ? roomName(room) : item.roomId;
+      if (item.reason === "unknown-room") {
+        diagnostics.push({
+          code: "UNKNOWN_ROOM_ID",
+          severity: "error",
+          message: `限定要求的考场 ${item.roomId} 不可用，${item.students} 名学生（${item.key}）无法安排`,
+          evidence: { roomId: item.roomId, students: item.students, batch: item.key },
+          suggestions: [],
+        });
+        continue;
+      }
+      if (item.reason === "capacity") {
+        diagnostics.push({
+          code: "CONSTRAINT_OVERSATURATED",
+          severity: "error",
+          message: `限定把学生放进了${name}，但那里只有 ${room ? roomCapacity(room) : 0} 个座位，还差 ${item.students} 个（${item.key}）`,
+          evidence: {
+            roomId: item.roomId,
+            capacity: room ? roomCapacity(room) : 0,
+            missingSeats: item.students,
+            batch: item.key,
+          },
+          suggestions: [],
+        });
+        continue;
+      }
+      diagnostics.push({
+        code: "RULE_INTERSECT_EMPTY",
+        severity: "error",
+        message: `${name} 已被别的批次占用（${
+          options.groupPreference === "sameCombination"
+            ? "sameCombination 下每个批次独占考场"
+            : "与已有批次逐时段冲突"
+        }），被 roomId 限定到这里的学生（${item.key}）无法进入`,
+        evidence: { roomId: item.roomId, students: item.students, batch: item.key },
+        suggestions: [],
+      });
+    }
+  };
 
   /* ---------- 4. 组装座位组 ---------- */
   const groups: SeatingGroup[] = [];
@@ -517,18 +756,29 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     for (const [combo, members] of regularEntries) {
       const subjects = new Set<string>(core);
       for (const i of members) for (const s of model.subjectOfStudent[i] ?? []) subjects.add(s);
-      demands.push({
-        kind: "regular",
-        key: combo,
-        students: interleaveByClass(members, model.classOfStudent),
-        subjects: [...subjects],
-      });
+      demands.push(
+        ...splitByRequiredRoom(
+          {
+            kind: "regular",
+            key: combo,
+            students: interleaveByClass(members, model.classOfStudent),
+            subjects: [...subjects],
+          },
+          (index) => requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
+        ),
+      );
     }
 
     // 4b. 非常规主考场：语数外 + 选考科目里「没被专用考场接走」的那些。
     // 按逐时段科目签名分批 —— 签名冲突（同一时段两门科目）的批次不能并进同一套座位，
     // 签名不冲突的批次（例如有政史地把政治/地理拆到两个时段时的物化政 + 物化地）继续共用主考场。
-    demands.push(...groupIrregularDemands(irregular, model, dedicatedSubjects, slots, core));
+    for (const base of groupIrregularDemands(irregular, model, dedicatedSubjects, slots, core)) {
+      demands.push(
+        ...splitByRequiredRoom(base, (index) =>
+          requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
+        ),
+      );
+    }
 
     // 分房倾向（§5.4）：
     //   sameCombination（默认）= 每个批次独占考场，不够直接报 CAPACITY_INSUFFICIENT，不偷偷混排；
@@ -547,7 +797,8 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
         suggestions: [],
       });
     }
-    if (!allocation.ok) {
+    reportUnsatisfiedRooms(allocation);
+    if (allocation.missingSeats > 0 && allocation.unsatisfied.length === 0) {
       diagnostics.push({
         code: "CAPACITY_INSUFFICIENT",
         severity: "error",
@@ -574,15 +825,19 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
           suggestions: [],
         });
       }
-      for (const chunk of fillRooms(interleaveByClass(takers, model.classOfStudent), rooms)) {
-        groups.push({
+      const roomIds = new Set(rooms.map((room) => room.id));
+      const dedicatedDemands = splitByRequiredRoom(
+        {
           kind: "dedicated",
           key: subject,
-          students: chunk.students,
+          students: interleaveByClass(takers, model.classOfStudent),
           subjects: [subject],
-          room: chunk.room,
-        });
-      }
+        },
+        (index) => requiredRoomIn(requiredRoomsByStudent.get(index), roomIds),
+      );
+      const dedicated = allocateDemands(dedicatedDemands, rooms, slots, options.groupPreference);
+      groups.push(...dedicated.groups);
+      reportUnsatisfiedRooms(dedicated);
     }
   } else {
     // 没有选科信息：多场次没法按组合分组，退化成普通单场（`docs/design.md` §5）。
@@ -598,24 +853,25 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
       });
     }
     const all = students.map((_, i) => i);
-    let placed = 0;
-    for (const chunk of fillRooms(all, generalRooms)) {
-      placed += chunk.students.length;
-      groups.push({
-        kind: "regular",
-        key: "all",
-        students: chunk.students,
-        subjects: [],
-        room: chunk.room,
-      });
-    }
+    const degenerateDemands = splitByRequiredRoom(
+      { kind: "regular", key: "all", students: all, subjects: [] },
+      (index) => requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
+    );
+    const allocation = allocateDemands(
+      degenerateDemands,
+      generalRooms,
+      slots,
+      options.groupPreference,
+    );
+    groups.push(...allocation.groups);
+    reportUnsatisfiedRooms(allocation);
     // 考场/座位不够时不能静默丢人
-    if (placed < all.length) {
+    if (allocation.missingSeats > 0 && allocation.unsatisfied.length === 0) {
       diagnostics.push({
         code: "CAPACITY_INSUFFICIENT",
         severity: "error",
-        message: `普通考场不够：还缺 ${all.length - placed} 个座位`,
-        evidence: { missingSeats: all.length - placed },
+        message: `普通考场不够：还缺 ${allocation.missingSeats} 个座位`,
+        evidence: { missingSeats: allocation.missingSeats },
         suggestions: [],
       });
     }
@@ -628,7 +884,8 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
       jobVersion: job.jobVersion,
       students: group.students.map((i) => ({ ...students[i]! })),
       rooms: [group.room],
-      constraints: [],
+      // 只把「命中这套座位里的学生、且 roomId 为空或就是本考场」的限定交给求解器
+      constraints: constraintsForGroup(applicableConstraints, group.students, group.room.id),
     };
     const result = plan(subJob, {
       seed: options.seed,
@@ -797,14 +1054,38 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     });
   }
 
+  // 各套座位没满足的限定汇总到多场次层（形状与单场一致，额外带上是哪个考场）
+  const unmetConstraints: PlanAllUnmetConstraint[] = [];
+  for (const seating of seatings) {
+    for (const unmet of seating.result.unmetConstraints ?? []) {
+      unmetConstraints.push({
+        constraintId: unmet.constraintId,
+        studentIds: [...unmet.studentIds],
+        reason: unmet.reason,
+        roomId: seating.roomId,
+        roomName: seating.roomName,
+      });
+    }
+  }
+
   const ok =
     hasSelection &&
     seatings.length > 0 &&
+    unmetConstraints.length === 0 &&
     diagnostics.every((d) => d.severity !== "error") &&
     overRoomLimit.length === 0 &&
     seatings.every((s) => s.result.ok);
 
-  return { ok, slots, seatings, byStudent, emptyRooms, overRoomLimit, diagnostics };
+  return {
+    ok,
+    slots,
+    seatings,
+    byStudent,
+    emptyRooms,
+    overRoomLimit,
+    unmetConstraints,
+    diagnostics,
+  };
 }
 
 // 保持既有公共 API：core 的入口一直从这里取 subjectListLabel

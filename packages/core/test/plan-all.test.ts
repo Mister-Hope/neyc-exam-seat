@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { findRoomSubjectClashes, parseCombination, planAll } from "../src/index";
+import { findRoomSubjectClashes, parseCombination, planAll, validateAll } from "../src/index";
 import type { Job, PlanOptions, RoomSpec } from "../src/index";
 
 const SMALL: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
@@ -272,6 +272,76 @@ function combosByRoom(result: ReturnType<typeof planAll>): Map<string, Set<strin
   return out;
 }
 
+/** 某个学生每个有考试的时段实际坐在哪（行/列取自对应座位方案的 entries） */
+function seatRc(
+  result: ReturnType<typeof planAll>,
+  studentId: string,
+): { row: number; col: number; roomId: string; subject: string }[] {
+  const schedule = result.byStudent.find((s) => s.studentId === studentId)!;
+  const out: { row: number; col: number; roomId: string; subject: string }[] = [];
+  for (const assignment of Object.values(schedule.slots)) {
+    if (!assignment) continue;
+    const seating = result.seatings.find(
+      (s) =>
+        s.roomId === assignment.roomId &&
+        (s.subjects.length === 0 || s.subjects.includes(assignment.subject)),
+    );
+    const entry = seating?.result.entries.find((e) => e.studentId === studentId);
+    if (!entry) continue;
+    out.push({
+      row: entry.row,
+      col: entry.col,
+      roomId: assignment.roomId,
+      subject: assignment.subject,
+    });
+  }
+  return out;
+}
+
+/** 四个组合齐备（7 段）；R1 小考场 6×5、R2 大考场 7×6、R3 普通考场，R20/R21 是政治/地理专用考场 */
+function constraintJob(perCombo?: Partial<Record<string, number>>): Job {
+  const counts: Record<string, number> = {
+    物化生: 20,
+    政史地: 20,
+    物化政: 4,
+    物化地: 4,
+    ...perCombo,
+  };
+  const subjectsOf: Record<string, string[]> = {
+    物化生: ["physics", "chemistry", "biology"],
+    政史地: ["history", "politics", "geography"],
+    物化政: ["physics", "chemistry", "politics"],
+    物化地: ["physics", "chemistry", "geography"],
+  };
+  const students: Job["students"] = [];
+  let cursor = 1;
+  for (const [combination, count] of Object.entries(counts)) {
+    for (let i = 0; i < count; i += 1) {
+      students.push({
+        id: `${combination}-${i}`,
+        name: `${combination}${i}`,
+        className: `高三(${cursor}班)`,
+        combination,
+        subjects: subjectsOf[combination],
+      });
+      cursor = (cursor % 12) + 1;
+    }
+  }
+  return {
+    jobVersion: 2,
+    options: { seed: 20260930 },
+    students,
+    rooms: [
+      { id: "R1", name: "第一考场", rows: 6, cols: 5 },
+      { id: "R2", name: "第二考场", rows: 7, cols: 6 },
+      { id: "R3", name: "第三考场", rows: 6, cols: 5 },
+      { id: "R4", name: "第四考场", rows: 6, cols: 5 },
+      { id: "R20", name: "第二十考场", rows: 6, cols: 5, dedicatedSubjects: ["politics"] },
+      { id: "R21", name: "第二十一考场", rows: 6, cols: 5, dedicatedSubjects: ["geography"] },
+    ],
+  };
+}
+
 describe("分房倾向 groupPreference 与「一个考场一个时段只能考一科」（S5）", () => {
   it("默认 sameCombination：常规理与常规文永不共用考场，也没有 ROOMS_SHARED", () => {
     const result = planAll(buildJob(SCENE));
@@ -470,39 +540,21 @@ describe("分房倾向 groupPreference 与「一个考场一个时段只能考�
   });
 });
 
-describe("多场次暂不支持限定：CONSTRAINTS_IGNORED_MULTI", () => {
-  it("带 constraints 的多场次：有且仅有一条 warning，且不阻塞 ok", () => {
+describe("多场次限定真正生效（CONSTRAINTS_IGNORED_MULTI 退场）", () => {
+  it("多场次不再产生 CONSTRAINTS_IGNORED_MULTI，first 限定真的落座首排", () => {
     const job = buildJob(SCENE);
     job.constraints = [
       { id: "C1", note: "前排", studentIds: ["物化生-0", "物化生-1"], rows: ["first"] },
-      { id: "C2", note: "靠窗", classes: ["高三(1班)"], cols: ["window"] },
     ];
     const result = planAll(job);
 
-    const hits = result.diagnostics.filter((d) => d.code === "CONSTRAINTS_IGNORED_MULTI");
-    expect(hits).toHaveLength(1);
-    expect(hits[0]!.severity).toBe("warning");
-    expect(hits[0]!.suggestions.length).toBeGreaterThan(0);
-
-    // 受影响学生数 = 两条选择器命中的去重学生数（独立算一遍）
-    const expected = new Set<string>();
-    for (const constraint of job.constraints) {
-      for (const student of job.students) {
-        if (constraint.studentIds?.includes(student.id)) expected.add(student.id);
-        if (constraint.classes?.includes(student.className)) expected.add(student.id);
-      }
-    }
-    expect(hits[0]!.evidence).toEqual({ constraints: 2, students: expected.size });
-    expect(expected.size).toBeGreaterThan(2);
-
-    // 限定不参与多场次：结果与「同一 job 去掉 constraints」完全一致
-    const plain = buildJob(SCENE);
-    const withoutConstraints = planAll(plain);
-    expect(result.byStudent).toEqual(withoutConstraints.byStudent);
-    expect(result.seatings.map((s) => s.studentIds)).toEqual(
-      withoutConstraints.seatings.map((s) => s.studentIds),
-    );
+    expect(result.diagnostics.some((d) => d.code === "CONSTRAINTS_IGNORED_MULTI")).toBe(false);
     expect(result.ok).toBe(true);
+    for (const id of ["物化生-0", "物化生-1"]) {
+      expect(seatRc(result, id).every((rc) => rc.row === 1)).toBe(true);
+    }
+    // 没被限定的同学不要求首排（随机性下可能恰好也在首排，但至少不是全部）
+    expect(result.unmetConstraints).toEqual([]);
   });
 
   it("不带 constraints 的多场次：没有 CONSTRAINTS_IGNORED_MULTI", () => {
@@ -661,5 +713,276 @@ describe("非常规批次按逐时段签名拆分（C12）：不再自伤式无�
     // 政治仍然去政治专用考场
     const zhengzhi = result.byStudent.find((s) => s.combination === "物化政")!;
     expect(zhengzhi.slots[slotWith(result.slots, "politics").id]!.roomId).toBe("R20");
+  });
+});
+
+/** 深拷贝一份结果，用来模拟「手改 plan.json 之后再来校验」 */
+function cloneResult<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+describe("多场次限定（议题 4）：真生效、不静默", () => {
+  it("rows:first —— 小考场与大考场都坐首排", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["物化生-0", "政史地-0"], rows: ["first"] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+
+    const small = seatRc(result, "物化生-0");
+    expect(small.length).toBeGreaterThan(0);
+    expect(small.every((seat) => seat.roomId === "R1")).toBe(true);
+    expect(small.every((seat) => seat.row === 1)).toBe(true);
+
+    const big = seatRc(result, "政史地-0");
+    expect(big.every((seat) => seat.roomId === "R2")).toBe(true);
+    expect(big.every((seat) => seat.row === 1)).toBe(true);
+  });
+
+  it("cols:window —— 小考场第 5 列、大考场第 6 列", () => {
+    const job = constraintJob();
+    job.constraints = [
+      { id: "C1", studentIds: ["物化生-1"], cols: ["window"] },
+      { id: "C2", studentIds: ["政史地-1"], cols: ["window"] },
+    ];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+    expect(seatRc(result, "物化生-1").every((seat) => seat.col === 5)).toBe(true);
+    expect(seatRc(result, "政史地-1").every((seat) => seat.col === 6)).toBe(true);
+  });
+
+  it("cols:door —— 靠门列就是第 1 列", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["物化生-2"], cols: ["door"] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+    expect(seatRc(result, "物化生-2").every((seat) => seat.col === 1)).toBe(true);
+  });
+
+  it("roomId 指定考场 + 绝对排号：命中学生所有时段都在那个考场", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["政史地-2"], roomId: "R2", rows: [3] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+    const seats = seatRc(result, "政史地-2");
+    expect(seats.length).toBeGreaterThan(0);
+    expect(seats.every((seat) => seat.roomId === "R2")).toBe(true);
+    expect(seats.every((seat) => seat.row === 3)).toBe(true);
+  });
+
+  it("多条限定取交集：first × window 落在靠窗首排", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["物化生-3"], rows: ["first"], cols: ["window"] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+    expect(seatRc(result, "物化生-3").every((seat) => seat.row === 1 && seat.col === 5)).toBe(true);
+  });
+
+  it("组合选择器在多场次同样生效：物化政所有座位都是首排", () => {
+    const job = constraintJob({ 物化生: 4, 政史地: 4, 物化政: 4, 物化地: 4 });
+    job.constraints = [{ id: "C1", combinations: ["物化政"], rows: ["first"] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+    const group = result.byStudent.filter((s) => s.combination === "物化政");
+    expect(group).toHaveLength(4);
+    for (const student of group) {
+      const seats = seatRc(result, student.studentId);
+      expect(seats.every((seat) => seat.row === 1)).toBe(true);
+    }
+  });
+
+  it("科目选择器在多场次同样生效：考政治的学生靠门", () => {
+    const job = constraintJob({ 物化生: 4, 政史地: 4, 物化政: 4, 物化地: 4 });
+    job.constraints = [{ id: "C1", subjects: ["politics"], cols: ["door"] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+    expect(seatRc(result, "政史地-0").every((seat) => seat.col === 1)).toBe(true);
+    expect(seatRc(result, "物化政-0").every((seat) => seat.col === 1)).toBe(true);
+  });
+
+  it("限定要求的考场装不下 → 明确报错，不静默改成不限考场", () => {
+    const job = constraintJob({ 物化生: 40, 政史地: 5, 物化政: 0, 物化地: 0 });
+    job.constraints = [
+      {
+        id: "C1",
+        studentIds: job.students.filter((s) => s.combination === "物化生").map((s) => s.id),
+        roomId: "R1",
+      },
+    ];
+    const result = planAll(job);
+    expect(result.ok).toBe(false);
+    const diag = result.diagnostics.find((d) => d.code === "CONSTRAINT_OVERSATURATED");
+    expect(diag).toBeDefined();
+    expect(diag!.severity).toBe("error");
+    expect(diag!.evidence).toMatchObject({ roomId: "R1" });
+  });
+
+  it("roomId 指向学生不会去的考场 → CONSTRAINT_EMPTY_DOMAIN，不静默", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["物化生-0"], roomId: "R20" }];
+    const result = planAll(job);
+    expect(result.ok).toBe(false);
+    expect(
+      result.diagnostics.some(
+        (d) => d.code === "CONSTRAINT_EMPTY_DOMAIN" && d.severity === "error",
+      ),
+    ).toBe(true);
+  });
+
+  it("同一学生被要求去两个普通考场 → RULE_INTERSECT_EMPTY", () => {
+    const job = constraintJob();
+    job.constraints = [
+      { id: "C1", studentIds: ["物化生-4"], roomId: "R1" },
+      { id: "C2", studentIds: ["物化生-4"], roomId: "R2" },
+    ];
+    const result = planAll(job);
+    expect(result.ok).toBe(false);
+    expect(
+      result.diagnostics.some((d) => d.code === "RULE_INTERSECT_EMPTY" && d.severity === "error"),
+    ).toBe(true);
+  });
+
+  it("限定无法满足时把 unmetConstraints 汇总到多场次层（含考场）", () => {
+    const job = constraintJob({ 物化生: 20, 政史地: 0, 物化政: 0, 物化地: 0 });
+    job.constraints = [{ id: "C1", studentIds: job.students.map((s) => s.id), rows: ["first"] }];
+    const result = planAll(job, { relax: "softConstraints" });
+
+    expect(result.ok).toBe(false);
+    expect(result.unmetConstraints.length).toBeGreaterThan(0);
+    for (const unmet of result.unmetConstraints) {
+      expect(unmet.constraintId).toBe("C1");
+      expect(unmet.roomId).toBe("R1");
+      expect(unmet.roomName).toBe("第一考场");
+      expect(unmet.studentIds.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("限定不影响同 seed 的可复现性", () => {
+    const job = constraintJob();
+    job.constraints = [
+      { id: "C1", studentIds: ["物化生-0", "政史地-0"], rows: ["first"], cols: ["door"] },
+      { id: "C2", combinations: ["物化政"], cols: ["window"] },
+    ];
+    const first = planAll(job);
+    const again = planAll(cloneResult(job));
+    expect(again.byStudent).toEqual(first.byStudent);
+    expect(again.unmetConstraints).toEqual(first.unmetConstraints);
+  });
+});
+
+describe("validateAll（议题 5）：与 plan-all 分开实现的独立校验", () => {
+  it("正常多场次结果：ok=true、逐 seating 报告齐全", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["物化生-0", "政史地-0"], rows: ["first"] }];
+    const result = planAll(job);
+    expect(result.ok).toBe(true);
+
+    const report = validateAll(job, result);
+    expect(report.ok).toBe(true);
+    expect(report.seatings).toHaveLength(result.seatings.length);
+    expect(report.hardRuleClashes).toEqual([]);
+    expect(report.issues.filter((i) => i.severity === "error")).toEqual([]);
+    for (const seating of report.seatings) {
+      expect(seating.seats).toBeGreaterThan(0);
+      expect(seating.report.ok).toBe(true);
+    }
+  });
+
+  it("人为把受限学生挪出 allowedSeats → ok=false 且 CONSTRAINT_UNMET", () => {
+    const job = constraintJob();
+    job.constraints = [{ id: "C1", studentIds: ["物化生-0"], rows: ["first"] }];
+    const result = planAll(job);
+    const broken = cloneResult(result);
+    const seating = broken.seatings.find((s) =>
+      s.result.entries.some((e) => e.studentId === "物化生-0"),
+    )!;
+    const victim = seating.result.entries.find((e) => e.studentId === "物化生-0")!;
+    const swap = seating.result.entries.find(
+      (e) => e.studentId !== "物化生-0" && e.row !== victim.row,
+    )!;
+    const parked = {
+      seatNo: victim.seatNo,
+      row: victim.row,
+      col: victim.col,
+      physicalCol: victim.physicalCol,
+    };
+    Object.assign(victim, {
+      seatNo: swap.seatNo,
+      row: swap.row,
+      col: swap.col,
+      physicalCol: swap.physicalCol,
+    });
+    Object.assign(swap, parked);
+
+    const report = validateAll(job, broken);
+    expect(report.ok).toBe(false);
+    expect(report.issues.some((i) => i.code === "CONSTRAINT_UNMET" && i.severity === "error")).toBe(
+      true,
+    );
+  });
+
+  it("人为改出同址两人 → ok=false 且 ENTRY_DUPLICATE_SEAT", () => {
+    const job = constraintJob();
+    const result = planAll(job);
+    const broken = cloneResult(result);
+    const seating = broken.seatings.find((s) => s.result.entries.length >= 2)!;
+    const first = seating.result.entries[0]!;
+    const second = seating.result.entries[1]!;
+    Object.assign(second, {
+      seatNo: first.seatNo,
+      row: first.row,
+      col: first.col,
+      physicalCol: first.physicalCol,
+    });
+
+    const report = validateAll(job, broken);
+    expect(report.ok).toBe(false);
+    expect(
+      report.issues.some((i) => i.code === "ENTRY_DUPLICATE_SEAT" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  it("独立复核硬规则：把文科生塞进理科考场同一时段 → ROOM_SUBJECT_CLASH", () => {
+    const job = constraintJob();
+    const result = planAll(job);
+    const broken = cloneResult(result);
+    const science = broken.byStudent.find((s) => s.combination === "物化生")!;
+    const arts = broken.byStudent.find((s) => s.combination === "政史地")!;
+    const bioSlot = broken.slots.find((s) => s.subjects.includes("biology"))!;
+    const target = science.slots[bioSlot.id]!;
+    arts.slots[bioSlot.id] = {
+      ...arts.slots[bioSlot.id]!,
+      roomId: target.roomId,
+      roomName: target.roomName,
+    };
+
+    const report = validateAll(job, broken);
+    expect(report.ok).toBe(false);
+    expect(report.hardRuleClashes.length).toBeGreaterThan(0);
+    expect(report.hardRuleClashes[0]!.subjects).toEqual(["biology", "politics"]);
+    expect(report.issues.some((i) => i.code === "ROOM_SUBJECT_CLASH")).toBe(true);
+  });
+
+  it("座位方案引用不存在的考场 → ok=false 且 issue 说清", () => {
+    const job = constraintJob();
+    const result = planAll(job);
+    const broken = cloneResult(result);
+    broken.seatings[0]!.roomId = "R99";
+
+    const report = validateAll(job, broken);
+    expect(report.ok).toBe(false);
+    expect(report.issues.some((i) => i.code === "ENTRY_UNKNOWN_ROOM")).toBe(true);
+  });
+
+  it("没有任何座位方案（全部缺考）→ 不能真空通过", () => {
+    const job = constraintJob({ 物化生: 6, 政史地: 0, 物化政: 0, 物化地: 0 });
+    for (const student of job.students) student.included = false;
+    const result = planAll(job);
+    expect(result.seatings).toEqual([]);
+
+    const report = validateAll(job, result);
+    expect(report.ok).toBe(false);
+    expect(report.issues.some((i) => i.code === "NO_STUDENTS" && i.severity === "error")).toBe(
+      true,
+    );
   });
 });
