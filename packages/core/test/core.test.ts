@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MIN_CLASSES_FOR_KING,
+  blocksListExport,
   compileDomains,
   compileModel,
   isFatal,
@@ -12,7 +13,7 @@ import {
   rcToSeatNo,
   seatNoToRC,
 } from "../src/index";
-import type { Constraint, Job, RoomSpec } from "../src/index";
+import type { Constraint, Diagnostic, Job, RoomSpec } from "../src/index";
 
 const SMALL: RoomSpec = { id: "RS", name: "小考场", rows: 6, cols: 5, doorSide: "right" };
 const LARGE: RoomSpec = { id: "RL", name: "大考场", rows: 7, cols: 6, doorSide: "right" };
@@ -414,6 +415,65 @@ describe("降级模式：限定太紧时能救回来，结构性无解时仍然�
     expect(isFatal(soft, "none").fatal).toBe(true);
     expect(isFatal(soft, "softConstraints").fatal).toBe(false);
     expect(isFatal(soft, "softConstraints").softened.length).toBeGreaterThan(0);
+  });
+});
+
+describe("导出闸门 blocksListExport（§8.1）", () => {
+  const diag = (code: Diagnostic["code"], severity: Diagnostic["severity"]): Diagnostic => ({
+    code,
+    severity,
+    message: "",
+    suggestions: [],
+  });
+
+  it("硬规则违规 ROOM_SUBJECT_CLASH（error）→ 阻止导出", () => {
+    expect(blocksListExport([diag("ROOM_SUBJECT_CLASH", "error")])).toBe(true);
+  });
+
+  it("容量不足 CAPACITY_INSUFFICIENT（error）→ 阻止导出", () => {
+    expect(blocksListExport([diag("CAPACITY_INSUFFICIENT", "error")])).toBe(true);
+  });
+
+  it("只有 SEARCH_FAILED（error）→ 不阻止（L2/L3 降级结果照常交付）", () => {
+    expect(blocksListExport([diag("SEARCH_FAILED", "error")])).toBe(false);
+  });
+
+  it("warning 一律不阻止（ROOMS_SHARED / CONSTRAINTS_IGNORED_MULTI）", () => {
+    expect(blocksListExport([diag("ROOMS_SHARED", "warning")])).toBe(false);
+    expect(blocksListExport([diag("CONSTRAINTS_IGNORED_MULTI", "warning")])).toBe(false);
+    expect(
+      blocksListExport([
+        diag("SEARCH_FAILED", "error"),
+        diag("ROOMS_SHARED", "warning"),
+        diag("OK", "info"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("空数组 → 不阻止；表内错误码任缺一条都会漏拦", () => {
+    expect(blocksListExport([])).toBe(false);
+    const blocking: Diagnostic["code"][] = [
+      "ROOM_SUBJECT_CLASH",
+      "CAPACITY_INSUFFICIENT",
+      "NO_STUDENTS",
+      "NO_ROOMS",
+      "INVALID_ROOM_SIZE",
+      "STUDENT_DUPLICATE_ID",
+      "STUDENT_MISSING_CLASS",
+      "CLASS_LIMIT_EXCEEDED",
+      "SEAT_CONFLICT",
+      "UNKNOWN_ROOM_ID",
+      "CONSTRAINT_NO_SELECTOR",
+      "CONSTRAINT_EMPTY_DOMAIN",
+      "CONSTRAINT_INDEX_OUT_OF_RANGE",
+      "CONSTRAINT_OVERSATURATED",
+      "RULE_INTERSECT_EMPTY",
+    ];
+    for (const code of blocking) {
+      expect(blocksListExport([diag(code, "error")])).toBe(true);
+    }
+    // 非 error 级别即使 code 在表内也不阻止
+    expect(blocksListExport([diag("CAPACITY_INSUFFICIENT", "warning")])).toBe(false);
   });
 });
 

@@ -52,9 +52,10 @@ export {
 } from "./domain";
 export type { ConstraintSeatSet, DomainBundle, StudentDomain } from "./domain";
 
-export { planAll } from "./plan-all";
+export { findRoomSubjectClashes, planAll } from "./plan-all";
 export type {
   PlanAllResult,
+  RoomSubjectClash,
   SeatingPlan,
   StudentRoomUsage,
   StudentSchedule,
@@ -73,6 +74,7 @@ export {
   DEFAULT_SEED,
   DEFAULT_TIME_LIMIT_MS,
   RESULT_VERSION,
+  blocksListExport,
   isFatal,
   normalizeOptions,
   plan,

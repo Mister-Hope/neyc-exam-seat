@@ -7,6 +7,7 @@ import { solve } from "./solver";
 import type {
   Adjacency,
   Diagnostic,
+  GroupPreference,
   Job,
   PlanEntry,
   PlanLevel,
@@ -24,6 +25,16 @@ export const DEFAULT_SEED = 20260930;
 export const DEFAULT_TIME_LIMIT_MS = 10_000;
 export const RESULT_VERSION = 1;
 
+/**
+ * 分房倾向只认两个合法取值。
+ *
+ * Job.json 是用户手写的，可能写错（例如 `fillroom`）。未知取值一律退回最严格的 `sameCombination` —— **绝不**因为拼写错误就静默启用混排；考场不够时报
+ * `CAPACITY_INSUFFICIENT`，让老师看得见。
+ */
+export function normalizeGroupPreference(value: GroupPreference | undefined): GroupPreference {
+  return value === "fillRooms" ? "fillRooms" : "sameCombination";
+}
+
 export function normalizeOptions(options?: PlanOptions): Required<PlanOptions> {
   return {
     seed: options?.seed ?? DEFAULT_SEED,
@@ -31,6 +42,7 @@ export function normalizeOptions(options?: PlanOptions): Required<PlanOptions> {
     forceKing: options?.forceKing ?? false,
     relax: options?.relax ?? "none",
     timeLimitMs: options?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS,
+    groupPreference: normalizeGroupPreference(options?.groupPreference),
     regularCombinations: options?.regularCombinations ?? [],
     maxRoomsPerStudent: options?.maxRoomsPerStudent ?? 3,
   };
@@ -86,6 +98,42 @@ export function isFatal(
   const softened = errors.filter((d) => SOFTENABLE_CODES.has(d.code));
   const hard = errors.filter((d) => !SOFTENABLE_CODES.has(d.code));
   return { fatal: hard.length > 0, softened };
+}
+
+/**
+ * 会阻止「导出名单 / 监考表」的错误码（`docs/design.md` §8.1）。
+ *
+ * 只收结构性错误与硬规则违规：这些错误下座位表本身是错的，导出只会误导老师。 注意 `SEARCH_FAILED` **不在**表里 —— `--relax`（softConstraints /
+ * minConflicts）本来就是 「违反最少并交付」，把它拦下来会打断 L2/L3 这条路；降级结果照常导出，靠黄色横幅 + 校验报告 + 退出码 2 表达。
+ */
+const BLOCKING_EXPORT_CODES: ReadonlySet<Diagnostic["code"]> = new Set<Diagnostic["code"]>([
+  "ROOM_SUBJECT_CLASH",
+  "CAPACITY_INSUFFICIENT",
+  "NO_STUDENTS",
+  "NO_ROOMS",
+  "INVALID_ROOM_SIZE",
+  "STUDENT_DUPLICATE_ID",
+  "STUDENT_MISSING_CLASS",
+  "CLASS_LIMIT_EXCEEDED",
+  "SEAT_CONFLICT",
+  "UNKNOWN_ROOM_ID",
+  "CONSTRAINT_NO_SELECTOR",
+  "CONSTRAINT_EMPTY_DOMAIN",
+  "CONSTRAINT_INDEX_OUT_OF_RANGE",
+  "CONSTRAINT_OVERSATURATED",
+  "RULE_INTERSECT_EMPTY",
+]);
+
+/**
+ * 要不要阻止导出名单 / 监考表 —— 导出闸门的**唯一判据**。
+ *
+ * 返回 true（阻止导出）当且仅当存在 `severity === "error"` 且 code 属于 {@link BLOCKING_EXPORT_CODES}
+ * 的诊断；`SEARCH_FAILED` 与所有 warning / info 都不阻止。
+ */
+export function blocksListExport(diagnostics: readonly Diagnostic[]): boolean {
+  return diagnostics.some(
+    (diagnostic) => diagnostic.severity === "error" && BLOCKING_EXPORT_CODES.has(diagnostic.code),
+  );
 }
 
 /** 主入口：预检 → 求解 → 自校验 → 出结果。同输入同 seed 必得同结果。 */

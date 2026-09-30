@@ -34,6 +34,16 @@ export type Adjacency = "king" | "orthogonal";
 /** 降级模式。 */
 export type RelaxMode = "none" | "softConstraints" | "minConflicts";
 
+/**
+ * 分房倾向（多场次）。
+ *
+ * - `sameCombination`（默认）：每个批次（组合）独占考场，一个考场里只有一个组合，监考表最干净； 考场不够时直接报 `CAPACITY_INSUFFICIENT`，不偷偷混排。
+ * - `fillRooms`：先把当前考场填满再换下一个，省考场；只允许与**逐时段科目不冲突**的批次共用， 共用时报 `ROOMS_SHARED`。
+ *
+ * 两种取值都必须满足「一个考场一个时段只能考一科」（详见 `docs/design.md` §5.1）。
+ */
+export type GroupPreference = "sameCombination" | "fillRooms";
+
 /** 结果采用的级别。`strict` 为完全满足。 */
 export type PlanLevel = "strict" | "orthogonal" | "softConstraints" | "minConflicts";
 
@@ -102,6 +112,12 @@ export interface PlanOptions {
   /** 求解时间上限（毫秒），默认 10000。 */
   timeLimitMs?: number;
   /**
+   * 分房倾向，默认 `sameCombination`。
+   *
+   * 只影响多场次 `planAll`；未知取值按最严格的 `sameCombination` 处理（绝不静默混排）。
+   */
+  groupPreference?: GroupPreference;
+  /**
    * 常规组合（老的文理分科，如物化生 / 政史地）：这些学生整个考试期间只在一个考场。
    *
    * 不填时按传统文理判定（`isRegularCombination`）：选考科目全在理科一侧或全在文科一侧 就算常规，跨文理（物化政 / 物化地）算非常规。
@@ -139,7 +155,10 @@ export type DiagnosticCode =
   | "CAPACITY_INSUFFICIENT"
   | "ROOMS_OVERPROVISIONED"
   | "ROOMS_NON_CONTIGUOUS"
+  // 多场次
   | "ROOMS_SHARED"
+  | "ROOM_SUBJECT_CLASH"
+  | "CONSTRAINTS_IGNORED_MULTI"
   | "TOO_FEW_CLASSES"
   | "CLASS_LIMIT_EXCEEDED"
   // 限定
