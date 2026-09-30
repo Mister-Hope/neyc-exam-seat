@@ -1,5 +1,11 @@
 import { rcToSeatNo, subjectLabel, subjectListLabel } from "@exam-seat/core";
-import type { Diagnostic, DoorSide, PlanAllResult, PlanResult } from "@exam-seat/core";
+import type {
+  Diagnostic,
+  DoorSide,
+  PlanAllResult,
+  PlanAllValidation,
+  PlanResult,
+} from "@exam-seat/core";
 
 const ICON: Record<Diagnostic["severity"], string> = {
   error: "❌",
@@ -130,6 +136,20 @@ export function renderPlanAll(result: PlanAllResult): string {
     lines.push("");
   }
 
+  // 哪条限定在哪个考场没满足：AI 与老师都需要直接看到，别只藏在 diagnostics 里
+  if (result.unmetConstraints.length > 0) {
+    lines.push("未满足的限定：");
+    for (const unmet of result.unmetConstraints) {
+      const where = unmet.roomName?.trim() || unmet.roomId;
+      const shown = unmet.studentIds.slice(0, 10).join("、");
+      const people = unmet.studentIds.length > 10 ? `${shown}…` : shown || "—";
+      lines.push(
+        `${unmet.constraintId} · ${where} ｜ 涉及 ${unmet.studentIds.length} 人：${people} ｜ 原因：${unmet.reason}`,
+      );
+    }
+    lines.push("");
+  }
+
   const movers = result.byStudent.filter((s) => s.distinctRooms > 1);
   lines.push(`需要换考场的学生：${movers.length} 人`);
   for (const student of movers.slice(0, 10)) {
@@ -146,4 +166,48 @@ export function renderPlanAll(result: PlanAllResult): string {
 function subjectRoomLabel(subjects: readonly string[]): string {
   if (subjects.length === 1) return subjectLabel(subjects[0]!);
   return subjectListLabel(subjects);
+}
+
+/** 多场次独立校验结果（等价于 core 的 `PlanAllValidation`；保留此名方便 CLI 侧引用）。 */
+export type PlanAllValidationView = PlanAllValidation;
+
+/** 多场次「逐 seating 独立校验」结果的人话摘要 */
+export function renderPlanAllValidation(validation: PlanAllValidationView): string {
+  const lines: string[] = [
+    "─".repeat(56),
+    validation.ok
+      ? "✅ 多场次校验通过：每套座位都与配置一致"
+      : validation.seatings.length === 0
+        ? "❌ 多场次校验未通过：没有生成任何座位方案"
+        : "❌ 多场次校验未通过：结果不能用，请按下面的原因修正后重排",
+    "─".repeat(56),
+    `座位方案 ${validation.seatings.length} 套 ｜ 硬规则冲突 ${validation.hardRuleClashes.length} 处 ｜ 汇总问题 ${validation.issues.length} 条`,
+    "",
+    "逐套座位：",
+  ];
+  if (validation.seatings.length === 0) {
+    lines.push("  （没有任何座位方案）");
+  }
+  for (const seating of validation.seatings) {
+    const label =
+      seating.subjects.length > 0
+        ? `${seating.roomName}（${subjectRoomLabel(seating.subjects)}）`
+        : seating.roomName;
+    lines.push(`  ${seating.ok ? "✅" : "❌"} ${label}：${seating.seats} 人`);
+    for (const issue of seating.report.issues) {
+      lines.push(`      [${issue.severity}] ${issue.code}: ${issue.message}`);
+    }
+  }
+
+  if (validation.issues.length > 0) {
+    lines.push("");
+    lines.push("汇总问题：");
+    for (const issue of validation.issues) {
+      lines.push(`  [${issue.severity}] ${issue.code}: ${issue.message}`);
+    }
+  }
+
+  lines.push("");
+  lines.push(validation.ok ? "总结论：通过" : "总结论：不通过（退出码 3）");
+  return lines.join("\n");
 }

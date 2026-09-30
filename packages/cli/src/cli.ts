@@ -3,11 +3,32 @@ import nodePath from "node:path";
 
 import { Command } from "commander";
 
-import { blocksListExport, plan, planAll, precheckJob, validate } from "@exam-seat/core";
-import type { Adjacency, Job, PlanOptions, PlanResult, RelaxMode, RoomSpec } from "@exam-seat/core";
+import {
+  blocksListExport,
+  plan,
+  planAll,
+  precheckJob,
+  validate,
+  validateAll,
+} from "@exam-seat/core";
+import type {
+  Adjacency,
+  Job,
+  PlanAllResult,
+  PlanOptions,
+  PlanResult,
+  RelaxMode,
+  RoomSpec,
+} from "@exam-seat/core";
 import { readRosterFile, writeMultiPlanFiles, writePlanFiles } from "@exam-seat/io/node";
 
-import { renderDiagnostics, renderNumbering, renderPlan, renderPlanAll } from "./render";
+import {
+  renderDiagnostics,
+  renderNumbering,
+  renderPlan,
+  renderPlanAll,
+  renderPlanAllValidation,
+} from "./render";
 
 export const EXIT_OK = 0;
 export const EXIT_USAGE = 1;
@@ -171,50 +192,114 @@ export async function main(argv: string[]): Promise<number> {
     .description("读一个 Excel 名单，输出学生数组（给 agent 拼 job.json 用）")
     .requiredOption("--file <xlsx>", "名单文件路径")
     .option("--sheet <name>", "工作表名或下标")
+    .option(
+      "--absent <xlsx>",
+      "单独的缺考名单文件（有准考证号列按准考证号匹配，否则按 姓名 + 班级）",
+    )
+    .option("--absent-sheet <name>", "缺考名单的工作表名或下标")
     .option("--out <file>", "把结果写到文件（否则打印到 stdout）")
-    .action(async (options: { file: string; sheet?: string; out?: string }) => {
-      const sheet =
-        options.sheet === undefined
-          ? undefined
-          : /^\d+$/.test(options.sheet)
-            ? Number(options.sheet)
-            : options.sheet;
-      let result: ReturnType<typeof readRosterFile>;
-      try {
-        result = readRosterFile(options.file, { sheet });
-      } catch (err) {
-        fail((err as Error).message);
-      }
-      const payload = {
-        file: nodePath.resolve(options.file),
-        sheetName: result.sheetName,
-        sheetNames: result.sheetNames,
-        headers: result.headers,
-        mapping: result.mapping,
-        classCount: new Set(result.students.map((s) => s.className)).size,
-        studentCount: result.students.length,
-        issues: result.issues,
-        students: result.students,
-      };
-      if (options.out) {
-        const { writeFile } = await import("node:fs/promises");
-        await writeFile(nodePath.resolve(options.out), JSON.stringify(payload, null, 2));
-        log(`已写入 ${nodePath.resolve(options.out)}（${result.students.length} 名学生）`);
-      } else if (globalJson()) {
-        writeJson(payload);
-      } else {
-        log(`工作表「${result.sheetName}」  表头：${result.headers.join(" / ")}`);
-        log(`共 ${result.students.length} 名学生，${payload.classCount} 个班`);
-        if (result.issues.length > 0) {
-          log(`\n有 ${result.issues.length} 处需要留意：`);
-          for (const issue of result.issues.slice(0, 20)) {
-            log(`  [${issue.level}] 第 ${issue.row} 行：${issue.message}`);
-          }
+    .action(
+      async (options: {
+        file: string;
+        sheet?: string;
+        absent?: string;
+        absentSheet?: string;
+        out?: string;
+      }) => {
+        const sheet =
+          options.sheet === undefined
+            ? undefined
+            : /^\d+$/.test(options.sheet)
+              ? Number(options.sheet)
+              : options.sheet;
+        const absentSheet =
+          options.absentSheet === undefined
+            ? undefined
+            : /^\d+$/.test(options.absentSheet)
+              ? Number(options.absentSheet)
+              : options.absentSheet;
+        let result: ReturnType<typeof readRosterFile>;
+        try {
+          result = readRosterFile(options.file, {
+            sheet,
+            absentFile: options.absent,
+            absentSheet,
+          });
+        } catch (err) {
+          fail((err as Error).message);
         }
-        log("\n（加 --json 可拿到完整学生数组，用来拼 job.json）");
-      }
-      exitCode = EXIT_OK;
-    });
+
+        const absentIssues = result.absent?.issues ?? [];
+        const fatalAbsent = absentIssues.filter((issue) => issue.level === "error");
+        if (fatalAbsent.length > 0) {
+          // 缺考名单的列都认不出来：明确报错，别让它静默变成「一个人都没缺考」
+          const message = fatalAbsent.map((issue) => issue.message).join("；");
+          if (globalJson()) {
+            writeJson({ ok: false, error: "ABSENT_LIST_INVALID", message, issues: fatalAbsent });
+          } else {
+            log(`exam-seat: 缺考名单用不了：${message}`);
+          }
+          exitCode = EXIT_USAGE;
+          return;
+        }
+
+        const { absent } = result;
+        const payload = {
+          file: nodePath.resolve(options.file),
+          sheetName: result.sheetName,
+          sheetNames: result.sheetNames,
+          headers: result.headers,
+          mapping: result.mapping,
+          classCount: new Set(result.students.map((s) => s.className)).size,
+          studentCount: result.students.length,
+          absentCount: result.students.filter((s) => s.included === false).length,
+          issues: [...result.issues, ...absentIssues],
+          students: result.students,
+          ...(absent === undefined
+            ? {}
+            : {
+                absent: {
+                  file: absent.file,
+                  keyCount: absent.keys.length,
+                  matchedCount: absent.matched.length,
+                  unmatchedCount: absent.unmatched.length,
+                  unmatched: absent.unmatched,
+                },
+              }),
+        };
+        const absentSummary =
+          absent === undefined
+            ? null
+            : `缺考名单命中 ${absent.matched.length} 人 / 未匹配 ${absent.unmatched.length} 行`;
+
+        if (options.out) {
+          const { writeFile } = await import("node:fs/promises");
+          await writeFile(nodePath.resolve(options.out), JSON.stringify(payload, null, 2));
+          log(`已写入 ${nodePath.resolve(options.out)}（${result.students.length} 名学生）`);
+        } else if (globalJson()) {
+          writeJson(payload);
+        } else {
+          log(`工作表「${result.sheetName}」  表头：${result.headers.join(" / ")}`);
+          log(`共 ${result.students.length} 名学生，${payload.classCount} 个班`);
+        }
+
+        if (absentSummary) {
+          log(absentSummary);
+          // 未匹配的缺考行逐条走 stderr（issue.message 里已写明「缺考名单第 N 行」）
+          for (const issue of absentIssues) log(`  [${issue.level}] ${issue.message}`);
+        }
+        if (!options.out && !globalJson()) {
+          if (result.issues.length > 0) {
+            log(`\n有 ${result.issues.length} 处需要留意：`);
+            for (const issue of result.issues.slice(0, 20)) {
+              log(`  [${issue.level}] 第 ${issue.row} 行：${issue.message}`);
+            }
+          }
+          log("\n（加 --json 可拿到完整学生数组，用来拼 job.json）");
+        }
+        exitCode = EXIT_OK;
+      },
+    );
 
   /* ---------------- rooms ---------------- */
   program
@@ -469,11 +554,11 @@ export async function main(argv: string[]): Promise<number> {
           : await readFile(nodePath.resolve(options.plan), "utf8");
       const parsed = JSON.parse(planText) as unknown;
       if (isMultiPlanJson(parsed)) {
-        const message =
-          "这份 plan.json 是多场次结果（含 seatings），exam-seat validate 只支持单场结果；请对每套 seatings[].result 单独校验，或先用 plan --single 生成单场结果再校验。";
-        if (globalJson()) writeJson({ ok: false, error: "MULTI_PLAN_NOT_SUPPORTED", message });
-        else log(`exam-seat: ${message}`);
-        exitCode = EXIT_USAGE;
+        // 多场次：逐 seating 重建子 job 独立校验（core 的 validateAll）
+        const validation = validateAll(job, parsed as PlanAllResult);
+        if (globalJson()) writeJson(validation);
+        else log(renderPlanAllValidation(validation));
+        exitCode = validation.ok ? EXIT_OK : EXIT_INFEASIBLE;
         return;
       }
       const result = parsed as PlanResult;

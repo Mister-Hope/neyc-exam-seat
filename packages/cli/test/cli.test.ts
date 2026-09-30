@@ -69,4 +69,54 @@ describe("多场次终端摘要", () => {
     expect(text).toMatch(/没有任何考场安排/);
     expect(text).not.toMatch(/排考完成|全部时段已安排|✅/);
   });
+
+  it("有未满足限定时单列一段，写明限定 / 考场 / 人数 / 原因", () => {
+    const job: Job = {
+      jobVersion: 2,
+      options: { relax: "minConflicts" },
+      students: Array.from({ length: 12 }, (_, i) => ({
+        id: `U${String(i).padStart(2, "0")}`,
+        name: `学生${i}`,
+        className: `高三(${i + 1}班)`,
+        combination: "物化生",
+      })),
+      rooms: [{ id: "R1", name: "第1考场", rows: 6, cols: 5 }],
+      // 3 个人都要坐「末排靠门」这同一个座位 → 必然有人坐不上
+      constraints: [
+        {
+          id: "C5",
+          note: "物化生全体末排靠门",
+          studentIds: ["U00", "U01", "U02"],
+          rows: ["last"],
+          cols: ["door"],
+        },
+      ],
+    };
+    const result = planAll(job);
+    expect(result.unmetConstraints.length).toBeGreaterThan(0);
+
+    const text = renderPlanAll(result);
+    expect(text).toContain("未满足的限定：");
+    expect(text).toContain("C5 · 第1考场");
+    expect(text).toMatch(/涉及 \d+ 人：/);
+    expect(text).toContain("原因：");
+  });
+
+  it("没有未满足限定时不打「未满足的限定」标题", () => {
+    const job: Job = {
+      jobVersion: 2,
+      students: Array.from({ length: 12 }, (_, i) => ({
+        id: `V${String(i).padStart(2, "0")}`,
+        name: `学生${i}`,
+        className: `高三(${i + 1}班)`,
+        combination: "物化生",
+      })),
+      rooms: [{ id: "R1", name: "第1考场", rows: 6, cols: 5 }],
+    };
+    const result = planAll(job);
+    expect(result.unmetConstraints).toEqual([]);
+
+    const text = renderPlanAll(result);
+    expect(text).not.toContain("未满足的限定");
+  });
 });

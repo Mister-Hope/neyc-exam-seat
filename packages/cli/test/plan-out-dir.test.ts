@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Job, RoomSpec } from "@exam-seat/core";
 
-import { EXIT_DEGRADED, EXIT_INFEASIBLE, EXIT_OK, EXIT_USAGE, main } from "../src/cli";
+import { EXIT_DEGRADED, EXIT_INFEASIBLE, EXIT_OK, main } from "../src/cli";
 
 const SMALL: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
 
@@ -116,6 +116,30 @@ function tightSingleJob(): Job {
       className: `高三(${(i % 6) + 1}班)`,
     })),
     rooms: [room(1)],
+  };
+}
+
+/** 3 个物化生都被要求坐「末排靠门」同一个座位 → 放宽模式下必然有人没满足。 */
+function unmetConstraintJob(): Job {
+  return {
+    jobVersion: 2,
+    options: { relax: "minConflicts" },
+    students: Array.from({ length: 12 }, (_, i) => ({
+      id: `U${String(i).padStart(2, "0")}`,
+      name: `学生${i}`,
+      className: `高三(${i + 1}班)`,
+      combination: "物化生",
+    })),
+    rooms: [room(1)],
+    constraints: [
+      {
+        id: "C5",
+        note: "物化生全体末排靠门",
+        studentIds: ["U00", "U01", "U02"],
+        rows: ["last"],
+        cols: ["door"],
+      },
+    ],
   };
 }
 
@@ -384,52 +408,34 @@ describe("plan --out-dir 导出", () => {
     });
   });
 
-  it("validate 拿到多场次 plan.json 时给出明确提示而不是内部错误", async () => {
+  it("多场次未满足限定时，plan 摘要单列「未满足的限定」", async () => {
     await withTempDir(async (dir) => {
       const jobPath = nodePath.join(dir, "job.json");
-      const outDir = nodePath.join(dir, "out");
-      writeFileSync(jobPath, JSON.stringify(multiJob()));
-
-      captureOutput();
-      await main(["node", "exam-seat", "--json", "plan", "--job", jobPath, "--out-dir", outDir]);
-
-      // vi.spyOn 在同一方法上返回同一个 mock，多次 capture 会累积调用；断言前先清掉
-      for (const spy of spies) spy.mockRestore();
-      spies.length = 0;
+      writeFileSync(jobPath, JSON.stringify(unmetConstraintJob()));
 
       const captured = captureOutput();
-      const code = await main([
-        "node",
-        "exam-seat",
-        "validate",
-        "--job",
-        jobPath,
-        "--plan",
-        nodePath.join(outDir, "plan.json"),
-      ]);
-      expect(code).toBe(EXIT_USAGE);
-      expect(captured.stderr()).toContain("多场次");
-      expect(captured.stderr()).not.toContain("内部错误");
+      const code = await main(["node", "exam-seat", "plan", "--job", jobPath]);
 
-      for (const spy of spies) spy.mockRestore();
-      spies.length = 0;
+      // 限定过载是结构性 error（CONSTRAINT_OVERSATURATED）→ 退出码 3
+      expect(code).toBe(EXIT_INFEASIBLE);
+      const stdout = captured.stdout();
+      expect(stdout).toContain("未满足的限定：");
+      expect(stdout).toContain("C5 · 第1考场");
+      expect(stdout).toMatch(/涉及 \d+ 人：/);
+      expect(stdout).toContain("原因：");
+    });
+  });
 
-      const jsonCaptured = captureOutput();
-      const jsonCode = await main([
-        "node",
-        "exam-seat",
-        "--json",
-        "validate",
-        "--job",
-        jobPath,
-        "--plan",
-        nodePath.join(outDir, "plan.json"),
-      ]);
-      expect(jsonCode).toBe(EXIT_USAGE);
-      expect(JSON.parse(jsonCaptured.stdout())).toMatchObject({
-        ok: false,
-        error: "MULTI_PLAN_NOT_SUPPORTED",
-      });
+  it("多场次没有未满足限定时，摘要里不出现该标题", async () => {
+    await withTempDir(async (dir) => {
+      const jobPath = nodePath.join(dir, "job.json");
+      writeFileSync(jobPath, JSON.stringify(multiJob()));
+
+      const captured = captureOutput();
+      const code = await main(["node", "exam-seat", "plan", "--job", jobPath]);
+
+      expect(code).toBe(EXIT_OK);
+      expect(captured.stdout()).not.toContain("未满足的限定");
     });
   });
 });
