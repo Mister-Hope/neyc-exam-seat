@@ -122,6 +122,23 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
     },
   },
   {
+    // plan-all 是「多场次排考」的完整规则集：分房、逐时段兼容门控、合并座位、硬规则校验
+    // 彼此耦合，拆开会让 §5.1 那条硬规则散落多处；578 行（不含空行/注释）超阈值，
+    // 与 precheck.ts 同样按单文件放开
+    files: ["packages/core/src/plan-all.ts"],
+    rules: {
+      "max-lines": "off",
+    },
+  },
+  {
+    // acceptance 是「一键验收」脚本：所有断言按场景顺序线性排列，拆成多个文件会让
+    // 「跑一遍就能看懂全貌」这件事失效；937 行（不含空行/注释）超阈值，同样单文件放开
+    files: ["examples/acceptance.mjs"],
+    rules: {
+      "max-lines": "off",
+    },
+  },
+  {
     // oxlint 认不出 `.vue` 的导出（见文件开头「两条经验」第 1 条），
     // 于是 main.ts 里的 App 在 oxlint 眼里是 error type，no-unsafe-argument 纯属误报；
     // web 的类型检查交给 vue-tsc
