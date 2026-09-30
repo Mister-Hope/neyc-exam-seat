@@ -127,7 +127,7 @@ describe("job.json v2：选科 / 地点 / 专用考场 / 选择器都必须无�
   const v2: Job = {
     jobVersion: 2,
     meta: { title: "2026届高三二模" },
-    options: { seed: 7, groupPreference: "sameCombination" } as Job["options"],
+    options: { seed: 7, groupPreference: "sameCombination" },
     students: [
       {
         id: "2026010001",

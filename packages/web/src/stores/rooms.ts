@@ -63,6 +63,12 @@ export const useRoomsStore = defineStore("rooms", () => {
     rooms.value = rooms.value.filter((room) => room.id !== id);
   }
 
+  /** 按 id 批量移除（第 ⑤ 步「一键移除空置考场」用）。 */
+  function removeRooms(ids: readonly string[]): void {
+    const removing = new Set(ids);
+    rooms.value = rooms.value.filter((room) => !removing.has(room.id));
+  }
+
   function updateRoom(id: string, patch: Partial<RoomSpec>): void {
     rooms.value = rooms.value.map((room) => (room.id === id ? { ...room, ...patch } : room));
   }
@@ -114,6 +120,7 @@ export const useRoomsStore = defineStore("rooms", () => {
     addRoom,
     addRooms,
     removeRoom,
+    removeRooms,
     updateRoom,
     setDoorSide,
     move,

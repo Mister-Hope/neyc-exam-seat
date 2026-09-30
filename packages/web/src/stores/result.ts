@@ -2,40 +2,94 @@ import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 
 import { loadState, saveState } from "@/lib/persist";
+import { useRoomsStore } from "@/stores/rooms";
 import { validate } from "@exam-seat/core";
-import type { Job, PlanEntry, PlanResult, ValidationReport } from "@exam-seat/core";
+import type {
+  Job,
+  PlanAllResult,
+  PlanEntry,
+  PlanResult,
+  SeatingPlan,
+  StudentSchedule,
+  TimeSlot,
+  ValidationReport,
+} from "@exam-seat/core";
 
 const STORAGE_NAME = "result";
 
 export type SolveStatus = "idle" | "running" | "done" | "failed";
 
+/** 结果来自哪条求解路径：`single` = 单场 `plan`；`all` = 多场次 `planAll`。 */
+export type SolveMode = "single" | "all";
+
 interface PersistedResult {
   result: PlanResult | null;
+  planAll: PlanAllResult | null;
   job: Job | null;
   ranAt: string | null;
+  mode: SolveMode;
 }
 
 /**
  * 第 ⑤⑥ 步：求解结果。
  *
  * `job` 存的是求解那一刻的快照，用于跑独立校验器 `validate()`——校验器与求解器分开实现， 所以导出前必须拿同一份输入重验一次。
+ *
+ * 两条路径共用这一个 store：`setResult()` 写单场结果，`setAllResult()` 写多场次结果； 两者互斥（写一条会清掉另一条），`mode` 指明当前是哪种。
  */
 export const useResultStore = defineStore("result", () => {
-  const saved = loadState<PersistedResult>(STORAGE_NAME, { result: null, job: null, ranAt: null });
+  const saved = loadState<PersistedResult>(STORAGE_NAME, {
+    result: null,
+    planAll: null,
+    job: null,
+    ranAt: null,
+    mode: "single",
+  });
 
   const result = ref<PlanResult | null>(saved.result ?? null);
+  const planAll = ref<PlanAllResult | null>(saved.planAll ?? null);
   const job = ref<Job | null>(saved.job ?? null);
   const ranAt = ref<string | null>(saved.ranAt ?? null);
+  const mode = ref<SolveMode>(
+    saved.mode === "all" || (saved.mode == null && saved.planAll != null) ? "all" : "single",
+  );
   const report = ref<ValidationReport | null>(null);
-  const status = ref<SolveStatus>(saved.result ? "done" : "idle");
+  const status = ref<SolveStatus>(saved.result || saved.planAll ? "done" : "idle");
   const errorMessage = ref("");
   const elapsedMs = ref(0);
 
-  const hasResult = computed(() => result.value != null);
-  const isDegraded = computed(() => result.value != null && result.value.level !== "strict");
+  const hasResult = computed(() => result.value != null || planAll.value != null);
+  const hasMultiResult = computed(() => planAll.value != null);
+  const isDegraded = computed(() => {
+    if (planAll.value != null) {
+      return planAll.value.seatings.some((seating) => seating.result.level !== "strict");
+    }
+    return result.value != null && result.value.level !== "strict";
+  });
   const entries = computed<PlanEntry[]>(() => result.value?.entries ?? []);
 
-  /** 按考场顺序 + 座位号排序（core 已排好，这里再兜一层，防止手改 job.json 后顺序变了）。 */
+  /* ---------- 多场次视图 ---------- */
+
+  const slots = computed<TimeSlot[]>(() => planAll.value?.slots ?? []);
+  const seatings = computed<SeatingPlan[]>(() => planAll.value?.seatings ?? []);
+  const scheduleByStudent = computed<StudentSchedule[]>(() => planAll.value?.byStudent ?? []);
+
+  /**
+   * 空置考场：**按真正的求解结果判定**——`seatings` 里出现过的 `roomId` 才算用上， 不用容量预测。多场次取 `planAll.seatings`，单场沿用
+   * `result.stats.emptyRooms`（同样来自求解结果）。
+   */
+  const emptyRoomIds = computed<string[]>(() => {
+    if (planAll.value != null) {
+      const used = new Set(seatings.value.map((seating) => seating.roomId));
+      return (job.value?.rooms ?? []).filter((room) => !used.has(room.id)).map((room) => room.id);
+    }
+    return result.value?.stats.emptyRooms ?? [];
+  });
+
+  const emptyRoomNames = computed<string[]>(() =>
+    emptyRoomIds.value.map((id) => job.value?.rooms.find((room) => room.id === id)?.name ?? id),
+  );
+
   const sortedEntries = computed<PlanEntry[]>(() => {
     const order = new Map<string, number>();
     for (const [index, room] of (job.value?.rooms ?? []).entries()) order.set(room.id, index);
@@ -78,13 +132,31 @@ export const useResultStore = defineStore("result", () => {
     elapsedMs.value = 0;
   }
 
-  function setResult(next: PlanResult, sourceJob: Job): void {
+  /** 写单场结果。`mode` 默认 `single`，老调用方不传时行为不变。 */
+  function setResult(next: PlanResult, sourceJob: Job, nextMode: SolveMode = "single"): void {
     result.value = next;
+    planAll.value = null;
+    mode.value = nextMode;
     job.value = sourceJob;
     ranAt.value = new Date().toISOString();
     status.value = next.ok ? "done" : "failed";
     elapsedMs.value = next.stats.elapsedMs;
     report.value = validate(sourceJob, next);
+  }
+
+  /** 写多场次结果：清掉单场结果，多场次没有 `validate()` 的整份输入，`report` 一并清空。 */
+  function setAllResult(next: PlanAllResult, sourceJob: Job): void {
+    planAll.value = next;
+    result.value = null;
+    mode.value = "all";
+    job.value = sourceJob;
+    ranAt.value = new Date().toISOString();
+    status.value = next.ok ? "done" : "failed";
+    elapsedMs.value = next.seatings.reduce(
+      (sum, seating) => sum + seating.result.stats.elapsedMs,
+      0,
+    );
+    report.value = null;
   }
 
   function setError(message: string): void {
@@ -94,11 +166,50 @@ export const useResultStore = defineStore("result", () => {
 
   /** 求解被取消（Worker 被终止）：回到上一次结果对应的状态。 */
   function cancelRun(): void {
-    status.value = result.value ? (result.value.ok ? "done" : "failed") : "idle";
+    if (result.value) status.value = result.value.ok ? "done" : "failed";
+    else if (planAll.value) status.value = planAll.value.ok ? "done" : "failed";
+    else status.value = "idle";
+  }
+
+  /**
+   * 一键移除空置考场：同时作用到 `rooms` store 与结果快照里的 job。
+   *
+   * 移除后旧结果已不对应新配置，这里直接清掉（保留减去空置考场后的 job 快照）， 调用方提示「配置已变，建议重排」。
+   */
+  function removeEmptyRooms(): { removed: string[] } {
+    const ids = emptyRoomIds.value;
+    if (ids.length === 0) return { removed: [] };
+
+    const idSet = new Set(ids);
+    const roomsStore = useRoomsStore();
+    const removed = ids.map(
+      (id) =>
+        roomsStore.roomById(id)?.name ??
+        job.value?.rooms.find((room) => room.id === id)?.name ??
+        id,
+    );
+    roomsStore.removeRooms(ids);
+    if (job.value != null) {
+      job.value = {
+        ...job.value,
+        rooms: job.value.rooms.filter((room) => !idSet.has(room.id)),
+      };
+    }
+
+    result.value = null;
+    planAll.value = null;
+    report.value = null;
+    ranAt.value = null;
+    status.value = "idle";
+    errorMessage.value = "";
+    elapsedMs.value = 0;
+    return { removed };
   }
 
   function clear(): void {
     result.value = null;
+    planAll.value = null;
+    mode.value = "single";
     job.value = null;
     report.value = null;
     ranAt.value = null;
@@ -108,27 +219,37 @@ export const useResultStore = defineStore("result", () => {
   }
 
   watch(
-    [result, job, ranAt],
+    [result, planAll, job, ranAt, mode],
     () =>
       saveState(STORAGE_NAME, {
         result: result.value,
+        planAll: planAll.value,
         job: job.value,
         ranAt: ranAt.value,
+        mode: mode.value,
       } satisfies PersistedResult),
     { deep: true },
   );
 
   return {
     result,
+    planAll,
     job,
     ranAt,
+    mode,
     report,
     status,
     errorMessage,
     elapsedMs,
     hasResult,
+    hasMultiResult,
     isDegraded,
     entries,
+    slots,
+    seatings,
+    scheduleByStudent,
+    emptyRoomIds,
+    emptyRoomNames,
     sortedEntries,
     entryBySeat,
     classNames,
@@ -136,8 +257,10 @@ export const useResultStore = defineStore("result", () => {
     validateCurrent,
     setRunning,
     setResult,
+    setAllResult,
     setError,
     cancelRun,
+    removeEmptyRooms,
     clear,
   };
 });

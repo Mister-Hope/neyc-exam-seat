@@ -1,12 +1,26 @@
 import { onScopeDispose, ref, shallowRef } from "vue";
 
-import type { SolverResponse, SolverStage } from "@/workers/solver-protocol";
-import type { Diagnostic, Job, PlanOptions, PlanResult } from "@exam-seat/core";
+import type {
+  SolverMode,
+  SolverRequest,
+  SolverResponse,
+  SolverStage,
+} from "@/workers/solver-protocol";
+import type { Diagnostic, Job, PlanAllResult, PlanOptions, PlanResult } from "@exam-seat/core";
+
+/** 求解产物：`single` = 单场 `PlanResult`；`all` = 多场次 `PlanAllResult`。 */
+export type SolverOutcome =
+  | { mode: "single"; result: PlanResult }
+  | { mode: "all"; result: PlanAllResult };
 
 /**
  * 在主线程里驱动求解 Worker：进度、预检诊断、取消。
  *
- * 进度是「阶段 + 已用时间」推出来的：`plan()` 是同步的，没法上报细粒度百分比， 所以按 `timeLimitMs` 折算到 55% → 95%，到点了也不假装 100%，等真正的结果。
+ * 进度是「阶段 + 已用时间」推出来的：`plan()` / `planAll()` 都是同步的，没法上报细粒度百分比， 所以按 `timeLimitMs` 折算到 55% →
+ * 95%，到点了也不假装 100%，等真正的结果。
+ *
+ * `mode` 缺省 `single`：单场路径与多场次上线前完全一致；`all` 时 Worker 调 `planAll`。 进度与取消语义两种模式一致（取消 =
+ * `worker.terminate()`）。
  */
 export function useSolver() {
   const running = ref(false);
@@ -52,7 +66,11 @@ export function useSolver() {
     precheckFatal.value = false;
   }
 
-  async function run(job: Job, overrides?: PlanOptions): Promise<PlanResult | null> {
+  async function run(
+    job: Job,
+    overrides?: PlanOptions,
+    mode: SolverMode = "single",
+  ): Promise<SolverOutcome | null> {
     teardown();
     sequence += 1;
     const id = sequence;
@@ -80,8 +98,8 @@ export function useSolver() {
       }
     }, 120);
 
-    return new Promise<PlanResult | null>((resolve) => {
-      const finish = (value: PlanResult | null): void => {
+    return new Promise<SolverOutcome | null>((resolve) => {
+      const finish = (value: SolverOutcome | null): void => {
         if (id === sequence) teardown();
         resolve(value);
       };
@@ -101,7 +119,11 @@ export function useSolver() {
           }
           case "done": {
             progress.value = 100;
-            finish(data.result);
+            finish(
+              data.mode === "all"
+                ? { mode: "all", result: data.result }
+                : { mode: "single", result: data.result },
+            );
             break;
           }
           case "error": {
@@ -122,6 +144,10 @@ export function useSolver() {
         error.value = "求解线程消息无法解析";
         finish(null);
       });
+
+      // 真正把求解任务发进 Worker。监听器先挂好再发，避免同步实现的 Worker 抢先回消息丢事件。
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Worker.postMessage 没有 targetOrigin 参数，这条规则只适用于 window.postMessage
+      instance.postMessage({ id, job, overrides, mode } satisfies SolverRequest);
     });
   }
 
