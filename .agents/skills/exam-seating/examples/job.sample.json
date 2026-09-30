@@ -1,231 +1,304 @@
 {
   "jobVersion": 2,
   "meta": {
-    "title": "2026届高三一模（样例）"
+    "title": "2026届高三一模（样例：名单带选科，自动多场次）"
   },
   "options": {
     "seed": 20260930,
     "adjacency": "king",
     "forceKing": false,
     "relax": "none",
-    "timeLimitMs": 10000
+    "timeLimitMs": 10000,
+    "groupPreference": "sameCombination"
   },
   "students": [
     {
-      "id": "2026010001",
+      "id": "202601001",
       "name": "张伟",
-      "className": "高三(1)班",
-      "gender": "男"
+      "className": "高三(1班)",
+      "gender": "男",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026010002",
+      "id": "202601002",
       "name": "王芳",
-      "className": "高三(1)班",
-      "gender": "女"
+      "className": "高三(1班)",
+      "gender": "女",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026010003",
+      "id": "202601003",
       "name": "李娜",
-      "className": "高三(1)班",
-      "gender": "男"
+      "className": "高三(1班)",
+      "gender": "男",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026020001",
+      "id": "202602001",
       "name": "刘敏",
-      "className": "高三(2)班",
-      "gender": "女"
+      "className": "高三(2班)",
+      "gender": "女",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026020002",
+      "id": "202602002",
       "name": "陈静",
-      "className": "高三(2)班",
-      "gender": "男"
+      "className": "高三(2班)",
+      "gender": "男",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026020003",
+      "id": "202602003",
       "name": "杨丽",
-      "className": "高三(2)班",
-      "gender": "女"
+      "className": "高三(2班)",
+      "gender": "女",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026030001",
+      "id": "202603001",
       "name": "赵强",
-      "className": "高三(3)班",
-      "gender": "男"
+      "className": "高三(3班)",
+      "gender": "男",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026030002",
+      "id": "202603002",
       "name": "黄磊",
-      "className": "高三(3)班",
-      "gender": "女"
+      "className": "高三(3班)",
+      "gender": "女",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026030003",
+      "id": "202603003",
       "name": "周洋",
-      "className": "高三(3)班",
-      "gender": "男"
+      "className": "高三(3班)",
+      "gender": "男",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026040001",
+      "id": "202604001",
       "name": "吴艳",
-      "className": "高三(4)班",
-      "gender": "女"
+      "className": "高三(4班)",
+      "gender": "女",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026040002",
+      "id": "202604002",
       "name": "徐勇",
-      "className": "高三(4)班",
-      "gender": "男"
+      "className": "高三(4班)",
+      "gender": "男",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026040003",
+      "id": "202604003",
       "name": "孙军",
-      "className": "高三(4)班",
-      "gender": "女"
+      "className": "高三(4班)",
+      "gender": "女",
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
     },
     {
-      "id": "2026050001",
+      "id": "202605001",
       "name": "马杰",
-      "className": "高三(5)班",
-      "gender": "男"
+      "className": "高三(5班)",
+      "gender": "男",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026050002",
+      "id": "202605002",
       "name": "朱娟",
-      "className": "高三(5)班",
-      "gender": "女"
+      "className": "高三(5班)",
+      "gender": "女",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026050003",
+      "id": "202605003",
       "name": "胡涛",
-      "className": "高三(5)班",
-      "gender": "男"
+      "className": "高三(5班)",
+      "gender": "男",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026060001",
+      "id": "202606001",
       "name": "郭超",
-      "className": "高三(6)班",
-      "gender": "女"
+      "className": "高三(6班)",
+      "gender": "女",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026060002",
+      "id": "202606002",
       "name": "何明",
-      "className": "高三(6)班",
-      "gender": "男"
+      "className": "高三(6班)",
+      "gender": "男",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026060003",
+      "id": "202606003",
       "name": "高霞",
-      "className": "高三(6)班",
-      "gender": "女"
+      "className": "高三(6班)",
+      "gender": "女",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026070001",
+      "id": "202607001",
       "name": "林平",
-      "className": "高三(7)班",
-      "gender": "男"
+      "className": "高三(7班)",
+      "gender": "男",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026070002",
+      "id": "202607002",
       "name": "罗刚",
-      "className": "高三(7)班",
-      "gender": "女"
+      "className": "高三(7班)",
+      "gender": "女",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026070003",
+      "id": "202607003",
       "name": "郑英",
-      "className": "高三(7)班",
-      "gender": "男"
+      "className": "高三(7班)",
+      "gender": "男",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026080001",
+      "id": "202608001",
       "name": "梁建",
-      "className": "高三(8)班",
-      "gender": "女"
+      "className": "高三(8班)",
+      "gender": "女",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026080002",
+      "id": "202608002",
       "name": "谢华",
-      "className": "高三(8)班",
-      "gender": "男"
+      "className": "高三(8班)",
+      "gender": "男",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026080003",
+      "id": "202608003",
       "name": "宋文",
-      "className": "高三(8)班",
-      "gender": "女"
+      "className": "高三(8班)",
+      "gender": "女",
+      "combination": "政史地",
+      "subjects": ["history", "politics", "geography"]
     },
     {
-      "id": "2026090001",
+      "id": "202609001",
       "name": "唐博",
-      "className": "高三(9)班",
-      "gender": "男"
+      "className": "高三(9班)",
+      "gender": "男",
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
     },
     {
-      "id": "2026090002",
+      "id": "202609002",
       "name": "许宇",
-      "className": "高三(9)班",
-      "gender": "女"
+      "className": "高三(9班)",
+      "gender": "女",
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
     },
     {
-      "id": "2026090003",
+      "id": "202609003",
       "name": "韩轩",
-      "className": "高三(9)班",
-      "gender": "男"
+      "className": "高三(9班)",
+      "gender": "男",
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
     },
     {
-      "id": "2026100001",
+      "id": "202610001",
       "name": "冯浩",
-      "className": "高三(10)班",
-      "gender": "女"
+      "className": "高三(10班)",
+      "gender": "女",
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
     },
     {
-      "id": "2026100002",
+      "id": "202610002",
       "name": "邓然",
-      "className": "高三(10)班",
-      "gender": "男"
+      "className": "高三(10班)",
+      "gender": "男",
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
     },
     {
-      "id": "2026100003",
+      "id": "202610003",
       "name": "曹涵",
-      "className": "高三(10)班",
-      "gender": "女"
+      "className": "高三(10班)",
+      "gender": "女",
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
     },
     {
-      "id": "2026110001",
+      "id": "202611001",
       "name": "彭欣",
-      "className": "高三(11)班",
-      "gender": "男"
+      "className": "高三(11班)",
+      "gender": "男",
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
     },
     {
-      "id": "2026110002",
+      "id": "202611002",
       "name": "曾怡",
-      "className": "高三(11)班",
-      "gender": "女"
+      "className": "高三(11班)",
+      "gender": "女",
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
     },
     {
-      "id": "2026110003",
+      "id": "202611003",
       "name": "萧然",
-      "className": "高三(11)班",
-      "gender": "男"
+      "className": "高三(11班)",
+      "gender": "男",
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
     },
     {
-      "id": "2026120001",
+      "id": "202612001",
       "name": "田甜",
-      "className": "高三(12)班",
-      "gender": "女"
+      "className": "高三(12班)",
+      "gender": "女",
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
     },
     {
-      "id": "2026120002",
+      "id": "202612002",
       "name": "董雨",
-      "className": "高三(12)班",
-      "gender": "男"
+      "className": "高三(12班)",
+      "gender": "男",
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
     },
     {
-      "id": "2026120003",
+      "id": "202612003",
       "name": "潘晨",
-      "className": "高三(12)班",
-      "gender": "女"
+      "className": "高三(12班)",
+      "gender": "女",
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
     }
   ],
   "rooms": [
@@ -244,6 +317,25 @@
       "cols": 5,
       "doorSide": "right",
       "note": "李老师"
+    },
+    {
+      "id": "R3",
+      "name": "第3考场",
+      "location": "高二一班",
+      "rows": 6,
+      "cols": 5,
+      "doorSide": "right",
+      "note": "王老师"
+    },
+    {
+      "id": "R20",
+      "name": "第20考场",
+      "location": "生物实验室",
+      "rows": 6,
+      "cols": 5,
+      "doorSide": "right",
+      "note": "赵老师",
+      "dedicatedSubjects": ["politics", "geography"]
     }
   ],
   "constraints": [
@@ -255,21 +347,20 @@
     },
     {
       "id": "C2",
-      "note": "必须在班主任监考的第1考场",
-      "studentIds": ["2026030001"],
-      "roomId": "R1"
+      "note": "考政治的靠窗",
+      "subjects": ["politics"],
+      "cols": ["window"]
     },
     {
       "id": "C3",
-      "note": "靠门坐，哪个考场都行",
-      "studentIds": ["2026040001"],
-      "cols": ["door"]
+      "note": "高三(9)班坐首排",
+      "classes": ["高三(9)班"],
+      "rows": ["first"]
     },
     {
       "id": "C4",
-      "note": "四人坐第2考场四个角",
+      "note": "四人坐四角",
       "studentIds": ["2026050002", "2026060002", "2026070002", "2026080002"],
-      "roomId": "R2",
       "rows": ["first", "last"],
       "cols": ["door", "window"]
     }
