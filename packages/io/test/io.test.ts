@@ -197,7 +197,7 @@ describe("空结果导出（预检没过、一个座位都没排时）", () => {
         rooms: [{ id: "R1", rows: 6, cols: 5 }],
       });
       const files = readdirSync(dir);
-      expect(written.length).toBeGreaterThan(0);
+      expect(written.files.length).toBeGreaterThan(0);
       expect(files).toContain("考场安排名单.xlsx");
       expect(files).toContain("plan.json");
       expect(files).not.toContain("考场座位表.xlsx");

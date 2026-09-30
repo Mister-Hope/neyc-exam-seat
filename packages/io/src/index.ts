@@ -6,7 +6,7 @@ import {
   subjectListLabel,
   validateSelection,
 } from "@exam-seat/core";
-import type { PlanAllResult, PlanResult, Student } from "@exam-seat/core";
+import type { PlanAllResult, PlanResult, RoomSpec, Student } from "@exam-seat/core";
 
 export interface SheetData {
   name: string;
@@ -392,6 +392,46 @@ export function buildRoomSheets(
     });
   }
   return writeWorkbook(sheets);
+}
+
+/* ------------------------------------------------------------------ */
+/* 空置考场剔除（浏览器 / Node 通用）                                   */
+/* ------------------------------------------------------------------ */
+
+export interface PrunedJob<T> {
+  /** 剔除空置考场后的新 job（浅拷贝，原对象不动） */
+  job: T;
+  /** 被剔除的空置考场，按原 `rooms` 顺序 */
+  removed: RoomSpec[];
+}
+
+/**
+ * 从求解结果推导真正用到了座位的考场 id（按首次出现顺序去重）。
+ *
+ * 单场看 `entries`；多场次看 `seatings`。与 core 判定 `emptyRooms` 的口径一致： 只要这个考场里坐过至少一个人，就不算空置。
+ */
+export function usedRoomIds(result: PlanResult | PlanAllResult): string[] {
+  const roomIds =
+    "seatings" in result
+      ? result.seatings.map((seating) => seating.roomId)
+      : result.entries.map((entry) => entry.roomId);
+  return [...new Set(roomIds)];
+}
+
+/**
+ * 返回剔除「没用到的考场」后的新 job，**不原地修改**。
+ *
+ * `usedIds` 之外的考场一律算空置（通常由 `usedRoomIds(result)` 提供）； `removed` 保持原 `rooms` 顺序，方便按老师配置的顺序提示。
+ */
+export function pruneEmptyRooms<T extends { rooms?: RoomSpec[] }>(
+  job: T,
+  usedIds: Iterable<string>,
+): PrunedJob<T> {
+  const used = new Set(usedIds);
+  const rooms = job.rooms ?? [];
+  const kept = rooms.filter((room) => used.has(room.id));
+  const removed = rooms.filter((room) => !used.has(room.id));
+  return { job: { ...job, rooms: kept }, removed };
 }
 
 /* ------------------------------------------------------------------ */

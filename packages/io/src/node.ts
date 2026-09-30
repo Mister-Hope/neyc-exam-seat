@@ -1,14 +1,16 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import nodePath from "node:path";
 
-import type { PlanAllResult, PlanResult, RoomSpec } from "@exam-seat/core";
+import type { Job, PlanAllResult, PlanResult, RoomSpec } from "@exam-seat/core";
 
 import {
   buildClassScheduleWorkbook,
   buildInvigilatorWorkbook,
   buildPlanWorkbook,
   buildRoomSheets,
+  pruneEmptyRooms,
   readRoster,
+  usedRoomIds,
 } from "./index";
 import type { ReadRosterOptions, RosterReadResult } from "./index";
 
@@ -24,6 +26,13 @@ export function writeBinaryFile(path: string, bytes: Uint8Array): string {
   return target;
 }
 
+export interface WriteFilesResult {
+  /** 写出的文件绝对路径，按写入顺序 */
+  files: string[];
+  /** 写 job.json 时剔除的空置考场名（`name ?? id`），按原 `rooms` 顺序；没写 job.json 时为空 */
+  removedRooms: string[];
+}
+
 export interface WritePlanOptions {
   outDir: string;
   /** 主文件名，默认「考场安排名单.xlsx」 */
@@ -32,77 +41,112 @@ export interface WritePlanOptions {
   rooms?: RoomSpec[];
   /** 是否额外写出 plan.json */
   writeJson?: boolean;
-  /** 是否额外写出 job.json（调用方提供） */
-  job?: unknown;
+  /** 给了 job 且 `writeJson` 为真时，写出剔除空置考场后的 job.json */
+  job?: Job;
+  /**
+   * 是否写名单工作簿（`考场安排名单.xlsx` / `考场座位表.xlsx`），默认 true；结果被判定为结构性 error 时调用方传 false，只留 plan.json /
+   * job.json 作证
+   */
+  writeWorkbooks?: boolean;
 }
 
-/** 把结果落盘，返回写出的文件路径列表。 */
-export function writePlanFiles(result: PlanResult, options: WritePlanOptions): string[] {
+/** 考场对外展示名：有名字用名字（去空白），否则退回 id。与 core 的 roomName 口径一致。 */
+function roomLabel(room: RoomSpec): string {
+  const name = room.name?.trim();
+  return name === undefined || name === "" ? room.id : name;
+}
+
+/** 把结果落盘，返回写出的文件与被剔除的空置考场。 */
+export function writePlanFiles(result: PlanResult, options: WritePlanOptions): WriteFilesResult {
   const outDir = nodePath.resolve(options.outDir);
   mkdirSync(outDir, { recursive: true });
   const written: string[] = [];
+  let removedRooms: string[] = [];
 
-  const mainName = options.fileName ?? "考场安排名单.xlsx";
-  const mainPath = nodePath.join(outDir, mainName);
-  writeFileSync(mainPath, buildPlanWorkbook(result));
-  written.push(mainPath);
+  if (options.writeWorkbooks ?? true) {
+    const mainName = options.fileName ?? "考场安排名单.xlsx";
+    const mainPath = nodePath.join(outDir, mainName);
+    writeFileSync(mainPath, buildPlanWorkbook(result));
+    written.push(mainPath);
 
-  if (options.rooms && options.rooms.length > 0 && result.entries.length > 0) {
-    const byId = new Map(options.rooms.map((r) => [r.id, r]));
-    const sheetsPath = nodePath.join(outDir, "考场座位表.xlsx");
-    writeFileSync(
-      sheetsPath,
-      buildRoomSheets(result, (roomId) => {
-        const room = byId.get(roomId);
-        return room
-          ? { rows: room.rows, cols: room.cols, name: room.name ?? room.id }
-          : { rows: 1, cols: 1, name: roomId };
-      }),
-    );
-    written.push(sheetsPath);
+    if (options.rooms && options.rooms.length > 0 && result.entries.length > 0) {
+      const byId = new Map(options.rooms.map((r) => [r.id, r]));
+      const sheetsPath = nodePath.join(outDir, "考场座位表.xlsx");
+      writeFileSync(
+        sheetsPath,
+        buildRoomSheets(result, (roomId) => {
+          const room = byId.get(roomId);
+          return room
+            ? { rows: room.rows, cols: room.cols, name: room.name ?? room.id }
+            : { rows: 1, cols: 1, name: roomId };
+        }),
+      );
+      written.push(sheetsPath);
+    }
   }
 
+  // plan.json 保持原样：emptyRooms 等诊断留痕，方便回溯
   const planPath = nodePath.join(outDir, "plan.json");
   writeFileSync(planPath, JSON.stringify(result, null, 2));
   written.push(planPath);
 
   if (options.writeJson && options.job != null) {
+    // 一个考场都没用到 = 这次压根没排出来，不能把 job 掏成空配置；原样落盘留证据
+    const used = usedRoomIds(result);
+    const pruned = used.length > 0 ? pruneEmptyRooms(options.job, used) : null;
+    if (pruned) removedRooms = pruned.removed.map(roomLabel);
     const jobPath = nodePath.join(outDir, "job.json");
-    writeFileSync(jobPath, JSON.stringify(options.job, null, 2));
+    writeFileSync(jobPath, JSON.stringify(pruned?.job ?? options.job, null, 2));
     written.push(jobPath);
   }
 
-  return written;
+  return { files: written, removedRooms };
 }
 
-/** 多场次（选科）结果的落盘：按班级 + 按考场 两份表 */
+/** 多场次（选科）结果的落盘：按班级 + 按考场 两份表 + 剔除空置考场后的 job.json */
 export function writeMultiPlanFiles(
   result: PlanAllResult,
-  options: { outDir: string; rooms?: RoomSpec[] },
-): string[] {
+  options: {
+    outDir: string;
+    rooms?: RoomSpec[];
+    job: Job;
+    /** 是否写两份名单工作簿，默认 true；结果为 error（未通过校验）时调用方传 false，只留 plan.json / job.json 作证 */
+    writeWorkbooks?: boolean;
+  },
+): WriteFilesResult {
   const outDir = nodePath.resolve(options.outDir);
   mkdirSync(outDir, { recursive: true });
   const written: string[] = [];
 
-  const byId = new Map((options.rooms ?? []).map((r) => [r.id, r]));
+  if (options.writeWorkbooks ?? true) {
+    const byId = new Map((options.rooms ?? []).map((r) => [r.id, r]));
 
-  const classPath = nodePath.join(outDir, "按班级考场安排.xlsx");
-  writeFileSync(classPath, buildClassScheduleWorkbook(result));
-  written.push(classPath);
+    const classPath = nodePath.join(outDir, "按班级考场安排.xlsx");
+    writeFileSync(classPath, buildClassScheduleWorkbook(result));
+    written.push(classPath);
 
-  const invigilatorPath = nodePath.join(outDir, "考场监考表.xlsx");
-  writeFileSync(
-    invigilatorPath,
-    buildInvigilatorWorkbook(result, (roomId) => {
-      const room = byId.get(roomId);
-      return room ? { location: room.location, note: room.note } : undefined;
-    }),
-  );
-  written.push(invigilatorPath);
+    const invigilatorPath = nodePath.join(outDir, "考场监考表.xlsx");
+    writeFileSync(
+      invigilatorPath,
+      buildInvigilatorWorkbook(result, (roomId) => {
+        const room = byId.get(roomId);
+        return room ? { location: room.location, note: room.note } : undefined;
+      }),
+    );
+    written.push(invigilatorPath);
+  }
 
+  // plan.json 保持原样：emptyRooms 等诊断留痕，方便回溯
   const planPath = nodePath.join(outDir, "plan.json");
   writeFileSync(planPath, JSON.stringify(result, null, 2));
   written.push(planPath);
 
-  return written;
+  // 一个考场都没用到 = 这次压根没排出来，不能把 job 掏成空配置；原样落盘留证据
+  const used = usedRoomIds(result);
+  const pruned = used.length > 0 ? pruneEmptyRooms(options.job, used) : null;
+  const jobPath = nodePath.join(outDir, "job.json");
+  writeFileSync(jobPath, JSON.stringify(pruned?.job ?? options.job, null, 2));
+  written.push(jobPath);
+
+  return { files: written, removedRooms: pruned ? pruned.removed.map(roomLabel) : [] };
 }
