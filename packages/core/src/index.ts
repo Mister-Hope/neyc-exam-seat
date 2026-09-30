@@ -40,6 +40,9 @@ export {
 export { compileModel } from "./model";
 export type { CompiledModel, CompiledRoom } from "./model";
 
+export { buildConflictGraph, deriveTimeSlots, findSlotConflicts, subjectInSlot } from "./schedule";
+export type { TimeSlot } from "./schedule";
+
 export {
   checkSeatMatching,
   compileConstraintSeats,
