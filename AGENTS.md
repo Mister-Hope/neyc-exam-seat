@@ -75,3 +75,8 @@ vendor/                           SheetJS tarball
 2. 求解结果**同输入同 seed 必须完全一致**，这是可复现性的底线。
 3. 求解器只用 `PlanResult.diagnostics` 表达业务失败，**不用抛异常**。
 4. 导出前必须跑 `validate()`——校验器与求解器分开实现，不许自证。
+5. **新增 `@exam-seat/*` 的子路径导出时（例如 `@exam-seat/io/node`），必须同时改三处**：
+   根 `tsconfig.json` 的 `paths`、`vitest.config.ts` 的 alias、以及该包的 `package.json#exports`。
+   漏掉前两处的话，**干净检出（还没 build）时 `pnpm typecheck` 会因为找不到 `dist/*.d.ts` 而失败**——
+   CI 的顺序是 typecheck 早于 build，这条一定会炸。
+   改完请用 `rm -rf packages/*/dist && pnpm verify` 验证。

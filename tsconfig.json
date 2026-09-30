@@ -20,6 +20,7 @@
     "noEmit": true,
     "paths": {
       "@exam-seat/core": ["./packages/core/src/index.ts"],
+      "@exam-seat/io/node": ["./packages/io/src/node.ts"],
       "@exam-seat/io": ["./packages/io/src/index.ts"]
     }
   }
