@@ -256,7 +256,7 @@ describe("多场次排考的边界情况", () => {
   });
 
   it("parseCombination 与 planAll 串起来跑得通", () => {
-    const {subjects} = parseCombination("物化政");
+    const { subjects } = parseCombination("物化政");
     expect(subjects).toEqual(["physics", "chemistry", "politics"]);
   });
 });

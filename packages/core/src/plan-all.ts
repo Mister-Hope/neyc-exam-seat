@@ -20,6 +20,8 @@ export interface SeatingPlan {
   roomId: string;
   roomName: string;
   location?: string;
+  /** 监考老师 */
+  note?: string;
   /** 属于这套座位的学生 id */
   studentIds: string[];
   /** 学生 id → 座位号 */
@@ -81,6 +83,74 @@ interface SeatingGroup {
   /** 这套座位覆盖的科目 */
   subjects: string[];
   room: RoomSpec;
+}
+
+/** 一组需要占普通考场的学生 */
+interface SeatingDemand {
+  kind: SeatingGroup["kind"];
+  key: string;
+  students: number[];
+  subjects: string[];
+}
+
+/**
+ * 把若干「需求组」铺到普通考场里。
+ *
+ * - `allowShare = false`（优先）：每个组都从新考场开始，同考场只有一个组合，监考表最干净。
+ * - `allowShare = true`（考场不够时的退让）：把当前考场填满再换下一个， 代价是尾房可能混两个组合，那个考场会拆成多张监考表。
+ */
+function allocateDemands(
+  demands: SeatingDemand[],
+  rooms: RoomSpec[],
+  allowShare: boolean,
+): { groups: SeatingGroup[]; ok: boolean; missingSeats: number; sharedRooms: number } {
+  const out: SeatingGroup[] = [];
+  const roomTakers = new Map<string, number>();
+  let roomIndex = 0;
+  let used = 0;
+  let missingSeats = 0;
+
+  for (const demand of demands) {
+    let remaining = demand.students;
+    while (remaining.length > 0) {
+      if (roomIndex >= rooms.length) {
+        missingSeats += remaining.length;
+        break;
+      }
+      const room = rooms[roomIndex]!;
+      const capacity = roomCapacity(room);
+      const free = allowShare ? capacity - used : capacity;
+      if (free <= 0) {
+        roomIndex += 1;
+        used = 0;
+        continue;
+      }
+      const take = remaining.slice(0, free);
+      remaining = remaining.slice(take.length);
+      out.push({
+        kind: demand.kind,
+        key: demand.key,
+        students: take,
+        subjects: demand.subjects,
+        room,
+      });
+      roomTakers.set(room.id, (roomTakers.get(room.id) ?? 0) + 1);
+
+      if (allowShare) {
+        used += take.length;
+        if (used >= capacity) {
+          roomIndex += 1;
+          used = 0;
+        }
+      } else {
+        used = 0;
+        roomIndex += 1;
+      }
+    }
+  }
+
+  const sharedRooms = [...roomTakers.values()].filter((n) => n > 1).length;
+  return { groups: out, ok: missingSeats === 0, missingSeats, sharedRooms };
 }
 
 function roomName(room: RoomSpec): string {
@@ -183,20 +253,10 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
 
   /* ---------- 4. 组装座位组 ---------- */
   const groups: SeatingGroup[] = [];
-  let generalCursor = 0;
-  const takeGeneralRooms = (count: number): RoomSpec[] => {
-    const picked: RoomSpec[] = [];
-    let capacity = 0;
-    while (generalCursor < generalRooms.length && capacity < count) {
-      const room = generalRooms[generalCursor]!;
-      picked.push(room);
-      capacity += roomCapacity(room);
-      generalCursor += 1;
-    }
-    return picked;
-  };
 
   if (hasSelection) {
+    const demands: SeatingDemand[] = [];
+
     // 4a. 常规组合：各自占一批普通考场（人数多的先分，减少碎片）
     const regularEntries = [...regularByCombination.entries()].sort(
       (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "zh"),
@@ -204,29 +264,10 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     for (const [combo, members] of regularEntries) {
       const subjects = new Set<string>(core);
       for (const i of members) for (const s of model.subjectOfStudent[i] ?? []) subjects.add(s);
-      const rooms = takeGeneralRooms(members.length);
-      if (rooms.length === 0) {
-        diagnostics.push({
-          code: "CAPACITY_INSUFFICIENT",
-          severity: "error",
-          message: `普通考场已经不够分了，${combo || "这批"} 的 ${members.length} 名学生没有考场可用`,
-          evidence: { combination: combo, students: members.length },
-          suggestions: [],
-        });
-        continue;
-      }
-      for (const chunk of fillRooms(members, rooms)) {
-        groups.push({
-          kind: "regular",
-          key: combo,
-          students: chunk.students,
-          subjects: [...subjects],
-          room: chunk.room,
-        });
-      }
+      demands.push({ kind: "regular", key: combo, students: members, subjects: [...subjects] });
     }
 
-    // 4b. 非常规主考场：语数外 + 他们的选考科目里「没被专用考场接走」的那些
+    // 4b. 非常规主考场：语数外 + 选考科目里「没被专用考场接走」的那些
     if (irregular.length > 0) {
       const subjects = new Set<string>(core);
       for (const i of irregular) {
@@ -235,26 +276,41 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
         }
       }
       if (subjects.size > core.length) {
-        const rooms = takeGeneralRooms(irregular.length);
-        if (rooms.length === 0) {
-          diagnostics.push({
-            code: "CAPACITY_INSUFFICIENT",
-            severity: "error",
-            message: `普通考场已经不够分了，${irregular.length} 名非常规组合学生没有主考场可用`,
-            evidence: { students: irregular.length },
-            suggestions: [],
-          });
-        }
-        for (const chunk of fillRooms(irregular, rooms)) {
-          groups.push({
-            kind: "irregular-main",
-            key: "irregular-main",
-            students: chunk.students,
-            subjects: [...subjects],
-            room: chunk.room,
-          });
-        }
+        demands.push({
+          kind: "irregular-main",
+          key: "irregular-main",
+          students: irregular,
+          subjects: [...subjects],
+        });
       }
+    }
+
+    // 先试「每种组合独占若干考场」；考场不够时退让成「允许共用尾房」，
+    // 代价是该考场会拆成多张监考表 —— 这正是「尽量」二字的边界。
+    const strict = allocateDemands(demands, generalRooms, false);
+    if (strict.ok) {
+      groups.push(...strict.groups);
+    } else {
+      const shared = allocateDemands(demands, generalRooms, true);
+      groups.push(...shared.groups);
+      diagnostics.push(
+        shared.ok
+          ? {
+              code: "ROOMS_SHARED",
+              severity: "warning",
+              message:
+                "普通考场数量不足以让每种组合独占考场，已把部分组合放进同一个考场（那个考场会拆成多张监考表）",
+              evidence: { sharedRooms: shared.sharedRooms },
+              suggestions: [],
+            }
+          : {
+              code: "CAPACITY_INSUFFICIENT",
+              severity: "error",
+              message: `普通考场不够：还缺 ${shared.missingSeats} 个座位`,
+              evidence: { missingSeats: shared.missingSeats },
+              suggestions: [],
+            },
+      );
     }
 
     // 4c. 专用考场：只接收「非常规组合 + 选了该科目」的学生
@@ -331,6 +387,7 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
       roomId: group.room.id,
       roomName: roomName(group.room),
       location: group.room.location,
+      note: group.room.note,
       studentIds: group.students.map((i) => students[i]!.id),
       seatNoById,
       studentBySeatNo,
