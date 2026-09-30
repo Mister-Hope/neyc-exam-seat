@@ -1,0 +1,45 @@
+{
+  "name": "exam-seat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "排考场工具：核心算法包 + CLI + Web 应用 + AI Skill",
+  "type": "module",
+  "scripts": {
+    "acceptance": "node examples/acceptance.mjs",
+    "build": "pnpm -r --filter './packages/*' build",
+    "commit:verify": "node scripts/verifyCommit.ts",
+    "exam-seat": "node packages/cli/bin/exam-seat.mjs",
+    "lint": "oxlint --fix && oxfmt",
+    "lint:check": "oxlint && oxfmt --check",
+    "prepare": "husky",
+    "smoke": "node examples/smoke.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "pnpm -r --filter './packages/*' typecheck",
+    "verify": "pnpm lint:check && pnpm typecheck && pnpm build && pnpm test && pnpm acceptance"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "husky": "^9.1.7",
+    "jsdom": "^30.1.1",
+    "nano-staged": "^1.0.2",
+    "oxc-config-hope": "^0.3.14",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "oxlint-tsgolint": "^7.0.2003",
+    "picocolors": "^1.1.1",
+    "tsdown": "^0.23.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.2",
+    "xlsx": "file:vendor/xlsx-0.20.3.tgz"
+  },
+  "nano-staged": {
+    "**/*": "oxfmt --no-error-on-unmatched-pattern",
+    "*.{js,mjs,ts,vue}": "oxlint --fix"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "packageManager": "pnpm@12.7.0"
+}

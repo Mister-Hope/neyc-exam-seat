@@ -1,0 +1,277 @@
+{
+  "jobVersion": 1,
+  "meta": {
+    "title": "2026届高三一模（样例）"
+  },
+  "options": {
+    "seed": 20260930,
+    "adjacency": "king",
+    "forceKing": false,
+    "relax": "none",
+    "timeLimitMs": 10000
+  },
+  "students": [
+    {
+      "id": "2026010001",
+      "name": "张伟",
+      "className": "高三(1)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026010002",
+      "name": "王芳",
+      "className": "高三(1)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026010003",
+      "name": "李娜",
+      "className": "高三(1)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026020001",
+      "name": "刘敏",
+      "className": "高三(2)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026020002",
+      "name": "陈静",
+      "className": "高三(2)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026020003",
+      "name": "杨丽",
+      "className": "高三(2)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026030001",
+      "name": "赵强",
+      "className": "高三(3)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026030002",
+      "name": "黄磊",
+      "className": "高三(3)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026030003",
+      "name": "周洋",
+      "className": "高三(3)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026040001",
+      "name": "吴艳",
+      "className": "高三(4)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026040002",
+      "name": "徐勇",
+      "className": "高三(4)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026040003",
+      "name": "孙军",
+      "className": "高三(4)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026050001",
+      "name": "马杰",
+      "className": "高三(5)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026050002",
+      "name": "朱娟",
+      "className": "高三(5)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026050003",
+      "name": "胡涛",
+      "className": "高三(5)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026060001",
+      "name": "郭超",
+      "className": "高三(6)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026060002",
+      "name": "何明",
+      "className": "高三(6)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026060003",
+      "name": "高霞",
+      "className": "高三(6)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026070001",
+      "name": "林平",
+      "className": "高三(7)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026070002",
+      "name": "罗刚",
+      "className": "高三(7)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026070003",
+      "name": "郑英",
+      "className": "高三(7)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026080001",
+      "name": "梁建",
+      "className": "高三(8)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026080002",
+      "name": "谢华",
+      "className": "高三(8)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026080003",
+      "name": "宋文",
+      "className": "高三(8)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026090001",
+      "name": "唐博",
+      "className": "高三(9)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026090002",
+      "name": "许宇",
+      "className": "高三(9)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026090003",
+      "name": "韩轩",
+      "className": "高三(9)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026100001",
+      "name": "冯浩",
+      "className": "高三(10)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026100002",
+      "name": "邓然",
+      "className": "高三(10)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026100003",
+      "name": "曹涵",
+      "className": "高三(10)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026110001",
+      "name": "彭欣",
+      "className": "高三(11)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026110002",
+      "name": "曾怡",
+      "className": "高三(11)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026110003",
+      "name": "萧然",
+      "className": "高三(11)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026120001",
+      "name": "田甜",
+      "className": "高三(12)班",
+      "gender": "女"
+    },
+    {
+      "id": "2026120002",
+      "name": "董雨",
+      "className": "高三(12)班",
+      "gender": "男"
+    },
+    {
+      "id": "2026120003",
+      "name": "潘晨",
+      "className": "高三(12)班",
+      "gender": "女"
+    }
+  ],
+  "rooms": [
+    {
+      "id": "R1",
+      "name": "第1考场",
+      "rows": 6,
+      "cols": 5,
+      "doorSide": "right",
+      "note": "张老师"
+    },
+    {
+      "id": "R2",
+      "name": "第2考场",
+      "rows": 6,
+      "cols": 5,
+      "doorSide": "right",
+      "note": "李老师"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "C1",
+      "note": "有作弊前科，坐首排",
+      "studentIds": ["2026010001", "2026020001"],
+      "rows": ["first"]
+    },
+    {
+      "id": "C2",
+      "note": "必须在班主任监考的第1考场",
+      "studentIds": ["2026030001"],
+      "roomId": "R1"
+    },
+    {
+      "id": "C3",
+      "note": "靠门坐，哪个考场都行",
+      "studentIds": ["2026040001"],
+      "cols": ["door"]
+    },
+    {
+      "id": "C4",
+      "note": "四人坐第2考场四个角",
+      "studentIds": ["2026050002", "2026060002", "2026070002", "2026080002"],
+      "roomId": "R2",
+      "rows": ["first", "last"],
+      "cols": ["door", "window"]
+    }
+  ]
+}

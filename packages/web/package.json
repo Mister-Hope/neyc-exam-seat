@@ -1,0 +1,30 @@
+{
+  "name": "@exam-seat/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "排考场 Web 应用：导入名单、排除缺考、配置考场、设置限定、求解、导出名单。纯前端单页应用，job.json 为唯一契约。",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@exam-seat/core": "workspace:*",
+    "@exam-seat/io": "workspace:*",
+    "element-plus": "^2.14.6",
+    "pinia": "^4.0.3",
+    "vue": "^3.5.43",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/tsconfig": "^0.9.1",
+    "jsdom": "^30.1.1",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.1",
+    "vue-tsc": "^3.3.11"
+  }
+}

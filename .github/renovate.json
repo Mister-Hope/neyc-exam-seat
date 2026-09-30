@@ -1,0 +1,38 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":prHourlyLimitNone", ":prConcurrentLimitNone"],
+  "dependencyDashboard": true,
+  "schedule": ["every weekend"],
+  "packageRules": [
+    {
+      "description": "devDependencies 自动合并（CI 会挡住坏改动）",
+      "automerge": true,
+      "matchDepTypes": ["devDependencies"]
+    },
+    {
+      "description": "TypeScript 锁在 6.x：Vue 工具链目前不支持 7",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
+    },
+    {
+      "description": "oxc 系工具一起升，避免互相不兼容",
+      "groupName": "oxc toolchain",
+      "matchPackageNames": ["oxlint", "oxfmt", "oxc-config-hope", "oxlint-tsgolint"]
+    },
+    {
+      "description": "Vue 全家桶一起升",
+      "groupName": "vue",
+      "matchPackageNames": ["vue", "vue-router", "pinia", "@vitejs/plugin-vue", "vue-tsc"]
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "commitMessageAction": "update lockfile",
+    "platformAutomerge": true,
+    "extends": ["group:allNonMajor", "schedule:weekly"]
+  },
+  "minimumReleaseAge": "1 day",
+  "vulnerabilityAlerts": {
+    "enabled": true
+  }
+}

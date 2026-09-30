@@ -1,0 +1,22 @@
+{
+  "name": "@exam-seat/cli",
+  "version": "0.1.0",
+  "description": "排考场命令行工具。为 agent 设计：--json 输出单一 JSON 对象，退出码分级。",
+  "bin": {
+    "exam-seat": "./bin/exam-seat.mjs"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@exam-seat/core": "workspace:*",
+    "@exam-seat/io": "workspace:*",
+    "commander": "^15.0.0"
+  }
+}
