@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { planAll } from "@exam-seat/core";
+import type { Job } from "@exam-seat/core";
+
 import { parseRoomSpec } from "../src/cli";
+import { renderPlanAll } from "../src/render";
 
 describe("考场规格解析", () => {
   it("small / large 展开成 30 人与 42 人的考场", () => {
@@ -41,5 +45,28 @@ describe("考场规格解析", () => {
     const total = rooms.reduce((sum, r) => sum + r.rows * r.cols, 0);
     expect(rooms).toHaveLength(26);
     expect(total).toBe(20 * 30 + 5 * 42 + 24);
+  });
+});
+
+describe("多场次终端摘要", () => {
+  it("一套座位方案都没有时不得出现「排考完成」这类成功话术", () => {
+    const job: Job = {
+      jobVersion: 2,
+      students: Array.from({ length: 6 }, (_, i) => ({
+        id: `X${i + 1}`,
+        name: `缺考${i + 1}`,
+        className: "高三(1)班",
+        combination: "物化生",
+        subjects: ["physics", "chemistry", "biology"],
+        included: false,
+      })),
+      rooms: [1, 2, 3].map((n) => ({ id: `R${n}`, name: `第${n}考场`, rows: 6, cols: 5 })),
+    };
+    const result = planAll(job);
+    expect(result.seatings).toHaveLength(0);
+
+    const text = renderPlanAll(result);
+    expect(text).toMatch(/没有任何考场安排/);
+    expect(text).not.toMatch(/排考完成|全部时段已安排|✅/);
   });
 });

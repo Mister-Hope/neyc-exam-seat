@@ -96,7 +96,18 @@ export function renderPlanAll(result: PlanAllResult): string {
   const lines: string[] = [];
   const conflicts = result.seatings.reduce((sum, s) => sum + s.result.stats.conflicts, 0);
   lines.push("─".repeat(56));
-  lines.push(result.ok ? "✅ 多场次排考完成（零冲突，全部时段已安排）" : "❌ 未能完全安排");
+  if (result.seatings.length === 0) {
+    // `ok` 在 seatings 为空时可能真空为真（every 空数组），这里绝不能说「排考完成」
+    const errors = result.diagnostics.filter((d) => d.severity === "error");
+    const warnings = result.diagnostics.filter((d) => d.severity === "warning");
+    const reason = (errors.length > 0 ? errors : warnings)[0]?.message;
+    lines.push(`❌ 没有任何考场安排：没有生成任何座位方案${reason ? ` —— ${reason}` : ""}`);
+    if (result.byStudent.length > 0) {
+      lines.push(`${result.byStudent.length} 名考生没有任何时段可排`);
+    }
+  } else {
+    lines.push(result.ok ? "✅ 多场次排考完成（零冲突，全部时段已安排）" : "❌ 未能完全安排");
+  }
   lines.push("─".repeat(56));
   lines.push(
     `时段 ${result.slots.length} 个 ｜ 考生 ${result.byStudent.length} 人 ｜ 座位方案 ${result.seatings.length} 套`,

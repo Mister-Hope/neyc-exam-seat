@@ -3,7 +3,7 @@ import nodePath from "node:path";
 
 import { Command } from "commander";
 
-import { plan, planAll, precheckJob, validate } from "@exam-seat/core";
+import { blocksListExport, plan, planAll, precheckJob, validate } from "@exam-seat/core";
 import type { Adjacency, Job, PlanOptions, PlanResult, RelaxMode, RoomSpec } from "@exam-seat/core";
 import { readRosterFile, writeMultiPlanFiles, writePlanFiles } from "@exam-seat/io/node";
 
@@ -51,6 +51,16 @@ async function loadJob(path: string): Promise<Job> {
 
 function writeJson(payload: unknown): void {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+/**
+ * `plan --out-dir` 在多场次模式下写的 `plan.json` 是 `PlanAllResult`（有 `seatings`）， 单场的 `validate(job,
+ * result)` 读不了它 —— 入口必须先判别，别掉进内部错误。
+ */
+function isMultiPlanJson(value: unknown): boolean {
+  if (typeof value !== "object" || value == null) return false;
+  const record = value as { seatings?: unknown; entries?: unknown };
+  return Array.isArray(record.seatings) && !Array.isArray(record.entries);
 }
 
 function log(message = ""): void {
@@ -365,21 +375,39 @@ export async function main(argv: string[]): Promise<number> {
 
         if (multi) {
           const multiResult = planAll(job, overrides);
+          // 结构性 error（ROOM_SUBJECT_CLASH / CAPACITY_INSUFFICIENT 等）时不导出名单与监考表；
+          // 放宽模式的 SEARCH_FAILED 属于主动降级，照常导出
+          const blocked = blocksListExport(multiResult.diagnostics);
           if (options.outDir) {
             const written = writeMultiPlanFiles(multiResult, {
               outDir: options.outDir,
               rooms: job.rooms,
+              job,
+              writeWorkbooks: !blocked,
             });
-            log(`已导出 ${written.length} 个文件：`);
-            for (const path of written) log(`  ${path}`);
+            if (blocked) {
+              log("结果未通过校验，已只导出 plan.json / job.json，未导出名单与监考表。");
+              for (const d of multiResult.diagnostics) {
+                if (d.severity === "error") log(`  [error] ${d.code}: ${d.message}`);
+              }
+            }
+            log(`已导出 ${written.files.length} 个文件：`);
+            for (const path of written.files) log(`  ${path}`);
+            if (written.removedRooms.length > 0) {
+              log(
+                `已剔除空置考场：${written.removedRooms.join("、")}（导出的 job.json 里不再包含）`,
+              );
+            }
           }
           if (globalJson()) {
             writeJson(multiResult);
           } else {
             process.stdout.write(`${renderPlanAll(multiResult)}\n`);
           }
+          // 退出码契约（design §9）：3 = 名单不成立（没有座位方案，或结构性 error）；
+          // 2 = 主动降级（例如 --relax 只留下 SEARCH_FAILED），结果仍可用
           exitCode =
-            multiResult.seatings.length === 0
+            multiResult.seatings.length === 0 || blocked
               ? EXIT_INFEASIBLE
               : multiResult.ok
                 ? EXIT_OK
@@ -388,6 +416,8 @@ export async function main(argv: string[]): Promise<number> {
         }
 
         const result: PlanResult = plan(job, overrides);
+        // 与多场次同一判据
+        const blocked = blocksListExport(result.diagnostics);
 
         if (options.outDir) {
           const written = writePlanFiles(result, {
@@ -395,9 +425,19 @@ export async function main(argv: string[]): Promise<number> {
             rooms: job.rooms,
             writeJson: true,
             job,
+            writeWorkbooks: !blocked,
           });
-          log(`已导出 ${written.length} 个文件：`);
-          for (const path of written) log(`  ${path}`);
+          if (blocked) {
+            log("结果未通过校验，已只导出 plan.json / job.json，未导出名单与监考表。");
+            for (const d of result.diagnostics) {
+              if (d.severity === "error") log(`  [error] ${d.code}: ${d.message}`);
+            }
+          }
+          log(`已导出 ${written.files.length} 个文件：`);
+          for (const path of written.files) log(`  ${path}`);
+          if (written.removedRooms.length > 0) {
+            log(`已剔除空置考场：${written.removedRooms.join("、")}（导出的 job.json 里不再包含）`);
+          }
         }
 
         if (globalJson()) {
@@ -407,7 +447,11 @@ export async function main(argv: string[]): Promise<number> {
         }
 
         exitCode =
-          result.entries.length === 0 ? EXIT_INFEASIBLE : result.ok ? EXIT_OK : EXIT_DEGRADED;
+          result.entries.length === 0 || blocked
+            ? EXIT_INFEASIBLE
+            : result.ok
+              ? EXIT_OK
+              : EXIT_DEGRADED;
       },
     );
 
@@ -423,7 +467,16 @@ export async function main(argv: string[]): Promise<number> {
         options.plan === "-"
           ? await readStdin()
           : await readFile(nodePath.resolve(options.plan), "utf8");
-      const result = JSON.parse(planText) as PlanResult;
+      const parsed = JSON.parse(planText) as unknown;
+      if (isMultiPlanJson(parsed)) {
+        const message =
+          "这份 plan.json 是多场次结果（含 seatings），exam-seat validate 只支持单场结果；请对每套 seatings[].result 单独校验，或先用 plan --single 生成单场结果再校验。";
+        if (globalJson()) writeJson({ ok: false, error: "MULTI_PLAN_NOT_SUPPORTED", message });
+        else log(`exam-seat: ${message}`);
+        exitCode = EXIT_USAGE;
+        return;
+      }
+      const result = parsed as PlanResult;
       const report = validate(job, result);
       if (globalJson()) {
         writeJson(report);
