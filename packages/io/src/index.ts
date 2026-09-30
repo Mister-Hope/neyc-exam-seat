@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
 
+import { parseCombination, validateSelection } from "@exam-seat/core";
 import type { PlanResult, Student } from "@exam-seat/core";
 
 export interface SheetData {
@@ -19,6 +20,8 @@ export interface RosterMapping {
   className: number;
   gender?: number;
   note?: number;
+  /** 选科所在列，例如「物化政」 */
+  combination?: number;
 }
 
 export interface RosterIssue {
@@ -66,6 +69,20 @@ const HEADER_ALIASES: Record<keyof RosterMapping, string[]> = {
   className: ["班级", "行政班", "所在班级", "班", "class", "classname", "grade"],
   gender: ["性别", "sex", "gender"],
   note: ["备注", "说明", "note", "remark"],
+  combination: [
+    "选科",
+    "选考",
+    "选考科目",
+    "选科组合",
+    "选课",
+    "组合",
+    "科目",
+    "学科",
+    "elective",
+    "combination",
+    "subjects",
+    "subject",
+  ],
 };
 
 function normalizeHeader(header: string): string {
@@ -137,6 +154,29 @@ export function parseRoster(
       const note = String(row[mapping.note] ?? "").trim();
       if (note) student.meta = { note };
     }
+    if (mapping.combination !== undefined) {
+      const raw = String(row[mapping.combination] ?? "").trim();
+      if (raw) {
+        const parsed = parseCombination(raw);
+        student.combination = raw;
+        if (parsed.subjects.length > 0) student.subjects = parsed.subjects;
+        if (parsed.unknown.length > 0) {
+          issues.push({
+            level: "warning",
+            row: excelRow,
+            message: `选科「${raw}」里有认不出的字：${parsed.unknown.join("")}`,
+          });
+        }
+        const problems = validateSelection(parsed.subjects);
+        if (problems.length > 0) {
+          issues.push({
+            level: "warning",
+            row: excelRow,
+            message: `选科「${raw}」不符合 3+1+2：${problems.join("；")}`,
+          });
+        }
+      }
+    }
     students.push(student);
   });
 
@@ -175,6 +215,7 @@ export function readRoster(
     className: options.mapping?.className ?? guessed.mapping.className ?? -1,
     gender: options.mapping?.gender ?? guessed.mapping.gender,
     note: options.mapping?.note ?? guessed.mapping.note,
+    combination: options.mapping?.combination ?? guessed.mapping.combination,
   };
   if (mapping.id < 0 || mapping.name < 0 || mapping.className < 0) {
     const missing = [

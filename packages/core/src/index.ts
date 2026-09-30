@@ -1,6 +1,29 @@
 export type * from "./types";
 
 export {
+  CORE_SUBJECTS,
+  COMBINATION_ORDER,
+  PREFERRED_SUBJECTS,
+  SECONDARY_SUBJECTS,
+  SUBJECT_LABELS,
+  SUBJECT_SHORT,
+  formatCombination,
+  hasSubject,
+  normalizeCombination,
+  parseCombination,
+  subjectLabel,
+  subjectListLabel,
+  validateSelection,
+} from "./subjects";
+export type {
+  CoreSubject,
+  ParsedCombination,
+  PreferredSubject,
+  SecondarySubject,
+  SubjectId,
+} from "./subjects";
+
+export {
   describeCols,
   describeRows,
   maxSameClass,
@@ -17,7 +40,13 @@ export {
 export { compileModel } from "./model";
 export type { CompiledModel, CompiledRoom } from "./model";
 
-export { checkSeatMatching, compileConstraintSeats, compileDomains } from "./domain";
+export {
+  checkSeatMatching,
+  compileConstraintSeats,
+  compileDomains,
+  hasAnySelector,
+  resolveConstraintStudents,
+} from "./domain";
 export type { ConstraintSeatSet, DomainBundle, StudentDomain } from "./domain";
 
 export { MIN_CLASSES_FOR_KING, describeRoomLoad, resolveAdjacency, runPrecheck } from "./precheck";

@@ -1,4 +1,5 @@
 import { maxSameClass, roomCapacity, seatNoToRC } from "./numbering";
+import { formatCombination, parseCombination } from "./subjects";
 import type { Adjacency, DoorSide, Job, RoomSpec, Student } from "./types";
 
 /** 编译后的考场 */
@@ -40,6 +41,16 @@ export interface CompiledModel {
   classNames: string[];
   /** 每个班级的参加考试人数 */
   classSizes: number[];
+  /** 学生 → 选科组合的规范名（如「物化政」）；没填选科就是 null */
+  combinationOfStudent: (string | null)[];
+  /** 学生 → 选科科目 id；没填选科就是 null */
+  subjectOfStudent: (readonly string[] | null)[];
+  /** 学号 → 学生下标（只含参加考试的；重复学号取第一个） */
+  studentIndexById: Map<string, number>;
+  /** 选科组合的规范名 → 该组合的学生下标 */
+  combinationGroups: Map<string, number[]>;
+  /** 出现在名单里的全部选科科目 */
+  subjectsInUse: string[];
   adjacency: Adjacency;
 }
 
@@ -83,6 +94,50 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
   }
   const classSizes = Array.from({ length: classNames.length }, () => 0);
   for (let i = 0; i < students.length; i += 1) classSizes[classOfStudent[i]!]! += 1;
+
+  // 选科
+  const studentIndexById = new Map<string, number>();
+  const combinationOfStudent: (string | null)[] = Array.from(
+    { length: students.length },
+    () => null,
+  );
+  const subjectOfStudent: (readonly string[] | null)[] = Array.from(
+    { length: students.length },
+    () => null,
+  );
+  const combinationGroups = new Map<string, number[]>();
+  const subjectsInUse = new Set<string>();
+
+  for (let i = 0; i < students.length; i += 1) {
+    const student = students[i]!;
+    if (!studentIndexById.has(student.id)) studentIndexById.set(student.id, i);
+
+    // subjects 优先；没给就尝试从 combination 文本解析
+    let subjects: string[] | null = student.subjects ? [...student.subjects] : null;
+    let combination = student.combination?.trim() || null;
+    if (!subjects && combination) {
+      subjects = parseCombination(combination).subjects;
+    }
+    if (subjects && subjects.length > 0) {
+      subjectOfStudent[i] = subjects;
+      for (const s of subjects) subjectsInUse.add(s);
+      const canonical = formatCombination(subjects);
+      combinationOfStudent[i] = canonical;
+      // 原始文本保留在 student.combination 上，这里只在缺省时补规范名
+      combination ??= canonical;
+    } else if (combination) {
+      // 有文本但一个字都没认出来，保留原样以便报错
+      combinationOfStudent[i] = combination;
+    }
+    if (!student.combination && combination) student.combination = combination;
+
+    const key = combinationOfStudent[i];
+    if (key) {
+      const list = combinationGroups.get(key) ?? [];
+      list.push(i);
+      combinationGroups.set(key, list);
+    }
+  }
 
   // 考场与座位
   const rooms: CompiledRoom[] = [];
@@ -177,6 +232,11 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
     classOfStudent,
     classNames,
     classSizes,
+    combinationOfStudent,
+    subjectOfStudent,
+    studentIndexById,
+    combinationGroups,
+    subjectsInUse: [...subjectsInUse],
     adjacency,
   };
 }

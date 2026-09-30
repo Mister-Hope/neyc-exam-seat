@@ -52,7 +52,7 @@ export function buildJob(draft: JobDraft): Job {
     rooms: draft.rooms.map((r) => ({ ...r })),
     constraints: draft.constraints.map((c) => ({
       ...c,
-      studentIds: [...c.studentIds],
+      ...(c.studentIds ? { studentIds: [...c.studentIds] } : {}),
       ...(c.rows ? { rows: [...c.rows] } : {}),
       ...(c.cols ? { cols: [...c.cols] } : {}),
     })),
@@ -68,7 +68,7 @@ export function draftFromJob(job: Job): JobDraft {
     rooms: (job.rooms ?? []).map((r) => ({ ...r })),
     constraints: (job.constraints ?? []).map((c) => ({
       ...c,
-      studentIds: [...c.studentIds],
+      ...(c.studentIds ? { studentIds: [...c.studentIds] } : {}),
       ...(c.rows ? { rows: [...c.rows] } : {}),
       ...(c.cols ? { cols: [...c.cols] } : {}),
     })),

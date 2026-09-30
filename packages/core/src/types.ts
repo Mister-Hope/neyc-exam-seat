@@ -43,6 +43,10 @@ export interface Student {
   gender?: string;
   /** False = 本次不参加考试。缺省视为 true。 */
   included?: boolean;
+  /** 选科组合的原始文本，例如「物化政」。来自 Excel 的选科列。 */
+  combination?: string;
+  /** 解析后的选科科目 id，例如 ['physics','chemistry','politics'] */
+  subjects?: string[];
   tags?: string[];
   meta?: Record<string, unknown>;
 }
@@ -63,7 +67,14 @@ export interface RoomSpec {
 export interface Constraint {
   id: string;
   note?: string;
-  studentIds: string[];
+  /** 按学号点名。以下五个选择器至少要写一个。 */
+  studentIds?: string[];
+  /** 按班级选人，例如 ['高三(3)班'] */
+  classes?: string[];
+  /** 按选科组合选人，例如 ['物化政']（写法可任意，内部会规范化） */
+  combinations?: string[];
+  /** 按所选科目选人，例如 ['politics']（命中选了其中任意一门的学生） */
+  subjects?: string[];
   /** 单选。缺省 = 不限考场。 */
   roomId?: string;
   rows?: RowRef[];
@@ -117,6 +128,7 @@ export type DiagnosticCode =
   | "CONSTRAINT_INDEX_OUT_OF_RANGE"
   | "ABSOLUTE_ROWCOL_WITHOUT_ROOM"
   | "CONSTRAINT_OVERSATURATED"
+  | "CONSTRAINT_NO_SELECTOR"
   | "RULE_INTERSECT_EMPTY"
   | "SEAT_CONFLICT"
   // 求解

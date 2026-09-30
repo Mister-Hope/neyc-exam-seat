@@ -120,7 +120,7 @@ export function runPrecheck(
         ],
       });
     }
-    const unknown = c.studentIds.filter((id) => !model.students.some((s) => s.id === id));
+    const unknown = (c.studentIds ?? []).filter((id) => !model.students.some((s) => s.id === id));
     const unknownExisting = unknown.filter((id) => (job.students ?? []).some((s) => s.id === id));
     if (unknownExisting.length > 0) {
       push({
@@ -278,17 +278,40 @@ export function runPrecheck(
       continue;
     }
 
-    if (cs.seats.size < c.studentIds.length) {
+    if (cs.noSelector) {
+      push({
+        code: "CONSTRAINT_NO_SELECTOR",
+        severity: "error",
+        message: `${label} 没有指定任何学生（既没点名，也没限定班级 / 选科组合 / 科目），这条限定不会生效`,
+        evidence: { constraintId: c.id },
+        suggestions: [
+          {
+            id: `drop-${c.id}`,
+            label: "删掉这条空限定",
+            patch: [{ op: "remove", path: `/constraints/${indexOfConstraint(job, c.id)}` }],
+          },
+        ],
+      });
+      continue;
+    }
+
+    if (cs.seats.size < cs.studentIndices.length) {
       push({
         code: "CONSTRAINT_OVERSATURATED",
         severity: "error",
-        message: `${label} 只有 ${cs.seats.size} 个可用座位，却限定了 ${c.studentIds.length} 人`,
+        message: `${label} 只有 ${cs.seats.size} 个可用座位，却命中了 ${cs.studentIndices.length} 名学生`,
         evidence: {
           constraintId: c.id,
           availableSeats: cs.seats.size,
-          students: c.studentIds.length,
+          students: cs.studentIndices.length,
         },
-        suggestions: oversaturatedSuggestions(job, ci, c, cs.seats.size),
+        suggestions: oversaturatedSuggestions(
+          job,
+          ci,
+          c,
+          cs.seats.size,
+          cs.studentIndices.map((si) => students[si]!.id),
+        ),
       });
     }
   }
@@ -508,27 +531,30 @@ function outOfRangeSuggestions(
 function oversaturatedSuggestions(
   job: Job,
   ci: number,
-  c: { id: string; studentIds: string[]; note?: string },
+  c: { id: string; note?: string },
   available: number,
+  resolvedStudentIds: string[],
 ): Suggestion[] {
   const at = indexOfConstraint(job, c.id);
-  const keep = c.studentIds.slice(0, available);
-  const drop = c.studentIds.slice(available);
-  const out: Suggestion[] = [
-    {
-      id: `trim-${c.id}`,
-      label: `把多出的 ${drop.length} 人从这条限定里移出（保留前 ${available} 人）`,
-      effect: "这条限定立刻变得可满足",
-      patch: [{ op: "replace", path: `/constraints/${at}/studentIds`, value: keep }],
-    },
-  ];
-  if (c.studentIds.length > 0) {
+  const keep = resolvedStudentIds.slice(0, available);
+  const drop = resolvedStudentIds.slice(available);
+  const out: Suggestion[] = [];
+
+  // 只有「按学号点名」的限定才谈得上「保留前 N 人」。
+  // 用选择器（班级 / 组合 / 科目）选出来的，移出个体学生没有意义，改为建议缩小选择范围。
+  if (c.id && drop.length > 0) {
     out.push({
-      id: `drop-${c.id}`,
-      label: "删掉这条限定",
-      patch: [{ op: "remove", path: `/constraints/${at}` }],
+      id: `trim-${c.id}`,
+      label: `只保留前 ${available} 人（在限定里点名这 ${available} 个学号，其余自然落回普通考场）`,
+      effect: `${drop.length} 人改为普通安排`,
+      patch: [{ op: "replace", path: `/constraints/${at}/studentIds`, value: keep }],
     });
   }
+  out.push({
+    id: `drop-${c.id}`,
+    label: "删掉这条限定",
+    patch: [{ op: "remove", path: `/constraints/${at}` }],
+  });
   void ci;
   return out;
 }

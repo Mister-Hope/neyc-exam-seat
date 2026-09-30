@@ -44,13 +44,13 @@ export const useConstraintsStore = defineStore("constraints", () => {
   }
 
   function constraintsOfStudent(studentId: string): Constraint[] {
-    return constraints.value.filter((c) => c.studentIds.includes(studentId));
+    return constraints.value.filter((c) => (c.studentIds ?? []).includes(studentId));
   }
 
   function replaceConstraints(next: readonly Constraint[]): void {
     constraints.value = next.map((c) => ({
       ...c,
-      studentIds: [...c.studentIds],
+      ...(c.studentIds ? { studentIds: [...c.studentIds] } : {}),
       ...(c.rows ? { rows: [...c.rows] } : {}),
       ...(c.cols ? { cols: [...c.cols] } : {}),
     }));

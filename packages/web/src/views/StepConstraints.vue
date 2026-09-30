@@ -80,7 +80,9 @@ const ruleRows = computed<RuleRow[]>(() =>
         : "不限考场",
       rowsText: describeRows(constraint.rows),
       colsText: describeCols(constraint.cols),
-      studentsText: summarizeNames(constraint.studentIds.map((id) => nameById.value.get(id) ?? id)),
+      studentsText: summarizeNames(
+        (constraint.studentIds ?? []).map((id) => nameById.value.get(id) ?? id),
+      ),
       rowHints: (constraint.rows ?? []).map((ref) => semanticRowHint(ref, roomsStore.rooms)),
       colHints: (constraint.cols ?? []).map((ref) => semanticColHint(ref, roomsStore.rooms)),
     };
@@ -354,7 +356,7 @@ function applyFix(row: RuleRow): void {
     <ConstraintDialog
       v-model="dialogVisible"
       :rooms="roomsStore.rooms"
-      :student-ids="editing ? editing.studentIds : selected.map((s) => s.id)"
+      :student-ids="editing ? (editing.studentIds ?? []) : selected.map((s) => s.id)"
       :editing="editing"
       @submit="submitConstraint"
     />

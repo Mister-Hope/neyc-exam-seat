@@ -1,9 +1,12 @@
 import type { CompiledModel } from "./model";
 import { resolveColRef, resolveRowRef } from "./numbering";
+import { normalizeCombination } from "./subjects";
 import type { Constraint } from "./types";
 
 export interface ConstraintSeatSet {
   constraint: Constraint;
+  /** 这条限定实际命中的学生下标（选择器解析结果） */
+  studentIndices: number[];
   /** 全局座位下标 */
   seats: Set<number>;
   /** 考场下标 → 该考场贡献的座位数 */
@@ -14,6 +17,65 @@ export interface ConstraintSeatSet {
   absoluteWithoutRoom: boolean;
   /** 引用了不存在的考场 */
   unknownRoomId?: string;
+  /** 一个选择器都没写 */
+  noSelector: boolean;
+}
+
+/**
+ * 把一条限定的「选择器」解析成学生下标。
+ *
+ * 多个选择器之间取**并集**（被任意一个命中就算命中）； 同一个选择器内部多个值也取并集。
+ */
+export function hasAnySelector(constraint: Constraint): boolean {
+  return (
+    (constraint.studentIds?.length ?? 0) > 0 ||
+    (constraint.classes?.length ?? 0) > 0 ||
+    (constraint.combinations?.length ?? 0) > 0 ||
+    (constraint.subjects?.length ?? 0) > 0
+  );
+}
+
+export function resolveConstraintStudents(model: CompiledModel, constraint: Constraint): number[] {
+  const hasSelector =
+    (constraint.studentIds?.length ?? 0) > 0 ||
+    (constraint.classes?.length ?? 0) > 0 ||
+    (constraint.combinations?.length ?? 0) > 0 ||
+    (constraint.subjects?.length ?? 0) > 0;
+  if (!hasSelector) return [];
+
+  const out = new Set<number>();
+
+  if (constraint.studentIds?.length) {
+    for (const id of constraint.studentIds) {
+      const index = model.studentIndexById.get(id);
+      if (index !== undefined) out.add(index);
+    }
+  }
+
+  if (constraint.classes?.length) {
+    const wanted = new Set(constraint.classes.map((c) => c.trim()));
+    for (let i = 0; i < model.students.length; i += 1) {
+      if (wanted.has(model.students[i]!.className)) out.add(i);
+    }
+  }
+
+  if (constraint.combinations?.length) {
+    const wanted = new Set(constraint.combinations.map((c) => normalizeCombination(c)));
+    for (let i = 0; i < model.students.length; i += 1) {
+      const combo = model.combinationOfStudent[i];
+      if (combo && wanted.has(normalizeCombination(combo))) out.add(i);
+    }
+  }
+
+  if (constraint.subjects?.length) {
+    const wanted = new Set(constraint.subjects);
+    for (let i = 0; i < model.students.length; i += 1) {
+      const subjects = model.subjectOfStudent[i];
+      if (subjects?.some((s) => wanted.has(s))) out.add(i);
+    }
+  }
+
+  return [...out].sort((a, b) => a - b);
 }
 
 /** 把一条限定编译成可用座位集合。语义值按每个候选考场自身的行列数解析。 */
@@ -30,12 +92,15 @@ export function compileConstraintSeats(
     ? model.rooms.filter((r) => r.spec.id === constraint.roomId)
     : model.rooms;
 
+  const studentIndices = resolveConstraintStudents(model, constraint);
   const result: ConstraintSeatSet = {
     constraint,
+    studentIndices,
     seats: new Set<number>(),
     perRoom: new Map<number, number>(),
     droppedRooms: [],
     absoluteWithoutRoom,
+    noSelector: studentIndices.length === 0 && !hasAnySelector(constraint),
   };
 
   if (constraint.roomId && targetRooms.length === 0) {
@@ -124,9 +189,7 @@ export function compileDomains(model: CompiledModel): DomainBundle {
 
   const studentConstraints: number[][] = Array.from({ length: model.students.length }, () => []);
   for (let ci = 0; ci < constraints.length; ci += 1) {
-    for (const sid of constraints[ci]!.studentIds) {
-      const si = pragmatic.get(sid);
-      if (si === undefined) continue;
+    for (const si of constraintSets[ci]!.studentIndices) {
       studentConstraints[si]!.push(ci);
     }
   }
