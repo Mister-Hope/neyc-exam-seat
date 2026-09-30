@@ -4,9 +4,11 @@ import type { UploadFile } from "element-plus";
 import { computed } from "vue";
 import { useRouter } from "vue-router";
 
+import VirtualTable from "@/components/VirtualTable.vue";
+import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
 import { readFileBytes } from "@/lib/download";
 import { useRosterStore } from "@/stores/roster";
-import type { RosterMapping } from "@exam-seat/io";
+import type { RosterIssue, RosterMapping } from "@exam-seat/io";
 
 /** 第 ① 步：导入名单。拖拽 / 选择 .xlsx → readRoster 解析 → 展示自动列映射，允许手动改列。 */
 const roster = useRosterStore();
@@ -46,6 +48,17 @@ const issuesSorted = computed(() =>
   ),
 );
 const issuePreview = computed(() => issuesSorted.value.slice(0, 100));
+
+const issueColumns: VirtualTableColumn[] = [
+  { key: "row", title: "Excel 行号", width: 110 },
+  { key: "level", title: "级别", width: 90 },
+  { key: "message", title: "说明", width: 520 },
+];
+
+/** 作用域插槽里的 row 是 unknown，统一收窄回真实类型。 */
+const asIssue = (row: unknown): RosterIssue => row as RosterIssue;
+/** 同一 Excel 行可能有多条问题，主键要带上序号。 */
+const issueKey = (row: unknown, index: number): string => `${asIssue(row).row}-${index}`;
 
 const hasCombination = computed(() => roster.combinationSizes.length > 0);
 
@@ -199,7 +212,7 @@ function setMapping(key: keyof RosterMapping, value: number): void {
           type="info"
           :closable="false"
           show-icon
-          title="名单里有选科：core 已经能按时段冲突推导场次（多场次排考）。网页第 ⑤ 步的「场次编排」界面仍在实施中（见 docs/design.md §5.7），当前网页按单场求解；需要多场次请用 CLI 的 exam-seat plan（加 --single 可强制单场）。"
+          title="名单里有选科：会自动按多场次编排（时段 → 考场 + 座位），结果页可导出按班级 / 按考场两份表"
         />
       </template>
 
@@ -214,17 +227,22 @@ function setMapping(key: keyof RosterMapping, value: number): void {
         <el-divider content-position="left">
           问题行（共 {{ issuesSorted.length }} 条，最多展示 100 条）
         </el-divider>
-        <el-table :data="issuePreview" size="small" border max-height="320">
-          <el-table-column prop="row" label="Excel 行号" width="110" />
-          <el-table-column label="级别" width="90">
-            <template #default="{ row }">
-              <el-tag :type="row.level === 'error' ? 'danger' : 'warning'" size="small">
-                {{ row.level === "error" ? "错误" : "提醒" }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="message" label="说明" />
-        </el-table>
+        <VirtualTable
+          :rows="issuePreview"
+          :row-key="issueKey"
+          :columns="issueColumns"
+          :height="320"
+          :row-height="36"
+        >
+          <template #cell-level="{ row }">
+            <el-tag :type="asIssue(row).level === 'error' ? 'danger' : 'warning'" size="small">
+              {{ asIssue(row).level === "error" ? "错误" : "提醒" }}
+            </el-tag>
+          </template>
+          <template #empty>
+            <el-empty description="没有问题行" :image-size="60" />
+          </template>
+        </VirtualTable>
       </template>
     </el-card>
 

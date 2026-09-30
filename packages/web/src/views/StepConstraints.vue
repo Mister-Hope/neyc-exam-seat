@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from "element-plus";
-import type { TableInstance } from "element-plus";
-import { computed, nextTick, ref } from "vue";
+import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import ConstraintDialog from "@/components/ConstraintDialog.vue";
+import VirtualTable from "@/components/VirtualTable.vue";
+import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
 import {
   indexDiagnosticsByConstraint,
   useConstraintResolver,
@@ -43,8 +44,8 @@ const router = useRouter();
 
 const query = ref("");
 const classFilter = ref<string[]>([]);
-const selected = ref<Student[]>([]);
-const tableRef = ref<TableInstance>();
+/** 勾选只存学号：虚拟滚动只影响渲染，选中集始终对应「当前筛选结果」。 */
+const selectedKeys = ref<string[]>([]);
 const dialogVisible = ref(false);
 const editing = ref<Constraint | null>(null);
 
@@ -52,6 +53,16 @@ const participants = computed(() => roster.students.filter((s) => roster.isInclu
 const rows = computed(() =>
   filterStudents(participants.value, { text: query.value, classNames: classFilter.value }),
 );
+
+const studentColumns: VirtualTableColumn[] = [
+  { key: "id", title: "学号", width: 140 },
+  { key: "name", title: "姓名", width: 110 },
+  { key: "className", title: "班级", width: 150 },
+  { key: "conditions", title: "已有条件", width: 260 },
+];
+
+const asStudent = (row: unknown): Student => row as Student;
+const studentKey = (row: unknown): string => asStudent(row).id;
 
 const byConstraint = computed(() => indexDiagnosticsByConstraint(precheck.value.diagnostics));
 
@@ -135,23 +146,16 @@ const fatalCount = computed(
   () => precheck.value.diagnostics.filter((d) => d.severity === "error").length,
 );
 
-function onSelectionChange(value: Student[]): void {
-  selected.value = value;
-}
-
 function selectAllFiltered(): void {
-  const table = tableRef.value;
-  if (!table) return;
-  for (const row of rows.value) table.toggleRowSelection(row, true);
+  selectedKeys.value = rows.value.map((student) => student.id);
 }
 
 function clearSelection(): void {
-  tableRef.value?.clearSelection();
-  selected.value = [];
+  selectedKeys.value = [];
 }
 
 function openCreate(): void {
-  if (selected.value.length === 0) {
+  if (selectedKeys.value.length === 0) {
     ElMessage.warning("先在左边的表里勾选学生（可以先按班级筛选再「全选当前结果」）");
     return;
   }
@@ -159,18 +163,13 @@ function openCreate(): void {
   dialogVisible.value = true;
 }
 
-async function openEdit(constraint: Constraint): Promise<void> {
+function openEdit(constraint: Constraint): void {
   editing.value = constraint;
   // 编辑时把「点名」的学生回填到表格勾选；班级/组合/科目选择器在弹窗里改
   const ids = new Set(constraint.studentIds);
-  await nextTick();
-  const table = tableRef.value;
-  if (table) {
-    table.clearSelection();
-    for (const student of participants.value) {
-      if (ids.has(student.id)) table.toggleRowSelection(student, true);
-    }
-  }
+  selectedKeys.value = participants.value
+    .filter((student) => ids.has(student.id))
+    .map((student) => student.id);
   dialogVisible.value = true;
 }
 
@@ -253,46 +252,40 @@ function applyFix(row: RuleRow): void {
       <el-space wrap class="mb">
         <el-button @click="selectAllFiltered">全选当前结果（{{ rows.length }} 人）</el-button>
         <el-button @click="clearSelection">清空勾选</el-button>
-        <el-button type="primary" :disabled="selected.length === 0" @click="openCreate">
-          添加限定（已选 {{ selected.length }} 人）
+        <el-button type="primary" :disabled="selectedKeys.length === 0" @click="openCreate">
+          添加限定（已选 {{ selectedKeys.length }} 人）
         </el-button>
       </el-space>
 
-      <el-table
-        ref="tableRef"
-        :data="rows"
-        size="small"
-        border
-        height="360"
-        row-key="id"
-        @selection-change="onSelectionChange"
+      <VirtualTable
+        :rows="rows"
+        :row-key="studentKey"
+        :columns="studentColumns"
+        :height="360"
+        selectable
+        :selected-keys="selectedKeys"
+        @update:selected-keys="selectedKeys = $event"
       >
-        <el-table-column type="selection" width="44" />
-        <el-table-column prop="id" label="学号" width="140" />
-        <el-table-column prop="name" label="姓名" width="110" />
-        <el-table-column prop="className" label="班级" min-width="130" />
-        <el-table-column label="已有条件" min-width="200">
-          <template #default="{ row }">
-            <template v-if="constraintsStore.constraintsOfStudent(row.id).length > 0">
-              <el-tag
-                v-for="c in constraintsStore.constraintsOfStudent(row.id)"
-                :key="c.id"
-                size="small"
-                class="mr"
-                :type="
-                  byConstraint.get(c.id)?.some((d) => d.severity === 'error') ? 'danger' : 'info'
-                "
-              >
-                {{ c.note?.trim() || c.id }}
-              </el-tag>
-            </template>
-            <span v-else class="muted">—</span>
+        <template #cell-conditions="{ row }">
+          <template v-if="constraintsStore.constraintsOfStudent(asStudent(row).id).length > 0">
+            <el-tag
+              v-for="c in constraintsStore.constraintsOfStudent(asStudent(row).id)"
+              :key="c.id"
+              size="small"
+              class="mr"
+              :type="
+                byConstraint.get(c.id)?.some((d) => d.severity === 'error') ? 'danger' : 'info'
+              "
+            >
+              {{ c.note?.trim() || c.id }}
+            </el-tag>
           </template>
-        </el-table-column>
+          <span v-else class="muted">—</span>
+        </template>
         <template #empty>
           <el-empty description="没有匹配的应考学生" :image-size="60" />
         </template>
-      </el-table>
+      </VirtualTable>
     </el-card>
 
     <el-card class="mt" shadow="never">
@@ -407,7 +400,7 @@ function applyFix(row: RuleRow): void {
     <ConstraintDialog
       v-model="dialogVisible"
       :rooms="roomsStore.rooms"
-      :student-ids="editing ? (editing.studentIds ?? []) : selected.map((s) => s.id)"
+      :student-ids="editing ? (editing.studentIds ?? []) : selectedKeys"
       :class-names="roster.classNames"
       :combination-options="combinationOptions"
       :subject-options="subjectOptions"

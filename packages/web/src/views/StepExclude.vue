@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-import type { TableInstance } from "element-plus";
 import { computed, nextTick, ref } from "vue";
 import { useRouter } from "vue-router";
 
+import VirtualTable from "@/components/VirtualTable.vue";
+import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
 import { filterStudents } from "@/lib/search";
 import { useRosterStore } from "@/stores/roster";
 import type { Student } from "@exam-seat/core";
@@ -14,60 +15,65 @@ const router = useRouter();
 
 const query = ref("");
 const classFilter = ref<string[]>([]);
-const selected = ref<Student[]>([]);
+/** 勾选只存学号：表格是虚拟滚动的，选中状态必须挂在「当前筛选结果」上，不能挂在已渲染的行上。 */
+const selectedKeys = ref<string[]>([]);
 const drawerVisible = ref(false);
-const tableRef = ref<TableInstance>();
 
 const rows = computed(() =>
   filterStudents(roster.students, { text: query.value, classNames: classFilter.value }),
 );
+
+const columns: VirtualTableColumn[] = [
+  { key: "id", title: "学号", width: 140 },
+  { key: "name", title: "姓名", width: 120 },
+  { key: "className", title: "班级", width: 180 },
+  { key: "status", title: "状态", width: 180 },
+];
+
+const excludedColumns: VirtualTableColumn[] = [
+  { key: "id", title: "学号", width: 130 },
+  { key: "name", title: "姓名", width: 100 },
+  { key: "className", title: "班级", width: 140 },
+  { key: "action", title: "操作", width: 80 },
+];
+
+const selectedCount = computed(() => selectedKeys.value.length);
 
 const excludedRows = computed(() => roster.excludedStudents);
 
 /** El-table 的作用域插槽把 row 推断成 DefaultRow，这里统一收窄回真实类型。 */
 const asStudent = (row: unknown): Student => row as Student;
 
-function rowClass({ row }: { row: Student }): string {
-  return roster.isIncluded(row) ? "" : "row-excluded";
-}
+const studentKey = (row: unknown): string => asStudent(row).id;
 
-function onSelectionChange(value: Student[]): void {
-  selected.value = value;
+function rowClass(row: unknown): string {
+  return roster.isIncluded(asStudent(row)) ? "" : "row-excluded";
 }
 
 function selectAllFiltered(): void {
-  const table = tableRef.value;
-  if (!table) return;
-  for (const row of rows.value) table.toggleRowSelection(row, true);
+  selectedKeys.value = rows.value.map((student) => student.id);
 }
 
 function clearSelection(): void {
-  tableRef.value?.clearSelection();
-  selected.value = [];
+  selectedKeys.value = [];
 }
 
 function excludeSelected(): void {
-  if (selected.value.length === 0) {
+  if (selectedKeys.value.length === 0) {
     ElMessage.warning("先勾选学生，或用「全选当前结果」");
     return;
   }
-  const count = roster.setIncluded(
-    selected.value.map((s) => s.id),
-    false,
-  );
+  const count = roster.setIncluded(selectedKeys.value, false);
   clearSelection();
   ElMessage.success(`已把 ${count} 人标为「不参加」`);
 }
 
 function includeSelected(): void {
-  if (selected.value.length === 0) {
+  if (selectedKeys.value.length === 0) {
     ElMessage.warning("先勾选学生");
     return;
   }
-  const count = roster.setIncluded(
-    selected.value.map((s) => s.id),
-    true,
-  );
+  const count = roster.setIncluded(selectedKeys.value, true);
   clearSelection();
   ElMessage.success(`已恢复 ${count} 人参加考试`);
 }
@@ -123,51 +129,45 @@ function resetQuery(): void {
         <el-button type="primary" @click="selectAllFiltered"
           >全选当前结果（{{ rows.length }} 人）</el-button
         >
-        <el-button type="danger" :disabled="selected.length === 0" @click="excludeSelected">
-          批量排除（{{ selected.length }}）
+        <el-button type="danger" :disabled="selectedCount === 0" @click="excludeSelected">
+          批量排除（{{ selectedCount }}）
         </el-button>
-        <el-button :disabled="selected.length === 0" @click="includeSelected">
-          恢复所选（{{ selected.length }}）
+        <el-button :disabled="selectedCount === 0" @click="includeSelected">
+          恢复所选（{{ selectedCount }}）
         </el-button>
         <el-button @click="clearSelection">清空勾选</el-button>
         <el-button @click="openDrawer">查看已排除（{{ roster.excludedCount }}）</el-button>
       </el-space>
 
-      <el-table
-        ref="tableRef"
-        :data="rows"
-        size="small"
-        border
-        height="440"
-        row-key="id"
-        :row-class-name="rowClass"
-        @selection-change="onSelectionChange"
+      <VirtualTable
+        :rows="rows"
+        :row-key="studentKey"
+        :columns="columns"
+        :height="440"
+        selectable
+        :selected-keys="selectedKeys"
+        :row-class="rowClass"
+        @update:selected-keys="selectedKeys = $event"
       >
-        <el-table-column type="selection" width="44" />
-        <el-table-column prop="id" label="学号" width="140" />
-        <el-table-column prop="name" label="姓名" width="120" />
-        <el-table-column prop="className" label="班级" min-width="140" />
-        <el-table-column label="状态" width="160">
-          <template #default="{ row }">
-            <el-tag v-if="!roster.isIncluded(asStudent(row))" type="info" size="small"
-              >不参加</el-tag
-            >
-            <el-tag v-else type="success" size="small">应考</el-tag>
-            <el-button
-              v-if="!roster.isIncluded(asStudent(row))"
-              link
-              type="primary"
-              size="small"
-              @click="includeOne(row.id)"
-            >
-              恢复
-            </el-button>
-          </template>
-        </el-table-column>
+        <template #cell-status="{ row }">
+          <el-tag v-if="!roster.isIncluded(asStudent(row))" type="info" size="small">
+            不参加
+          </el-tag>
+          <el-tag v-else type="success" size="small">应考</el-tag>
+          <el-button
+            v-if="!roster.isIncluded(asStudent(row))"
+            link
+            type="primary"
+            size="small"
+            @click="includeOne(asStudent(row).id)"
+          >
+            恢复
+          </el-button>
+        </template>
         <template #empty>
           <el-empty description="没有匹配的学生" :image-size="60" />
         </template>
-      </el-table>
+      </VirtualTable>
 
       <el-descriptions class="mt" :column="3" border>
         <el-descriptions-item label="应考"> {{ roster.total }} 人 </el-descriptions-item>
@@ -196,18 +196,18 @@ function resetQuery(): void {
       />
       <template v-else>
         <el-button class="mb" @click="roster.includeAll()">全部恢复</el-button>
-        <el-table :data="excludedRows" size="small" border max-height="600">
-          <el-table-column prop="id" label="学号" width="130" />
-          <el-table-column prop="name" label="姓名" width="100" />
-          <el-table-column prop="className" label="班级" min-width="120" />
-          <el-table-column label="操作" width="80">
-            <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="includeOne(row.id)"
-                >恢复</el-button
-              >
-            </template>
-          </el-table-column>
-        </el-table>
+        <VirtualTable
+          :rows="excludedRows"
+          :row-key="studentKey"
+          :columns="excludedColumns"
+          :height="600"
+        >
+          <template #cell-action="{ row }">
+            <el-button link type="primary" size="small" @click="includeOne(asStudent(row).id)">
+              恢复
+            </el-button>
+          </template>
+        </VirtualTable>
       </template>
     </el-drawer>
   </div>
@@ -240,7 +240,7 @@ function resetQuery(): void {
   color: var(--el-text-color-disabled);
   background: var(--el-fill-color-lighter);
 }
-:deep(.row-excluded .el-table__cell) {
+:deep(.row-excluded .el-table-v2__row-cell) {
   background: var(--el-fill-color-lighter);
 }
 </style>
