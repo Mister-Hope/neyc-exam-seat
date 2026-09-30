@@ -54,6 +54,8 @@ export interface Student {
 export interface RoomSpec {
   id: string;
   name?: string;
+  /** 地点，老师自己填，例如「高二一班」「生物实验室」 */
+  location?: string;
   /** 排数 */
   rows: number;
   /** 列数 */
@@ -62,6 +64,12 @@ export interface RoomSpec {
   doorSide?: DoorSide;
   /** 备注，例如监考老师 */
   note?: string;
+  /**
+   * 这个考场是哪些科目的「专用考场」。
+   *
+   * 专用考场只接收**非常规组合**（跨文理）中考了该科目的学生。 一个考场可以承担多个学科——例如政治在 T6、地理在 T7，时间不冲突， 同一个房间可以既当政治专用又当地理专用。
+   */
+  dedicatedSubjects?: string[];
 }
 
 export interface Constraint {
@@ -92,6 +100,14 @@ export interface PlanOptions {
   relax?: RelaxMode;
   /** 求解时间上限（毫秒），默认 10000。 */
   timeLimitMs?: number;
+  /**
+   * 常规组合（老的文理分科，如物化生 / 政史地）：这些学生整个考试期间只在一个考场。
+   *
+   * 不填时按传统文理判定（`isRegularCombination`）：选考科目全在理科一侧或全在文科一侧 就算常规，跨文理（物化政 / 物化地）算非常规。
+   */
+  regularCombinations?: string[];
+  /** 一个学生最多允许用几个考场，超过就报警。默认 3。 */
+  maxRoomsPerStudent?: number;
 }
 
 export interface Job {
@@ -112,6 +128,7 @@ export type DiagnosticCode =
   | "STUDENT_DUPLICATE_ID"
   | "STUDENT_MISSING_CLASS"
   | "STUDENT_MISSING_NAME"
+  | "STUDENT_MISSING_SUBJECTS"
   | "UNKNOWN_ROOM_ID"
   | "UNKNOWN_STUDENT_ID"
   | "INVALID_ROOM_SIZE"

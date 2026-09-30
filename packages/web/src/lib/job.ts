@@ -14,7 +14,7 @@ import type {
  *
  * 这里只做三件事：把界面上的草稿拼成 job、把 job 拆回草稿、以及进出 JSON 时的形状校验 （校验信息全是中文，直接展示给老师）。算法语义一律以 core 为准，本文件不复制任何规则。
  */
-export const JOB_VERSION = 1;
+export const JOB_VERSION = 2;
 
 export interface JobDraft {
   title: string;

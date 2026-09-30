@@ -159,6 +159,29 @@ export function validateSelection(subjects: readonly string[]): string[] {
   return problems;
 }
 
+/** 传统理科科目 */
+export const SCIENCE_SUBJECTS: readonly string[] = ["physics", "chemistry", "biology"];
+/** 传统文科科目 */
+export const HUMANITIES_SUBJECTS: readonly string[] = ["history", "politics", "geography"];
+
+/**
+ * 是不是「常规组合」（老的文理分科）。
+ *
+ * 全部选考科目都落在理科一侧（物化生）或都落在文科一侧（政史地）→ 常规； 跨了文理两边（物化政、物化地）→ 非常规。
+ *
+ * 常规组合的学生整个考试期间**只在一个考场**；非常规组合会多跑一个专用考场。 判断不了的组合可以用 `options.regularCombinations` 手工覆盖。
+ */
+export function isRegularCombination(subjects: readonly string[]): boolean {
+  const electives = subjects.filter(
+    (s) => SCIENCE_SUBJECTS.includes(s) || HUMANITIES_SUBJECTS.includes(s),
+  );
+  if (electives.length === 0) return true;
+  return (
+    electives.every((s) => SCIENCE_SUBJECTS.includes(s)) ||
+    electives.every((s) => HUMANITIES_SUBJECTS.includes(s))
+  );
+}
+
 /** 该学生是否选了某门科目。 */
 export function hasSubject(
   subjects: readonly string[] | undefined | null,
@@ -172,9 +195,22 @@ export function subjectLabel(id: string): string {
   return SUBJECT_LABELS[id] ?? id;
 }
 
-/** 把一串科目渲染成中文，例如「语数外物化」 */
+/** 考场标题里科目的显示顺序：语数外在前，然后物化生政史地 */
+const LABEL_ORDER: readonly string[] = [
+  "chinese",
+  "math",
+  "english",
+  "physics",
+  "chemistry",
+  "biology",
+  "politics",
+  "history",
+  "geography",
+];
+
+/** 把一串科目渲染成紧凑的中文，用于考场标题，例如「语数外物化生」。 注意与 {@link formatCombination} 的区别：那个是拼组合名（物化生），这个是拼科目清单。 */
 export function subjectListLabel(subjects: readonly string[]): string {
-  return COMBINATION_ORDER.filter((s) => subjects.includes(s))
+  return LABEL_ORDER.filter((s) => subjects.includes(s))
     .map((s) => SUBJECT_SHORT[s] ?? s)
     .join("");
 }

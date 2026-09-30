@@ -52,6 +52,15 @@ export {
 } from "./domain";
 export type { ConstraintSeatSet, DomainBundle, StudentDomain } from "./domain";
 
+export { planAll } from "./plan-all";
+export type {
+  PlanAllResult,
+  SeatingPlan,
+  StudentRoomUsage,
+  StudentSchedule,
+  StudentSlotAssignment,
+} from "./plan-all";
+
 export { MIN_CLASSES_FOR_KING, describeRoomLoad, resolveAdjacency, runPrecheck } from "./precheck";
 export type { PrecheckResult } from "./precheck";
 

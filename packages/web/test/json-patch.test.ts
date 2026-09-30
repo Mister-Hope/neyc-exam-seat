@@ -11,7 +11,7 @@ import type { Job } from "@exam-seat/core";
 
 function sampleJob(): Job {
   return {
-    jobVersion: 1,
+    jobVersion: 2,
     meta: { title: "测试" },
     options: { seed: 1 },
     students: [{ id: "A", name: "张三", className: "一班" }],

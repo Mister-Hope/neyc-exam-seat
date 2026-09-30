@@ -108,7 +108,7 @@ export function parseRoomSpec(spec: string): RoomSpec[] {
 
 function buildTemplate(): Job {
   return {
-    jobVersion: 1,
+    jobVersion: 2,
     meta: { title: "2026届高三一模" },
     options: { seed: 20260930, adjacency: "king", relax: "none", timeLimitMs: 10000 },
     students: [

@@ -10,7 +10,7 @@
 
 | 字段          | 类型         | 必填   | 说明                                  |
 | ------------- | ------------ | ------ | ------------------------------------- |
-| `jobVersion`  | number       | 否     | 目前为 `1`                            |
+| `jobVersion`  | number       | 否     | 目前为 `2`                            |
 | `meta`        | object       | 否     | `{ title, createdAt }`，只用于展示    |
 | `options`     | object       | 否     | 见下表                                |
 | `students`    | Student[]    | **是** | 全部学生                              |

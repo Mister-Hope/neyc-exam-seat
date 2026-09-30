@@ -31,6 +31,8 @@ export function normalizeOptions(options?: PlanOptions): Required<PlanOptions> {
     forceKing: options?.forceKing ?? false,
     relax: options?.relax ?? "none",
     timeLimitMs: options?.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS,
+    regularCombinations: options?.regularCombinations ?? [],
+    maxRoomsPerStudent: options?.maxRoomsPerStudent ?? 3,
   };
 }
 

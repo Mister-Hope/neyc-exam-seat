@@ -101,7 +101,7 @@ vendor/                           SheetJS tarball
 
 ```jsonc
 {
-  "jobVersion": 1,
+  "jobVersion": 2,
   "options": { "seed": 20260930, "adjacency": "king", "relax": "none" },
   "students": [{ "id": "2026010001", "name": "张伟", "className": "高三(1)班" }],
   "rooms": [

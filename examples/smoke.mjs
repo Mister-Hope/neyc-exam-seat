@@ -30,7 +30,7 @@ for (let c = 1; c <= CLASSES; c += 1) {
 }
 
 const job = {
-  jobVersion: 1,
+  jobVersion: 2,
   meta: { title: "冒烟测试" },
   options: { seed: 20260930, adjacency: "king", relax: "none", timeLimitMs: 30_000 },
   students,

@@ -74,7 +74,7 @@ exam-seat/                          仓库根 = 项目根
 
 ```jsonc
 {
-  "jobVersion": 1,
+  "jobVersion": 2,
   "meta": { "title": "2026届高三一模", "createdAt": "2026-09-30T13:00:00+08:00" },
 
   "options": {

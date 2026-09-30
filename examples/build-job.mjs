@@ -37,7 +37,7 @@ const cheaters = classes.slice(0, 9).map((c) => byClass.get(c)[0]);
 const corners = classes.slice(10, 14).map((c) => byClass.get(c)[1]);
 
 const job = {
-  jobVersion: 1,
+  jobVersion: 2,
   meta: { title: "2026届高三一模（端到端演练）" },
   options: { seed: 20260930, adjacency: "king", relax: "none", timeLimitMs: 30_000 },
   students,

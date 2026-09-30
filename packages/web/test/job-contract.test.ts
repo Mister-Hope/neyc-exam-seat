@@ -33,7 +33,7 @@ function baseDraft(students = 40) {
 describe("job.json 契约（core / CLI / Web / AI 的唯一交换格式）", () => {
   it("buildJob 补齐默认 options，并保持 JSON 可序列化", () => {
     const job = buildJob(baseDraft());
-    expect(job.jobVersion).toBe(1);
+    expect(job.jobVersion).toBe(2);
     expect(job.options).toEqual(DEFAULT_OPTIONS);
     expect(job.meta?.title).toBe("2026届高三一模");
     expect(JSON.parse(JSON.stringify(job))).toEqual(job);

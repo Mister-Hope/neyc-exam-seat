@@ -35,7 +35,7 @@ function makeJob(config: {
     }
   }
   return {
-    jobVersion: 1,
+    jobVersion: 2,
     options: config.options,
     students,
     rooms: config.rooms,

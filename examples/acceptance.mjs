@@ -81,7 +81,7 @@ for (const s of roster.students) {
 }
 const classNames = [...byClass.keys()].sort();
 const job = {
-  jobVersion: 1,
+  jobVersion: 2,
   options: { seed: 20260930, adjacency: "king", relax: "none", timeLimitMs: 30_000 },
   students: roster.students,
   rooms: rooms.rooms,
