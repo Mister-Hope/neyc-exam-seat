@@ -29,6 +29,11 @@ const EMPTY: PersistedRoster = {
 
 const STORAGE_NAME = "roster";
 
+/** 缺考用 `included: false` 标记；没写这个字段的都算参考。 */
+function isIncluded(student: Student): boolean {
+  return student.included !== false;
+}
+
 /** 第 ① 步：名单导入与基础统计；`included === false` 就是第 ② 步的「不参加」。 */
 export const useRosterStore = defineStore("roster", () => {
   const saved = loadState<PersistedRoster>(STORAGE_NAME, EMPTY);
@@ -60,6 +65,21 @@ export const useRosterStore = defineStore("roster", () => {
     }
     return [...map.entries()].map(([className, count]) => ({ className, count }));
   });
+  /** 选科组合分布（v2）：名单里带选科列时，第 ① 步直接给老师看一眼。 */
+  const combinationSizes = computed(() => {
+    const map = new Map<string, number>();
+    for (const student of students.value) {
+      const key = student.combination?.trim();
+      if (!key) continue;
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return [...map.entries()]
+      .map(([combination, count]) => ({ combination, count }))
+      .sort((a, b) => a.combination.localeCompare(b.combination, "zh"));
+  });
+
+  const subjectCount = computed(() => students.value.filter((s) => Boolean(s.combination)).length);
+
   const issueCount = computed(() => ({
     errors: issues.value.filter((i) => i.level === "error").length,
     warnings: issues.value.filter((i) => i.level === "warning").length,
@@ -70,10 +90,6 @@ export const useRosterStore = defineStore("roster", () => {
   const participants = computed(() => students.value.length - excludedCount.value);
 
   const studentById = computed(() => new Map(students.value.map((s) => [s.id, s])));
-
-  function isIncluded(student: Student): boolean {
-    return student.included !== false;
-  }
 
   function persist(): void {
     saveState(STORAGE_NAME, {
@@ -246,6 +262,8 @@ export const useRosterStore = defineStore("roster", () => {
     classNames,
     classCount,
     classSizes,
+    combinationSizes,
+    subjectCount,
     issueCount,
     excludedStudents,
     excludedCount,

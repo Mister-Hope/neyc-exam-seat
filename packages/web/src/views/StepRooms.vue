@@ -7,6 +7,7 @@ import { ROOM_PRESETS, capacityWarning, inferRoomKind, roomKindLabel } from "@/l
 import type { RoomKind } from "@/lib/seat-grid";
 import { useRoomsStore } from "@/stores/rooms";
 import { useRosterStore } from "@/stores/roster";
+import { SECONDARY_SUBJECTS, SUBJECT_LABELS } from "@exam-seat/core";
 import type { DoorSide, RoomSpec } from "@exam-seat/core";
 
 /** 第 ③ 步：配置考场。类型（大 / 小 / 自定义 行×列）、门的位置、备注（监考老师）全在这张表里改， 每个考场都带一张座位编号缩略图（按物理列序画，门在右侧，所见即所得）。 */
@@ -24,6 +25,18 @@ const emptyRoomNames = computed(() => plan.value.emptyRooms.map((r) => r.name ??
 
 /** El-table 的作用域插槽把 row 推断成 DefaultRow，这里统一收窄回真实类型。 */
 const asRoom = (row: unknown): RoomSpec => row as RoomSpec;
+
+/** 专用考场可标记的科目（再选科目：化学 / 生物 / 政治 / 地理） */
+const dedicatedSubjectOptions = SECONDARY_SUBJECTS.map((value) => ({
+  value,
+  label: SUBJECT_LABELS[value] ?? value,
+}));
+
+function setDedicatedSubjects(row: unknown, value: string[]): void {
+  rooms.updateRoom(asRoom(row).id, {
+    dedicatedSubjects: value.length > 0 ? value : undefined,
+  });
+}
 
 function toggleExpandAll(value: boolean): void {
   expandKeys.value = value ? rooms.rooms.map((room) => room.id) : [];
@@ -106,6 +119,11 @@ async function dropEmptyRooms(): Promise<void> {
             <el-input v-model="row.name" size="small" />
           </template>
         </el-table-column>
+        <el-table-column label="地点" min-width="140">
+          <template #default="{ row }">
+            <el-input v-model="row.location" size="small" placeholder="例如：高二一班" />
+          </template>
+        </el-table-column>
         <el-table-column label="类型" width="200">
           <template #default="{ row }">
             <el-select
@@ -157,9 +175,30 @@ async function dropEmptyRooms(): Promise<void> {
             </el-radio-group>
           </template>
         </el-table-column>
-        <el-table-column label="备注（监考老师）" min-width="180">
+        <el-table-column label="备注（监考老师）" min-width="160">
           <template #default="{ row }">
             <el-input v-model="row.note" size="small" placeholder="例如：张老师" />
+          </template>
+        </el-table-column>
+        <el-table-column label="专用科目" min-width="170">
+          <template #default="{ row }">
+            <el-select
+              :model-value="asRoom(row).dedicatedSubjects ?? []"
+              multiple
+              clearable
+              size="small"
+              placeholder="通用考场"
+              style="width: 100%"
+              @update:model-value="setDedicatedSubjects(row, $event)"
+            >
+              <el-option
+                v-for="option in dedicatedSubjectOptions"
+                :key="option.value"
+                :value="option.value"
+                :label="option.label"
+              />
+            </el-select>
+            <div class="cell-hint">只接收考该科目的非常规组合考生；一个考场可兼多科</div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="170">
@@ -236,6 +275,11 @@ async function dropEmptyRooms(): Promise<void> {
 }
 .ml {
   margin-left: 6px;
+}
+.cell-hint {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
 }
 .muted {
   color: var(--el-text-color-secondary);

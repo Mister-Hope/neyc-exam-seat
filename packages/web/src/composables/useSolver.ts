@@ -85,7 +85,7 @@ export function useSolver() {
         if (id === sequence) teardown();
         resolve(value);
       };
-      instance.onmessage = (event: MessageEvent<SolverResponse>) => {
+      instance.addEventListener("message", (event: MessageEvent<SolverResponse>) => {
         const { data } = event;
         if (data.id !== id || id !== sequence) return;
         switch (data.type) {
@@ -109,16 +109,19 @@ export function useSolver() {
             finish(null);
             break;
           }
+          default: {
+            break;
+          }
         }
-      };
-      instance.onerror = (event) => {
+      });
+      instance.addEventListener("error", (event) => {
         error.value = event.message || "求解线程出错";
         finish(null);
-      };
-      instance.onmessageerror = () => {
+      });
+      instance.addEventListener("messageerror", () => {
         error.value = "求解线程消息无法解析";
         finish(null);
-      };
+      });
     });
   }
 

@@ -1,5 +1,4 @@
-import { rcToSeatNo } from "@exam-seat/core";
-import { subjectLabel, subjectListLabel } from "@exam-seat/core";
+import { rcToSeatNo, subjectLabel, subjectListLabel } from "@exam-seat/core";
 import type { Diagnostic, DoorSide, PlanAllResult, PlanResult } from "@exam-seat/core";
 
 const ICON: Record<Diagnostic["severity"], string> = {
@@ -32,9 +31,8 @@ export function renderNumbering(rows: number, cols: number, doorSide: DoorSide =
   const total = rows * cols;
   const width = Math.max(4, String(total).length + 2);
   const pad = (s: string): string => s.padStart(width);
-  const lines: string[] = [];
+  const lines: string[] = [`${" ".repeat(5)}讲台 / 黑板`];
 
-  lines.push(`${" ".repeat(5)}讲台 / 黑板`);
   const head = [" ".repeat(5)];
   for (let pc = 1; pc <= cols; pc += 1) head.push(pad(`c${pc}`));
   lines.push(head.join(""));
@@ -43,7 +41,8 @@ export function renderNumbering(rows: number, cols: number, doorSide: DoorSide =
     const cells = [pad(`r${row}`)];
     for (let pc = 1; pc <= cols; pc += 1) {
       const businessCol = doorSide === "right" ? cols - pc + 1 : pc;
-      cells.push(pad(String(rcToSeatNo(row, businessCol, rows, cols))));
+      const seatNo = rcToSeatNo(row, businessCol, rows, cols);
+      cells.push(pad(String(seatNo)));
     }
     lines.push(cells.join(""));
   }
@@ -59,20 +58,15 @@ export function renderNumbering(rows: number, cols: number, doorSide: DoorSide =
 
 export function renderPlan(result: PlanResult, limit = 0): string {
   const s = result.stats;
-  const lines: string[] = [];
-  lines.push("─".repeat(56));
-  lines.push(result.ok ? "✅ 排考场完成（零冲突，全部限定已满足）" : "❌ 未能完全满足要求");
-  lines.push("─".repeat(56));
-  lines.push(
+  const lines: string[] = [
+    "─".repeat(56),
+    result.ok ? "✅ 排考场完成（零冲突，全部限定已满足）" : "❌ 未能完全满足要求",
+    "─".repeat(56),
     `考生 ${s.participants} 人 ｜ 班级 ${s.classes} 个 ｜ 考场 ${s.rooms} 个（用到 ${s.roomsUsed} 个）`,
-  );
-  lines.push(
     `座位 ${s.seatsTotal} 个，已用 ${s.seatsUsed} 个 ｜ 相邻规则：${s.adjacency === "king" ? "8 邻域" : "4 邻域"}`,
-  );
-  lines.push(
     `判定级别 ${result.level} ｜ 冲突 ${s.conflicts} ｜ 未满足限定 ${s.unmetConstraints} 人`,
-  );
-  lines.push(`耗时 ${s.elapsedMs}ms ｜ 种子 ${s.seed}`);
+    `耗时 ${s.elapsedMs}ms ｜ 种子 ${s.seed}`,
+  ];
   if (s.emptyRooms.length > 0) lines.push(`空置考场：${s.emptyRooms.join("、")}`);
   lines.push("");
 

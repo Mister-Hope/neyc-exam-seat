@@ -31,7 +31,10 @@ function parsePointer(path: string): string[] {
   if (!path.startsWith("/")) {
     throw new Error(`JSON Pointer 必须以 / 开头，收到的是「${path}」`);
   }
-  return path.split("/").slice(1).map(unescapeToken);
+  return path
+    .split("/")
+    .slice(1)
+    .map((token) => unescapeToken(token));
 }
 
 function isContainer(value: unknown): value is Record<string, unknown> | unknown[] {
@@ -79,7 +82,8 @@ function applyOp(target: unknown, token: string, op: JsonPatchOp): void {
     const record = target as Record<string, unknown>;
     if (op.op === "remove") {
       if (!(token in record)) throw new Error(`JSON Patch 要删除的字段不存在：「${op.path}」`);
-      delete record[token];
+      // 键名来自运行时的 JSON Pointer，只能动态删；Reflect 与 delete 语义一致
+      Reflect.deleteProperty(record, token);
       return;
     }
     if (op.op === "replace" && !(token in record)) {

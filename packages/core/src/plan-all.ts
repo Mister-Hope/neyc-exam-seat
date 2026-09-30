@@ -9,7 +9,6 @@ import {
   isRegularCombination,
   normalizeCombination,
   subjectLabel,
-  subjectListLabel,
 } from "./subjects";
 import type { Diagnostic, Job, PlanOptions, PlanResult, RoomSpec } from "./types";
 
@@ -154,7 +153,8 @@ function allocateDemands(
 }
 
 function roomName(room: RoomSpec): string {
-  return room.name?.trim() || room.id;
+  const name = room.name?.trim();
+  return name === undefined || name === "" ? room.id : name;
 }
 
 /**
@@ -228,7 +228,7 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
   const dedicatedRooms = new Map<string, RoomSpec[]>();
   const generalRooms: RoomSpec[] = [];
   for (const room of model.rooms.map((r) => r.spec)) {
-    const dedicated = [...new Set(room.dedicatedSubjects ?? [])];
+    const dedicated = [...new Set(room.dedicatedSubjects)];
     if (dedicated.length === 0) {
       generalRooms.push(room);
       continue;
@@ -534,4 +534,5 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
   return { ok, slots, seatings, byStudent, emptyRooms, overRoomLimit, diagnostics };
 }
 
-export { subjectListLabel };
+// 保持既有公共 API：core 的入口一直从这里取 subjectListLabel
+export { subjectListLabel } from "./subjects";

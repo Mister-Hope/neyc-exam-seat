@@ -17,6 +17,7 @@ const mappingFields: { key: keyof RosterMapping; label: string; required: boolea
   { key: "name", label: "姓名", required: true },
   { key: "className", label: "班级", required: true },
   { key: "gender", label: "性别", required: false },
+  { key: "combination", label: "选科", required: false },
   { key: "note", label: "备注", required: false },
 ];
 
@@ -24,7 +25,7 @@ const columnLetter = (index: number): string => {
   let value = index;
   let label = "";
   do {
-    label = String.fromCharCode(65 + (value % 26)) + label;
+    label = String.fromCodePoint(65 + (value % 26)) + label;
     value = Math.floor(value / 26) - 1;
   } while (value >= 0);
   return label;
@@ -46,6 +47,8 @@ const issuesSorted = computed(() =>
 );
 const issuePreview = computed(() => issuesSorted.value.slice(0, 100));
 
+const hasCombination = computed(() => roster.combinationSizes.length > 0);
+
 const classRows = computed(() =>
   [...roster.classSizes].sort((a, b) => a.className.localeCompare(b.className, "zh")),
 );
@@ -61,7 +64,7 @@ const missingColumns = computed(() => {
 
 async function handleFile(file: File | undefined): Promise<void> {
   if (!file) return;
-  if (!/\.(xlsx|xls)$/i.test(file.name)) {
+  if (!/\.(?:xlsx|xls)$/i.test(file.name)) {
     ElMessage.error("只支持 .xlsx / .xls 文件");
     return;
   }
@@ -181,6 +184,24 @@ function setMapping(key: keyof RosterMapping, value: number): void {
           <el-statistic title="问题行（提醒）" :value="roster.issueCount.warnings" />
         </el-col>
       </el-row>
+
+      <template v-if="hasCombination">
+        <el-divider content-position="left">
+          选科组合分布（{{ roster.subjectCount }} 人带选科）
+        </el-divider>
+        <el-space wrap>
+          <el-tag v-for="row in roster.combinationSizes" :key="row.combination" type="success">
+            {{ row.combination }}：{{ row.count }} 人
+          </el-tag>
+        </el-space>
+        <el-alert
+          class="mt"
+          type="info"
+          :closable="false"
+          show-icon
+          title="名单里有选科：core 已经能按时段冲突推导场次（多场次排考）。网页第 ⑤ 步的「场次编排」界面仍在实施中（见 docs/design-selection.md S7），当前网页按单场求解；需要多场次请用 CLI 的 exam-seat plan（加 --single 可强制单场）。"
+        />
+      </template>
 
       <el-divider content-position="left">各班人数</el-divider>
       <el-space wrap>

@@ -7,7 +7,7 @@
  */
 import { writeFileSync } from "node:fs";
 
-import * as XLSX from "xlsx";
+import { utils, write } from "xlsx";
 
 const out = process.argv[2] ?? "/tmp/roster.xlsx";
 const classCount = Number(process.argv[3] ?? 18);
@@ -41,12 +41,12 @@ for (let c = 1; c <= classCount; c += 1) {
   }
 }
 
-const ws = XLSX.utils.aoa_to_sheet(rows);
+const ws = utils.aoa_to_sheet(rows);
 ws["!cols"] = [{ wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 6 }, { wch: 10 }];
-const wb = XLSX.utils.book_new();
-XLSX.utils.book_append_sheet(wb, ws, "高三名单");
+const wb = utils.book_new();
+utils.book_append_sheet(wb, ws, "高三名单");
 // 注意：Node 下的 ESM 构建不能用 XLSX.writeFile（需要先 set_fs）。
-const bytes = XLSX.write(wb, { bookType: "xlsx", type: "buffer" });
+const bytes = write(wb, { bookType: "xlsx", type: "buffer" });
 writeFileSync(out, bytes);
 
 const counts = new Map();

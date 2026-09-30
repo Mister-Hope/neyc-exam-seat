@@ -5,7 +5,7 @@ export function canonicalJson(value: unknown): string {
 
 function sortValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => sortValue(item));
-  if (typeof value === "object" && value !== null) {
+  if (typeof value === "object" && value != null) {
     const src = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(src).sort()) {

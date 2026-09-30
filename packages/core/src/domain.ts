@@ -46,21 +46,21 @@ export function resolveConstraintStudents(model: CompiledModel, constraint: Cons
   const out = new Set<number>();
 
   if ((constraint.studentIds?.length ?? 0) > 0) {
-    for (const id of constraint.studentIds) {
+    for (const id of constraint.studentIds ?? []) {
       const index = model.studentIndexById.get(id);
       if (index !== undefined) out.add(index);
     }
   }
 
   if ((constraint.classes?.length ?? 0) > 0) {
-    const wanted = new Set(constraint.classes.map((c) => c.trim()));
+    const wanted = new Set((constraint.classes ?? []).map((c) => c.trim()));
     for (let i = 0; i < model.students.length; i += 1) {
       if (wanted.has(model.students[i]!.className)) out.add(i);
     }
   }
 
   if ((constraint.combinations?.length ?? 0) > 0) {
-    const wanted = new Set(constraint.combinations.map((c) => normalizeCombination(c)));
+    const wanted = new Set((constraint.combinations ?? []).map((c) => normalizeCombination(c)));
     for (let i = 0; i < model.students.length; i += 1) {
       const combo = model.combinationOfStudent[i];
       if (combo && wanted.has(normalizeCombination(combo))) out.add(i);

@@ -1,6 +1,6 @@
 # 选科与多场次排考 · 设计（修订草案 v3）
 
-> 状态：**设计草案，未实现**。替换 v1 / v2。
+> 状态：**S1–S4 已实现并提交，S5–S8 进行中**（进度表见 §10）。替换 v1 / v2。
 > 本版按你 2026-09-30 的第二轮回答重写：确立了「常规组合不换考场」这条总原则。
 
 ---
@@ -114,19 +114,18 @@
 interface RoomSpec {
   id: string;
   name?: string; // 「第一考场」
-  location?: string; // ★ 新增：「高二一班」「生物实验室」，老师自己填
+  location?: string; // ★ 已实现：「高二一班」「生物实验室」，老师自己填
   rows: number;
   cols: number;
   doorSide?: "left" | "right";
   note?: string; // 监考老师
-  /** ★ 新增：这个考场承担什么角色，见 §1 */
-  role?:
-    | "regular-science"
-    | "regular-humanities"
-    | "irregular-science"
-    | "dedicated-politics"
-    | "dedicated-geography"
-    | "general";
+  /**
+   * ★ 已实现：这个考场是哪些科目的「专用考场」，例如 ['politics', 'geography']。
+   *
+   * 只接收**非常规组合**中考了该科目的学生；一个考场可兼多科（政治 T6、地理 T7，时间不冲突）。
+   * 早期草案里的 `role` 枚举已被本字段取代（见 §9 的已确认决定）。
+   */
+  dedicatedSubjects?: string[];
 }
 ```
 
@@ -229,7 +228,11 @@ interface RoomSpec {
   ],
   "options": {
     "seed": 20260930,
-    /** 排布倾向：sameCombination = 同考场尽量同组合（默认） */
+    /**
+     * 排布倾向：sameCombination = 同考场尽量同组合（S5 的设计目标）。
+     * ⚠️ 目前 core 还不读这个字段；网页与 CLI 会把它原样保留在 job.json 里（往返不丢），
+     * 等 S5 落地后才是真正的开关。
+     */
     "groupPreference": "sameCombination",
   },
 }
@@ -246,6 +249,7 @@ interface RoomSpec {
 
 ```ts
 interface Constraint {
+  id: string; // 仍必填；缺失时网页导入会补一个不冲突的 C序号
   studentIds?: string[]; // 点名
   classes?: string[]; // 按班级
   combinations?: string[]; // 按选科组合，如 ['物化政']
@@ -256,6 +260,8 @@ interface Constraint {
 }
 ```
 
+四个选择器取**并集**；一个都没写时预检报 `CONSTRAINT_NO_SELECTOR`。
+
 **选科字段是可选的**：名单里没有选科列时，就是普通的单场排考（本项目未上线，
 不为旧格式保留兼容分支）。
 
@@ -263,21 +269,26 @@ interface Constraint {
 
 ## 7. 核心 API
 
+> 下面标注的是**当前 `packages/core/src/index.ts` 的真实导出**；分组分房是 `planAll` 内部步骤，
+> 还没有单独导出成公共函数。
+
 ```ts
-// 选科
-function parseCombination(text: string): { combination: string; subjects: string[] };
-function validateSelection(subjects: string[]): string[];
+// 选科（已实现）
+function parseCombination(text: string): ParsedCombination;
+function normalizeCombination(text: string): string;
+function validateSelection(subjects: readonly string[]): string[];
 
-// 时段推导
-function deriveTimeSlots(combinations: string[][]): Slot[]; // 按冲突关系图着色
+// 时段推导（已实现，按冲突关系图着色）
+function deriveTimeSlots(...): TimeSlot[];
+function findSlotConflicts(...): ...;
+function buildConflictGraph(...): ...;
 
-// 分组分房
-function groupStudents(model): CombinationGroup[];
-function assignRoomsToGroups(groups, rooms, options): RoomAssignment[];
+// 主入口（均已实现）
+function planAll(job: Job, options?: PlanOptions): PlanAllResult; // 多场次：分组 + 分房 + 逐房间排座位
+function plan(job: Job, options?: PlanOptions): PlanResult; // 单场，不变
 
-// 主入口
-function planAll(job, options): PlanAllResult;
-function plan(job, options): PlanResult; // 不变，单场
+// 尚未单独导出（目前是 planAll 内部步骤）
+// groupStudents(model) / assignRoomsToGroups(groups, rooms, options)
 
 interface PlanAllResult {
   slots: Slot[];
@@ -321,18 +332,18 @@ interface PlanAllResult {
 
 ## 10. 实施进度
 
-| 阶段 | 内容                                                             | 状态      |
-| ---- | ---------------------------------------------------------------- | --------- |
-| S1   | 选科解析（`物化政` 简写）+ 3+1+2 校验                            | ✅ 已提交 |
-| S2   | `Constraint` 选择器（班级 / 组合 / 科目）+ 接进预检求解          | ✅ 已提交 |
-| S3   | 时段自动推导（按冲突关系图着色）                                 | ✅ 已提交 |
-| S4   | `RoomSpec.location` / `dedicatedSubjects` + 分组分房 + `planAll` | ⏳ 进行中 |
-| S5   | 同考场同组合的排布倾向                                           | ⏳        |
-| S6   | 输出 A / B + 空考场取消                                          | ⏳        |
-| S7   | CLI + Web 场次编排                                               | ⏳        |
-| S8   | Skill 更新 + 验收脚本扩展                                        | ⏳        |
+| 阶段 | 内容                                                             | 状态                                                                                                        |
+| ---- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| S1   | 选科解析（`物化政` 简写）+ 3+1+2 校验                            | ✅ 已提交                                                                                                   |
+| S2   | `Constraint` 选择器（班级 / 组合 / 科目）+ 接进预检求解          | ✅ 已提交                                                                                                   |
+| S3   | 时段自动推导（按冲突关系图着色）                                 | ✅ 已提交                                                                                                   |
+| S4   | `RoomSpec.location` / `dedicatedSubjects` + 分组分房 + `planAll` | ✅ 已提交（`plan-all.ts`、`io` 的两种选科输出、CLI `plan` 自动多场次）                                      |
+| S5   | 同考场同组合的排布倾向（`options.groupPreference`）              | ⏳ 未实现（字段会被保留但不生效）                                                                           |
+| S6   | 输出 A / B + 空考场取消                                          | 🟡 输出 A / B 已实现；「导出时移除空置考场」仍靠人工（`planAll` 会返回 `emptyRooms`）                       |
+| S7   | CLI + Web 场次编排                                               | 🟡 CLI 已完成（无 `--single` 时自动多场次）；**Web 的场次编排界面未实现**，网页目前按单场求解并在界面上说明 |
+| S8   | Skill 更新 + 验收脚本扩展                                        | 🟡 skill 已含选科说明；`examples/acceptance.mjs` 已有多场次断言，空考场取消未覆盖                           |
 
-S1–S3 完成后：**139 项测试全过、19 项验收全过、`pnpm verify` 退出 0**，现有行为零回归。
+S1–S4 落地后：`pnpm verify`（lint:check → typecheck → build → test → acceptance）全绿，现有行为零回归。
 时段推导实测结果与 §2 的推导表完全一致（语 / 数 / 外 / 物历 / 化 / 生政 / 地）。
 
 这两个答完我就从 S1 开始动手，**先交 S1+S2 给你验基础**（这一步不改变任何现有行为），

@@ -283,30 +283,28 @@ export function classRows(result: PlanResult): (string | number)[][] {
 
 /** 校验 / 诊断报告表。 */
 export function reportRows(result: PlanResult): (string | number)[][] {
-  const rows: (string | number)[][] = [];
-  rows.push(["排考场结果报告"]);
-  rows.push([]);
-  rows.push(["是否完美", result.ok ? "是" : "否"]);
-  rows.push(["判定级别", result.level]);
-  rows.push([
-    "相邻规则",
-    result.stats.adjacency === "king" ? "8 邻域（含对角）" : "4 邻域（前后左右）",
-  ]);
-  rows.push(["考生人数", result.stats.participants]);
-  rows.push(["班级数", result.stats.classes]);
-  rows.push(["考场数", result.stats.rooms]);
-  rows.push(["实际用到考场", result.stats.roomsUsed]);
-  rows.push(["空置考场", result.stats.emptyRooms.join("、") || "无"]);
-  rows.push(["座位总数", result.stats.seatsTotal]);
-  rows.push(["已用座位", result.stats.seatsUsed]);
-  rows.push(["冲突数", result.stats.conflicts]);
-  rows.push(["未满足限定人数", result.stats.unmetConstraints]);
-  rows.push(["随机种子", result.stats.seed]);
-  rows.push(["数据指纹", result.inputFingerprint]);
-  rows.push(["生成时间", result.generatedAt]);
-  rows.push([]);
-  rows.push(["诊断"]);
-  rows.push(["级别", "代码", "说明"]);
+  const rows: (string | number)[][] = [
+    ["排考场结果报告"],
+    [],
+    ["是否完美", result.ok ? "是" : "否"],
+    ["判定级别", result.level],
+    ["相邻规则", result.stats.adjacency === "king" ? "8 邻域（含对角）" : "4 邻域（前后左右）"],
+    ["考生人数", result.stats.participants],
+    ["班级数", result.stats.classes],
+    ["考场数", result.stats.rooms],
+    ["实际用到考场", result.stats.roomsUsed],
+    ["空置考场", result.stats.emptyRooms.join("、") || "无"],
+    ["座位总数", result.stats.seatsTotal],
+    ["已用座位", result.stats.seatsUsed],
+    ["冲突数", result.stats.conflicts],
+    ["未满足限定人数", result.stats.unmetConstraints],
+    ["随机种子", result.stats.seed],
+    ["数据指纹", result.inputFingerprint],
+    ["生成时间", result.generatedAt],
+    [],
+    ["诊断"],
+    ["级别", "代码", "说明"],
+  ];
   for (const d of result.diagnostics) {
     rows.push([d.severity, d.code, d.message]);
   }
@@ -346,7 +344,7 @@ export function buildRoomSheets(
 ): Uint8Array {
   const byRoom = new Map<string, Map<number, PlanResult["entries"][number]>>();
   for (const e of result.entries) {
-    const map = byRoom.get(e.roomId) ?? new Map();
+    const map = byRoom.get(e.roomId) ?? new Map<number, PlanResult["entries"][number]>();
     map.set(e.seatNo, e);
     byRoom.set(e.roomId, map);
   }
@@ -499,15 +497,16 @@ export function buildInvigilatorSheets(
   return result.seatings.map((seating) => {
     const title = seatingTitle(seating.roomName, seating.subjects);
     const meta = roomLookup?.(seating.roomId);
-    const rows: (string | number)[][] = [];
-    rows.push([title]);
-    rows.push([
-      `地点：${seating.location ?? meta?.location ?? "—"}`,
-      "",
-      `监考：${seating.note ?? meta?.note ?? "—"}`,
-    ]);
-    rows.push([]);
-    rows.push(["座位号", "班级", "姓名"]);
+    const rows: (string | number)[][] = [
+      [title],
+      [
+        `地点：${seating.location ?? meta?.location ?? "—"}`,
+        "",
+        `监考：${seating.note ?? meta?.note ?? "—"}`,
+      ],
+      [],
+      ["座位号", "班级", "姓名"],
+    ];
 
     const entries = Object.entries(seating.seatNoById)
       .map(([studentId, seatNo]) => ({ studentId, seatNo }))

@@ -25,7 +25,16 @@ import SeatGridPreview from "./SeatGridPreview.vue";
 const props = defineProps<{
   modelValue: boolean;
   rooms: RoomSpec[];
+  /** 表格里勾选的学生（点名选择器） */
   studentIds: string[];
+  /** 可选班级，用于「按班级」选择器 */
+  classNames?: string[];
+  /** 可选组合（名单里出现过的），用于「按组合」选择器 */
+  combinationOptions?: string[];
+  /** 可选科目 */
+  subjectOptions?: { value: string; label: string }[];
+  /** 命中人数：由父组件用 core 的选择器语义算，避免两套实现 */
+  resolveCount?: (constraint: Constraint) => number;
   editing?: Constraint | null;
 }>();
 
@@ -35,6 +44,9 @@ const emit = defineEmits<{
 }>();
 
 const note = ref("");
+const classNameSelectors = ref<string[]>([]);
+const combinationSelectors = ref<string[]>([]);
+const subjectSelectors = ref<string[]>([]);
 const roomId = ref<string | undefined>(undefined);
 const rows = ref<RowRef[]>([]);
 const cols = ref<ColRef[]>([]);
@@ -45,6 +57,9 @@ const selectedRoom = computed(() => props.rooms.find((room) => room.id === roomI
 
 function resetFrom(constraint: Constraint | null | undefined): void {
   note.value = constraint?.note ?? "";
+  classNameSelectors.value = constraint?.classes ? [...constraint.classes] : [];
+  combinationSelectors.value = constraint?.combinations ? [...constraint.combinations] : [];
+  subjectSelectors.value = constraint?.subjects ? [...constraint.subjects] : [];
   roomId.value = constraint?.roomId;
   rows.value = constraint?.rows ? [...constraint.rows] : [];
   cols.value = constraint?.cols ? [...constraint.cols] : [];
@@ -132,11 +147,19 @@ function onRoomChange(): void {
 const draftConstraint = computed<Constraint>(() => ({
   id: props.editing?.id ?? "preview",
   note: note.value,
-  studentIds: props.studentIds,
+  ...(props.studentIds.length > 0 ? { studentIds: props.studentIds } : {}),
+  ...(classNameSelectors.value.length > 0 ? { classes: classNameSelectors.value } : {}),
+  ...(combinationSelectors.value.length > 0 ? { combinations: combinationSelectors.value } : {}),
+  ...(subjectSelectors.value.length > 0 ? { subjects: subjectSelectors.value } : {}),
   ...(roomId.value ? { roomId: roomId.value } : {}),
   ...(rows.value.length > 0 ? { rows: rows.value } : {}),
   ...(cols.value.length > 0 ? { cols: cols.value } : {}),
 }));
+
+/** 命中人数 = 点名 ∪ 班级 ∪ 组合 ∪ 科目，由 core 的选择器语义算出来 */
+const hitCount = computed(() =>
+  props.resolveCount ? props.resolveCount(draftConstraint.value) : props.studentIds.length,
+);
 
 const view = computed(() => viewConstraintSeats(props.rooms, draftConstraint.value));
 
@@ -150,8 +173,8 @@ const highlight = computed(() => {
 const previewWarning = computed<string | null>(() => {
   if (view.value.unknownRoomId) return `考场 ${view.value.unknownRoomId} 已经不存在了，请重新选择`;
   if (view.value.total === 0) return "这条限定没有任何可用座位，求解器会直接判定无解";
-  if (view.value.total < props.studentIds.length) {
-    return `只有 ${view.value.total} 个可用座位，却要安排 ${props.studentIds.length} 人`;
+  if (view.value.total < hitCount.value) {
+    return `只有 ${view.value.total} 个可用座位，却命中了 ${hitCount.value} 人`;
   }
   return null;
 });
@@ -162,12 +185,17 @@ const outOfRangeWarning = computed<string | null>(() => {
 });
 
 function submit(): void {
-  if (props.studentIds.length === 0) {
-    ElMessage.warning("先选学生，再添加限定");
+  if (hitCount.value === 0) {
+    ElMessage.warning("先在列表里勾选学生，或至少写一个选择器（班级 / 组合 / 科目）");
     return;
   }
   const payload: Omit<Constraint, "id"> = {
-    studentIds: [...props.studentIds],
+    ...(props.studentIds.length > 0 ? { studentIds: [...props.studentIds] } : {}),
+    ...(classNameSelectors.value.length > 0 ? { classes: [...classNameSelectors.value] } : {}),
+    ...(combinationSelectors.value.length > 0
+      ? { combinations: [...combinationSelectors.value] }
+      : {}),
+    ...(subjectSelectors.value.length > 0 ? { subjects: [...subjectSelectors.value] } : {}),
     ...(note.value.trim() ? { note: note.value.trim() } : {}),
     ...(roomId.value ? { roomId: roomId.value } : {}),
     ...(rows.value.length > 0 ? { rows: [...rows.value] } : {}),
@@ -188,8 +216,63 @@ function submit(): void {
   >
     <el-form label-width="96px">
       <el-form-item label="涉及学生">
-        <el-tag type="info" size="small">已选 {{ studentIds.length }} 人</el-tag>
-        <span class="dialog-hint">（在列表里勾选学生，可先按班级批量选）</span>
+        <el-tag type="success" size="small">命中 {{ hitCount }} 人</el-tag>
+        <el-tag type="info" size="small">点名 {{ studentIds.length }} 人</el-tag>
+        <span class="dialog-hint">（在列表里勾选，或直接用下面的选择器）</span>
+      </el-form-item>
+
+      <el-form-item label="按班级">
+        <el-select
+          v-model="classNameSelectors"
+          multiple
+          clearable
+          filterable
+          placeholder="留空则不限班级"
+          style="width: 100%"
+        >
+          <el-option v-for="name in classNames ?? []" :key="name" :value="name" :label="name" />
+        </el-select>
+      </el-form-item>
+
+      <el-form-item label="按组合">
+        <el-select
+          v-model="combinationSelectors"
+          multiple
+          clearable
+          filterable
+          allow-create
+          placeholder="留空则不限组合，例如 物化政"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="name in combinationOptions ?? []"
+            :key="name"
+            :value="name"
+            :label="name"
+          />
+        </el-select>
+        <div class="dialog-hint">
+          组合写法随意（物化政 / 物理+化学+政治 都认），由 core 规范化。
+        </div>
+      </el-form-item>
+
+      <el-form-item label="按科目">
+        <el-select
+          v-model="subjectSelectors"
+          multiple
+          clearable
+          filterable
+          placeholder="留空则不限科目，例如 政治"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="option in subjectOptions ?? []"
+            :key="option.value"
+            :value="option.value"
+            :label="option.label"
+          />
+        </el-select>
+        <div class="dialog-hint">命中「选了其中任意一门」的学生。</div>
       </el-form-item>
 
       <el-form-item label="备注">

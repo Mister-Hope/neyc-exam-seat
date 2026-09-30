@@ -33,6 +33,13 @@ const {
 
 const patchError = ref("");
 
+/** 名单里带选科时，core 可以按冲突推导多场次；网页端的「场次编排」界面仍在实施中。 */
+const hasSubjectSelection = computed(() =>
+  job.value.students.some(
+    (student) => Boolean(student.combination) || (student.subjects?.length ?? 0) > 0,
+  ),
+);
+
 const fatalDiagnostics = computed(() =>
   precheck.value.diagnostics.filter((d) => d.severity === "error"),
 );
@@ -113,6 +120,15 @@ watch(
 
 <template>
   <div class="step-page">
+    <el-alert
+      v-if="hasSubjectSelection"
+      class="mb"
+      type="info"
+      :closable="false"
+      show-icon
+      title="名单里有选科：多场次（场次编排）界面仍在实施中（docs/design-selection.md S7），本页按单场求解；需要多场次请用 CLI：exam-seat plan --job job.json --out-dir out"
+    />
+
     <el-card shadow="never">
       <template #header>
         <strong>预检</strong>

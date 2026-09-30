@@ -114,9 +114,10 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
 
     // subjects 优先；没给就尝试从 combination 文本解析
     let subjects: string[] | null = student.subjects ? [...student.subjects] : null;
-    // 空串按「没给」处理：下面第 127 行的 `??=` 依赖这个归一化
-    const combinationText = student.combination?.trim();
-    let combination: string | null = combinationText ? combinationText : null;
+    // 空串按「没给」处理：下面 `combination ??= canonical` 依赖这个归一化，
+    // 所以不能用 `??`（`??` 会把空串当有效值保留下来）
+    const combinationText = student.combination?.trim() ?? "";
+    let combination: string | null = combinationText === "" ? null : combinationText;
     if (!subjects && combination) {
       subjects = parseCombination(combination).subjects;
     }

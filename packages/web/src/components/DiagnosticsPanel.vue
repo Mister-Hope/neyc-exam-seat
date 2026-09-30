@@ -37,11 +37,10 @@ function evidenceText(diagnostic: Diagnostic): string {
   if (!evidence) return "";
   const compact: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(evidence)) {
-    if (Array.isArray(value) && value.length > 8) {
-      compact[key] = [...value.slice(0, 8), `…共 ${value.length} 项`];
-    } else {
-      compact[key] = value;
-    }
+    compact[key] =
+      Array.isArray(value) && value.length > 8
+        ? [...value.slice(0, 8), `…共 ${value.length} 项`]
+        : value;
   }
   return JSON.stringify(compact);
 }

@@ -126,6 +126,7 @@
 | `STUDENT_DUPLICATE_ID`          | error   | 学号重复                           | 让用户先修名单                                                                           |
 | `STUDENT_MISSING_CLASS`         | error   | 有学生没班级                       | 让用户先修名单                                                                           |
 | `UNKNOWN_ROOM_ID`               | error   | 限定引用了不存在的考场             | 修正 `roomId`                                                                            |
+| `UNKNOWN_STUDENT_ID`            | warning | 限定点名了名单里不存在的学生       | 修正 `studentIds`                                                                        |
 
 ### SEARCH_FAILED 的建议（suggestions）长这样
 

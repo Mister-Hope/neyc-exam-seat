@@ -5,7 +5,6 @@ import {
   describeRows,
   resolveColRef,
   resolveRowRef,
-  roomCapacity,
   seatId,
 } from "@exam-seat/core";
 import type { ColRef, Constraint, RoomSpec, RowRef, SeatId } from "@exam-seat/core";
@@ -176,4 +175,5 @@ export function allowedCellsOnGrid(room: RoomSpec, allowedSeatNos: readonly numb
   return out;
 }
 
-export { roomCapacity };
+// 保持既有公共 API：这个模块一直对外透出 core 的 roomCapacity
+export { roomCapacity } from "@exam-seat/core";

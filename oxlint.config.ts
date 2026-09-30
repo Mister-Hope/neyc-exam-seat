@@ -54,6 +54,19 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
       "unicorn/prefer-single-call": "off",
       // core 保证零 Node 依赖，但 scripts/ 和 io 的 node 子路径本来就要用
       "import/no-nodejs-modules": "off",
+      // SheetJS（vendor 的 xlsx）的官方用法就是命名空间导入，对 CJS 包改用具名导入
+      // 互操作不可靠；io / examples 里全程 `XLSX.utils.*`，保持命名空间更稳
+      "import/no-namespace": "off",
+      // 项目里有两处**刻意**做 JSON 往返：job-contract 测试要证明 job 是纯 JSON 可序列化，
+      // web 的 json-patch 只接受 JSON 值。structuredClone 语义更宽（保留 Date/Map 等
+      // 非 JSON 形态），换过去等于改行为，所以保留 JSON 往返
+      "unicorn/prefer-structured-clone": "off",
+      // 与上面 `typescript/explicit-function-return-type` 同一个理由：返回值让 TS 推导。
+      // Vue composable 的返回对象是一堆 ref + 方法，写全类型又长又容易和实现漂移
+      "typescript/explicit-module-boundary-types": "off",
+      // typeCheck 关掉时这条会误判：`a[k] = b[k]`（k 是 keyof 联合）必须靠泛型 K
+      // 才能过类型检查，去掉 K 之后联合键写入会被推成 never
+      "typescript/no-unnecessary-type-parameters": "off",
     },
   },
   {
@@ -79,8 +92,42 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
   },
   {
     files: ["**/test/**/*.ts"],
+    plugins: ["eslint", "vitest"],
     rules: {
       "vitest/max-expects": ["warn", { max: 16 }],
+      // beforeEach/afterEach 里清 localStorage、重置 pinia 是标准写法；
+      // 这条规则要求把 setup 内联进每个用例，只会让测试更啰嗦
+      "vitest/no-hooks": "off",
+      // 测试里的 stub 类（例如 jsdom 缺的 ResizeObserver 最小实现）只是为了凑出接口形状，
+      // 方法本来就不需要 this
+      "class-methods-use-this": "off",
+    },
+  },
+  {
+    // CLI 的 fail() 必须立刻带退出码结束进程；EXAM_SEAT_DEBUG 是刻意的调试开关，
+    // 这两件事在命令行工具里就是正常写法
+    files: ["packages/cli/src/**"],
+    plugins: ["unicorn", "node"],
+    rules: {
+      "unicorn/no-process-exit": "off",
+      "node/no-process-env": "off",
+    },
+  },
+  {
+    // precheck 是「一份预检规则集」，526 行（不含空行/注释）超过预设 500 的阈值。
+    // 拆文件会让预检规则散落两处，反而不利于和求解器对照阅读，这里只对这一个文件放开
+    files: ["packages/core/src/precheck.ts"],
+    rules: {
+      "max-lines": "off",
+    },
+  },
+  {
+    // oxlint 认不出 `.vue` 的导出（见文件开头「两条经验」第 1 条），
+    // 于是 main.ts 里的 App 在 oxlint 眼里是 error type，no-unsafe-argument 纯属误报；
+    // web 的类型检查交给 vue-tsc
+    files: ["packages/web/src/main.ts"],
+    rules: {
+      "typescript/no-unsafe-argument": "off",
     },
   },
 );

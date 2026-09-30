@@ -124,7 +124,7 @@ export function runPrecheck(
     const unknownExisting = unknown.filter((id) => (job.students ?? []).some((s) => s.id === id));
     if (unknownExisting.length > 0) {
       push({
-        code: "UNKNOWN_ROOM_ID",
+        code: "UNKNOWN_STUDENT_ID",
         severity: "warning",
         message: `限定「${c.note ?? c.id}」里点名了不存在的学生：${unknownExisting
           .slice(0, 5)

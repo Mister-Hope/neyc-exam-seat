@@ -6,6 +6,7 @@ import {
   createEmptyDraft,
   draftFromJob,
   jobFileName,
+  parseJob,
   parseJobText,
   serializeJob,
 } from "@/lib/job";
@@ -119,5 +120,88 @@ describe("预检建议 → JSON Patch → 回灌 job（Web ↔ CLI ↔ AI 接力
     expect(new Set(seatKeys).size).toBe(30);
     const sorted = [...result.entries].sort((a, b) => a.seatNo - b.seatNo);
     expect(result.entries).toEqual(sorted);
+  });
+});
+
+describe("job.json v2：选科 / 地点 / 专用考场 / 选择器都必须无损往返", () => {
+  const v2: Job = {
+    jobVersion: 2,
+    meta: { title: "2026届高三二模" },
+    options: { seed: 7, groupPreference: "sameCombination" } as Job["options"],
+    students: [
+      {
+        id: "2026010001",
+        name: "张伟",
+        className: "高三(1)班",
+        combination: "物化政",
+        subjects: ["physics", "chemistry", "politics"],
+        included: true,
+      },
+      { id: "2026010002", name: "李娜", className: "高三(2)班", combination: "政史地" },
+    ],
+    rooms: [
+      {
+        id: "R1",
+        name: "第一考场",
+        location: "高二一班",
+        rows: 6,
+        cols: 5,
+        doorSide: "right",
+        note: "张老师",
+        dedicatedSubjects: ["politics", "geography"],
+      },
+    ],
+    constraints: [
+      { id: "C1", note: "按班级", classes: ["高三(1)班"], rows: ["first"] },
+      { id: "C2", note: "按组合", combinations: ["物化政"], roomId: "R1" },
+      { id: "C3", note: "按科目", subjects: ["politics"] },
+    ],
+  };
+
+  it("导出再导入逐字段相等（不丢 v2 字段）", () => {
+    const roundTrip = parseJobText(serializeJob(v2));
+    expect(roundTrip).toEqual(v2);
+    expect(roundTrip.students[0]?.combination).toBe("物化政");
+    expect(roundTrip.rooms[0]?.location).toBe("高二一班");
+    expect(roundTrip.rooms[0]?.dedicatedSubjects).toEqual(["politics", "geography"]);
+    expect(roundTrip.constraints?.[0]?.classes).toEqual(["高三(1)班"]);
+    expect(roundTrip.constraints?.[1]?.combinations).toEqual(["物化政"]);
+    expect(roundTrip.constraints?.[2]?.subjects).toEqual(["politics"]);
+    // core 还不认识的 options 字段也要带回来（前向兼容，例如草案里的 groupPreference）
+    expect((roundTrip.options as Record<string, unknown>).groupPreference).toBe("sameCombination");
+    // 没有点名选择器时不要伪造一个空 studentIds
+    expect(roundTrip.constraints?.[0]?.studentIds).toBeUndefined();
+  });
+
+  it("草稿往返同样不丢字段", () => {
+    const draft = draftFromJob(v2);
+    const rebuilt = buildJob(draft);
+    expect(rebuilt.students).toEqual(v2.students);
+    expect(rebuilt.rooms).toEqual(v2.rooms);
+    expect(rebuilt.constraints).toEqual(v2.constraints);
+    expect(rebuilt.jobVersion).toBe(2);
+    expect((rebuilt.options as Record<string, unknown>).groupPreference).toBe("sameCombination");
+  });
+
+  it("限定缺 id 时补一个不冲突的 id，AI 生成的 job 也能直接导入", () => {
+    const parsed = parseJob({
+      students: [{ id: "A", name: "张三", className: "一班" }],
+      rooms: [{ id: "R1", rows: 6, cols: 5 }],
+      constraints: [{ note: "无 id" }, { id: "C1", note: "占位" }, { note: "又一个无 id" }],
+    });
+    const ids = (parsed.constraints ?? []).map((c) => c.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).toEqual(["C1", "C1-2", "C3"]);
+  });
+
+  it("一条没有选择器的限定会交给 core 报 CONSTRAINT_NO_SELECTOR，而不是被悄悄丢掉", () => {
+    const parsed = parseJob({
+      students: [{ id: "A", name: "张三", className: "一班" }],
+      rooms: [{ id: "R1", rows: 6, cols: 5 }],
+      constraints: [{ id: "C1", note: "空的" }],
+    });
+    expect(parsed.constraints).toHaveLength(1);
+    const pre = precheckJob(parsed);
+    expect(pre.diagnostics.some((d) => d.code === "CONSTRAINT_NO_SELECTOR")).toBe(true);
   });
 });

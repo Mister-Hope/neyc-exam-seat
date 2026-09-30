@@ -7,8 +7,8 @@ import { useConstraintsStore } from "@/stores/constraints";
 import { useOptionsStore } from "@/stores/options";
 import { useRoomsStore } from "@/stores/rooms";
 import { useRosterStore } from "@/stores/roster";
-import { precheckJob } from "@exam-seat/core";
-import type { Diagnostic, Job, JsonPatchOp, Suggestion } from "@exam-seat/core";
+import { compileModel, precheckJob, resolveConstraintStudents } from "@exam-seat/core";
+import type { Constraint, Diagnostic, Job, JsonPatchOp, Suggestion } from "@exam-seat/core";
 
 /**
  * 把四个 store 拼成一份 job.json（唯一契约），并提供「应用 patch → 回灌到各个 store」的能力。 预检建议、AI 生成的 job 都靠这条回灌通道生效，保证网页与
@@ -97,4 +97,27 @@ export function indexDiagnosticsByConstraint(
     map.set(id, list);
   }
   return map;
+}
+
+/**
+ * 用 core 的选择器语义（点名 / 班级 / 组合 / 科目）解析一条限定到底命中哪些学生。
+ *
+ * 刻意不在这里重新实现一遍选择器规则——预检、求解、网页必须共用同一套语义， 否则老师看到的「命中 12 人」和求解器眼里的 12 人可能不是同一批人。
+ */
+export function useConstraintResolver() {
+  const { job } = useExamJob();
+  const model = computed(() => compileModel(job.value));
+
+  function resolveStudentIds(constraint: Constraint): string[] {
+    const current = model.value;
+    return resolveConstraintStudents(current, constraint).map(
+      (index) => current.students[index]!.id,
+    );
+  }
+
+  function resolveCount(constraint: Constraint): number {
+    return resolveConstraintStudents(model.value, constraint).length;
+  }
+
+  return { resolveStudentIds, resolveCount };
 }

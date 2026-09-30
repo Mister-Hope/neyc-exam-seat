@@ -1,6 +1,6 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import nodePath from "node:path";
 
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
@@ -190,7 +190,7 @@ describe("空结果导出（预检没过、一个座位都没排时）", () => {
   });
 
   it("writePlanFiles 在零安排时也不崩，且不产出无意义的座位表", () => {
-    const dir = mkdtempSync(join(tmpdir(), "exam-seat-"));
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "exam-seat-"));
     try {
       const written = writePlanFiles(empty, {
         outDir: dir,

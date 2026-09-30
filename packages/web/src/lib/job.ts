@@ -27,6 +27,16 @@ export interface JobDraft {
 
 export const DEFAULT_OPTIONS: Required<PlanOptions> = normalizeOptions();
 
+/**
+ * 已知字段用 core 的默认值补全；**未知字段原样保留**。
+ *
+ * 设计草案里已经在讨论 `options.groupPreference` 这类还没进 core 的字段， 网页做了「导入 → 导出」就应该原样带回去，不能因为 core 暂时不认就丢掉。
+ */
+function mergeOptions(options: PlanOptions | undefined): Required<PlanOptions> {
+  const base: PlanOptions = options ?? {};
+  return { ...base, ...normalizeOptions(options) };
+}
+
 export function createEmptyDraft(): JobDraft {
   return {
     title: "排考场",
@@ -38,9 +48,29 @@ export function createEmptyDraft(): JobDraft {
   };
 }
 
+/** 数组元素逐个浅拷贝。用循环而不是 `map((x) => ({ ...x }))`：后者每轮迭代都新建字面量。 */
+function cloneItems<T extends object>(items: readonly T[] | undefined): T[] {
+  const out: T[] = [];
+  for (const item of items ?? []) out.push({ ...item });
+  return out;
+}
+
+/** 限定里的 studentIds / rows / cols 也要拷一层，避免草稿与 job 共享同一个数组。 */
+function cloneConstraints(constraints: readonly Constraint[] | undefined): Constraint[] {
+  const out: Constraint[] = [];
+  for (const constraint of constraints ?? []) {
+    const next: Constraint = { ...constraint };
+    if (constraint.studentIds) next.studentIds = [...constraint.studentIds];
+    if (constraint.rows) next.rows = [...constraint.rows];
+    if (constraint.cols) next.cols = [...constraint.cols];
+    out.push(next);
+  }
+  return out;
+}
+
 /** 草稿 → JOB（可交给 CLI / AI 的完整契约）。 */
 export function buildJob(draft: JobDraft): Job {
-  const options = normalizeOptions(draft.options);
+  const options = mergeOptions(draft.options);
   return {
     jobVersion: JOB_VERSION,
     meta: {
@@ -48,14 +78,9 @@ export function buildJob(draft: JobDraft): Job {
       createdAt: draft.createdAt || new Date().toISOString(),
     },
     options,
-    students: draft.students.map((s) => ({ ...s })),
-    rooms: draft.rooms.map((r) => ({ ...r })),
-    constraints: draft.constraints.map((c) => ({
-      ...c,
-      ...(c.studentIds ? { studentIds: [...c.studentIds] } : {}),
-      ...(c.rows ? { rows: [...c.rows] } : {}),
-      ...(c.cols ? { cols: [...c.cols] } : {}),
-    })),
+    students: cloneItems(draft.students),
+    rooms: cloneItems(draft.rooms),
+    constraints: cloneConstraints(draft.constraints),
   };
 }
 
@@ -64,15 +89,10 @@ export function draftFromJob(job: Job): JobDraft {
   return {
     title: job.meta?.title ?? "排考场",
     createdAt: job.meta?.createdAt ?? new Date().toISOString(),
-    students: (job.students ?? []).map((s) => ({ ...s })),
-    rooms: (job.rooms ?? []).map((r) => ({ ...r })),
-    constraints: (job.constraints ?? []).map((c) => ({
-      ...c,
-      ...(c.studentIds ? { studentIds: [...c.studentIds] } : {}),
-      ...(c.rows ? { rows: [...c.rows] } : {}),
-      ...(c.cols ? { cols: [...c.cols] } : {}),
-    })),
-    options: { ...normalizeOptions(job.options) },
+    students: cloneItems(job.students),
+    rooms: cloneItems(job.rooms),
+    constraints: cloneConstraints(job.constraints),
+    options: mergeOptions(job.options),
   };
 }
 
@@ -130,6 +150,12 @@ export function parseJob(raw: unknown): Job {
     };
     if (typeof item.gender === "string") student.gender = item.gender;
     if (typeof item.included === "boolean") student.included = item.included;
+    // v2：选科。原文与解析结果都要留：原文给老师看，解析结果给 core 用。
+    if (typeof item.combination === "string" && item.combination.trim().length > 0) {
+      student.combination = item.combination.trim();
+    }
+    const subjects = stringList(item.subjects, `students[${i}].subjects`);
+    if (subjects) student.subjects = subjects;
     if (Array.isArray(item.tags)) student.tags = item.tags.map(String);
     if (isRecord(item.meta)) student.meta = item.meta;
     return student;
@@ -143,20 +169,33 @@ export function parseJob(raw: unknown): Job {
       cols: requireSize(item.cols, `rooms[${i}].cols（列数）`),
     };
     if (typeof item.name === "string") room.name = item.name;
+    if (typeof item.location === "string" && item.location.trim().length > 0) {
+      room.location = item.location.trim();
+    }
     if (item.doorSide === "left" || item.doorSide === "right") room.doorSide = item.doorSide;
     if (typeof item.note === "string") room.note = item.note;
+    // v2：专用考场标记，例如 ['politics', 'geography']
+    const dedicated = stringList(item.dedicatedSubjects, `rooms[${i}].dedicatedSubjects`);
+    if (dedicated) room.dedicatedSubjects = dedicated;
     return room;
   });
 
   const constraints: Constraint[] = [];
   if (raw.constraints !== undefined) {
     if (!Array.isArray(raw.constraints)) throw new Error("job.json 的 constraints 必须是数组");
+    const usedIds = new Set<string>();
     raw.constraints.forEach((item, i) => {
       if (!isRecord(item)) throw new Error(`constraints[${i}] 必须是对象`);
-      const constraint: Constraint = {
-        id: requireString(item.id, `constraints[${i}].id`),
-        studentIds: Array.isArray(item.studentIds) ? item.studentIds.map(String) : [],
-      };
+      // v2 的选择器：点名 / 班级 / 组合 / 科目，至少写一个（core 会给出 CONSTRAINT_NO_SELECTOR）
+      const constraint: Constraint = { id: readConstraintId(item.id, i, usedIds) };
+      const studentIds = stringList(item.studentIds, `constraints[${i}].studentIds`);
+      if (studentIds) constraint.studentIds = studentIds;
+      const classes = stringList(item.classes, `constraints[${i}].classes`);
+      if (classes) constraint.classes = classes;
+      const combinations = stringList(item.combinations, `constraints[${i}].combinations`);
+      if (combinations) constraint.combinations = combinations;
+      const subjects = stringList(item.subjects, `constraints[${i}].subjects`);
+      if (subjects) constraint.subjects = subjects;
       if (typeof item.note === "string") constraint.note = item.note;
       if (typeof item.roomId === "string" && item.roomId.length > 0)
         constraint.roomId = item.roomId;
@@ -183,6 +222,34 @@ export function parseJob(raw: unknown): Job {
     rooms,
     constraints,
   };
+}
+
+/** 解析一个字符串数组字段；空数组与缺省都返回 undefined（不伪造空选择器）。 */
+function stringList(value: unknown, what: string): string[] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${what} 必须是数组`);
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") throw new Error(`${what} 的元素必须是字符串`);
+    const text = item.trim();
+    if (text.length > 0) out.push(text);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** 限定的 id：缺省时补一个稳定且不冲突的 `C序号`，让 AI 生成的 job 也能直接导进来。 */
+function readConstraintId(value: unknown, index: number, used: Set<string>): string {
+  const explicit = typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  const base = explicit ?? `C${index + 1}`;
+  let id = base;
+  let suffix = 2;
+  // 显式 id 撞车时给后来者加后缀：core 按 id 定位限定，重复 id 会让 patch 打到错误的那条
+  while (used.has(id)) {
+    id = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  used.add(id);
+  return id;
 }
 
 function normalizeRefs(value: unknown, axis: "row" | "col"): (string | number)[] | undefined {

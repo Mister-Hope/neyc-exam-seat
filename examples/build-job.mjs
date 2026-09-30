@@ -17,7 +17,7 @@ const generalCount = Number(process.argv[4] ?? 0);
 const dedicatedCount = Number(process.argv[5] ?? 0);
 
 const roster = JSON.parse(readFileSync(rosterPath, "utf8"));
-const students = roster.students;
+const { students } = roster;
 if (!Array.isArray(students) || students.length === 0) {
   throw new Error("roster.json 里没有 students");
 }

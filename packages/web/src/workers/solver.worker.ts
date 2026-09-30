@@ -8,13 +8,17 @@ import type { SolverRequest, SolverResponse } from "./solver-protocol";
  * 取消 = 主线程 `worker.terminate()`：`plan()` 是同步纯函数，没法中途打断， 所以用整个 Worker 的生命周期来表达取消，这也是最干净的做法。
  */
 interface WorkerScope {
-  postMessage(message: SolverResponse): void;
-  onmessage: ((event: MessageEvent<SolverRequest>) => void) | null;
+  postMessage: (message: SolverResponse) => void;
+  addEventListener: (
+    type: "message",
+    listener: (event: MessageEvent<SolverRequest>) => void,
+  ) => void;
 }
 
-const scope = self as unknown as WorkerScope;
+// Worker 里 globalThis 就是 worker 的全局作用域（没有 window），与 self 等价
+const scope = globalThis as unknown as WorkerScope;
 
-scope.onmessage = (event: MessageEvent<SolverRequest>) => {
+scope.addEventListener("message", (event: MessageEvent<SolverRequest>) => {
   const { id, job, overrides } = event.data;
   try {
     scope.postMessage({ id, type: "stage", stage: "precheck" });
@@ -31,4 +35,4 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
       message: err instanceof Error ? err.message : String(err),
     });
   }
-};
+});

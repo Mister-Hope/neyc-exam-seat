@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import nodePath from "node:path";
 
 import { Command } from "commander";
 
@@ -33,19 +33,19 @@ async function loadJob(path: string): Promise<Job> {
     text = await readStdin();
   } else {
     try {
-      text = await readFile(resolve(path), "utf8");
+      text = await readFile(nodePath.resolve(path), "utf8");
     } catch {
-      fail(`读不到 job 文件：${path}`);
+      return fail(`读不到 job 文件：${path}`);
     }
   }
   try {
-    const parsed = JSON.parse(text) as Job;
-    if (!parsed || !Array.isArray(parsed.rooms) || !Array.isArray(parsed.students)) {
-      fail("job 文件里必须同时有 students 和 rooms 两个数组");
+    const parsed = JSON.parse(text) as Job | null;
+    if (parsed == null || !Array.isArray(parsed.rooms) || !Array.isArray(parsed.students)) {
+      return fail("job 文件里必须同时有 students 和 rooms 两个数组");
     }
     return parsed;
   } catch (err) {
-    fail(`job 文件不是合法 JSON：${(err as Error).message}`);
+    return fail(`job 文件不是合法 JSON：${(err as Error).message}`);
   }
 }
 
@@ -92,11 +92,11 @@ export function parseRoomSpec(spec: string): RoomSpec[] {
       rows = 7;
       cols = 6;
     } else {
-      const m = /^(\d+)\s*[x×*]\s*(\d+)$/.exec(kind);
+      const m = /^(?<rows>\d+)\s*[x×*]\s*(?<cols>\d+)$/.exec(kind);
       if (!m)
         throw new Error(`看不懂的考场类型「${kindPart}」，可用 small / large / 6x4（6 排 × 4 列）`);
-      rows = Number(m[1]);
-      cols = Number(m[2]);
+      rows = Number(m.groups?.rows);
+      cols = Number(m.groups?.cols);
     }
 
     for (let n = from; n <= to; n += 1) {
@@ -145,8 +145,12 @@ export async function main(argv: string[]): Promise<number> {
     .exitOverride();
 
   program.configureOutput({
-    writeErr: (str) => process.stderr.write(str),
-    writeOut: (str) => process.stdout.write(str),
+    writeErr: (str) => {
+      process.stderr.write(str);
+    },
+    writeOut: (str) => {
+      process.stdout.write(str);
+    },
   });
 
   const globalJson = (): boolean => Boolean(program.opts<{ json?: boolean }>().json);
@@ -172,7 +176,7 @@ export async function main(argv: string[]): Promise<number> {
         fail((err as Error).message);
       }
       const payload = {
-        file: resolve(options.file),
+        file: nodePath.resolve(options.file),
         sheetName: result.sheetName,
         sheetNames: result.sheetNames,
         headers: result.headers,
@@ -184,8 +188,8 @@ export async function main(argv: string[]): Promise<number> {
       };
       if (options.out) {
         const { writeFile } = await import("node:fs/promises");
-        await writeFile(resolve(options.out), JSON.stringify(payload, null, 2));
-        log(`已写入 ${resolve(options.out)}（${result.students.length} 名学生）`);
+        await writeFile(nodePath.resolve(options.out), JSON.stringify(payload, null, 2));
+        log(`已写入 ${nodePath.resolve(options.out)}（${result.students.length} 名学生）`);
       } else if (globalJson()) {
         writeJson(payload);
       } else {
@@ -271,8 +275,8 @@ export async function main(argv: string[]): Promise<number> {
       const text = JSON.stringify(buildTemplate(), null, 2);
       if (options.out) {
         const { writeFile } = await import("node:fs/promises");
-        await writeFile(resolve(options.out), `${text}\n`);
-        log(`已写入 ${resolve(options.out)}`);
+        await writeFile(nodePath.resolve(options.out), `${text}\n`);
+        log(`已写入 ${nodePath.resolve(options.out)}`);
       } else {
         process.stdout.write(`${text}\n`);
       }
@@ -356,7 +360,8 @@ export async function main(argv: string[]): Promise<number> {
 
         // 名单里带选科就走多场次；否则就是普通单场
         const multi =
-          !options.single && (job.students ?? []).some((s) => s.subjects?.length || s.combination);
+          !options.single &&
+          (job.students ?? []).some((s) => (s.subjects?.length ?? 0) > 0 || Boolean(s.combination));
 
         if (multi) {
           const multiResult = planAll(job, overrides);
@@ -415,7 +420,9 @@ export async function main(argv: string[]): Promise<number> {
     .action(async (options: { job: string; plan: string }) => {
       const job = await loadJob(options.job);
       const planText =
-        options.plan === "-" ? await readStdin() : await readFile(resolve(options.plan), "utf8");
+        options.plan === "-"
+          ? await readStdin()
+          : await readFile(nodePath.resolve(options.plan), "utf8");
       const result = JSON.parse(planText) as PlanResult;
       const report = validate(job, result);
       if (globalJson()) {
