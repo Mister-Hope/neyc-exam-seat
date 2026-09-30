@@ -185,6 +185,7 @@ function allFixture(): PlanAllResult {
     emptyRooms: ["第5考场"],
     overRoomLimit: [],
     diagnostics: [],
+    unmetConstraints: [],
   } satisfies PlanAllResult;
 }
 

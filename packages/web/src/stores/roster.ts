@@ -3,8 +3,16 @@ import { computed, ref, shallowRef, watch } from "vue";
 
 import { createDemoStudents } from "@/lib/demo";
 import { loadState, saveState } from "@/lib/persist";
+import {
+  analyzeSheet,
+  missingRequired,
+  pickRosterSheet,
+  resolveAbsentImport,
+  toRosterMapping,
+} from "@/lib/roster-import";
+import type { AbsentImportReport, RosterAnalysis } from "@/lib/roster-import";
 import type { Student } from "@exam-seat/core";
-import { parseRoster, readRoster, readWorkbook, suggestMapping } from "@exam-seat/io";
+import { readWorkbook, suggestMapping } from "@exam-seat/io";
 import type { RosterIssue, RosterMapping, SheetData } from "@exam-seat/io";
 
 interface PersistedRoster {
@@ -46,6 +54,8 @@ export const useRosterStore = defineStore("roster", () => {
   const issues = ref<RosterIssue[]>(saved.issues ?? []);
   const fileName = ref<string>(saved.fileName ?? "");
   const errorMessage = ref("");
+  /** 本次导入由「缺考」列直接标记为不参加的人数（页面提示用，不持久化）。 */
+  const absentMarked = ref(0);
 
   /** 原始工作表与文件字节只留在内存：刷新后需要重新选文件才能换表/改列映射。 */
   const bytes = shallowRef<Uint8Array | null>(null);
@@ -103,79 +113,94 @@ export const useRosterStore = defineStore("roster", () => {
     } satisfies PersistedRoster);
   }
 
-  function adopt(report: {
-    sheetName: string;
-    sheetNames: string[];
-    headers: string[];
-    mapping: RosterMapping;
-    students: Student[];
-    issues: RosterIssue[];
-  }): void {
+  function adopt(report: RosterAnalysis, sheetNamesValue: string[]): void {
     const previous = new Map(students.value.map((s) => [s.id, s.included]));
     sheetName.value = report.sheetName;
-    sheetNames.value = report.sheetNames;
+    sheetNames.value = sheetNamesValue;
     headers.value = report.headers;
     mapping.value = report.mapping;
     students.value = report.students.map((s) =>
       previous.get(s.id) === false ? { ...s, included: false } : s,
     );
     issues.value = report.issues;
+    absentMarked.value = report.absentCount;
     errorMessage.value = "";
   }
 
-  /** 选表 / 改列映射后重新解析。优先走 readRoster，认不出列时退回 parseRoster 让老师手点。 */
+  /** 选表：换表时重新自动识别（列号在不同表里不通用），解析结果替换当前名单，已排除状态按 id 保留。 */
   function selectSheet(name: string, override?: Partial<RosterMapping>): void {
     sheetName.value = name;
-    const data = bytes.value;
-    const current = { ...mapping.value, ...override };
-    const complete =
-      typeof current.id === "number" &&
-      current.id >= 0 &&
-      typeof current.name === "number" &&
-      current.name >= 0 &&
-      typeof current.className === "number" &&
-      current.className >= 0;
-    if (!data) {
-      errorMessage.value = "原始表只在内存里：刷新页面后请重新选择文件，才能换表或改列映射";
+    const sheet = sheets.value.find((item) => item.name === name);
+    if (!sheet) {
+      // 工作表只在内存里：刷新后 sheets 为空，必须重新选文件
+      errorMessage.value = bytes.value
+        ? `找不到工作表 ${name}，可用的有：${sheets.value.map((item2) => item2.name).join("、")}`
+        : "原始表只在内存里：刷新页面后请重新选择文件，才能换表或改列映射";
       return;
     }
-    try {
-      adopt(readRoster(data, complete ? { sheet: name, mapping: current } : { sheet: name }));
-    } catch (err) {
-      const sheet = sheets.value.find((s) => s.name === name);
-      headers.value = sheet?.headers ?? [];
-      errorMessage.value = err instanceof Error ? err.message : String(err);
-      // 自动认列失败时，仍用现有（哪怕是空的）映射解析一遍，保持表格可见
-      if (sheet && complete) {
-        const parsed = parseRoster(sheet, current as RosterMapping);
-        students.value = parsed.students;
-        issues.value = parsed.issues;
-        mapping.value = current as RosterMapping;
-      } else {
-        mapping.value = complete ? (current as RosterMapping) : null;
-        students.value = [];
-        issues.value = [];
-      }
-    }
+    adopt(
+      analyzeSheet(sheet, override),
+      sheets.value.map((item) => item.name),
+    );
   }
 
-  function importBytes(data: Uint8Array, name: string): void {
+  /** 读入工作簿：自动选表（优先能识别出必填三列的那张）+ 自动预填列映射。 必填列没认全时不报错、不解析，只把识别结果留给页面标红提示。 */
+  function importSheets(nextSheets: SheetData[], name = ""): boolean {
+    sheets.value = nextSheets;
+    if (name) fileName.value = name;
+    const picked = pickRosterSheet(nextSheets);
+    if (!picked) {
+      errorMessage.value = "这个 Excel 里没有任何工作表";
+      return false;
+    }
+    adopt(
+      analyzeSheet(picked.sheet),
+      nextSheets.map((sheet) => sheet.name),
+    );
+    return true;
+  }
+
+  function importBytes(data: Uint8Array, name: string): boolean {
     bytes.value = data;
     fileName.value = name;
-    sheets.value = readWorkbook(data);
-    const first = sheets.value[0]?.name;
-    if (first === undefined) {
-      errorMessage.value = "这个 Excel 里没有任何工作表";
-      return;
+    try {
+      return importSheets(readWorkbook(data));
+    } catch (err) {
+      sheets.value = [];
+      errorMessage.value = `读不出这个 Excel：${err instanceof Error ? err.message : String(err)}`;
+      return false;
     }
-    mapping.value = null;
-    selectSheet(first);
   }
 
   function updateMapping(partial: Partial<RosterMapping>): void {
-    const next = { ...mapping.value, ...partial } as RosterMapping;
-    mapping.value = next;
-    if (next.id >= 0 && next.name >= 0 && next.className >= 0) selectSheet(sheetName.value, next);
+    const next: Partial<RosterMapping> = { ...mapping.value, ...partial };
+    mapping.value = toRosterMapping(next);
+    // 必填列没补全时只更新映射（页面标红），不重解析，避免把已有名单清空
+    if (missingRequired(next).length > 0) return;
+    selectSheet(sheetName.value, mapping.value);
+  }
+
+  /** 导入缺考名单（已读成工作表）：准考证号优先，没有才用 姓名+班级；未匹配的行回报给页面。 */
+  function importAbsentSheets(nextSheets: SheetData[]): AbsentImportReport {
+    const outcome = resolveAbsentImport(nextSheets, students.value);
+    if (outcome.report.ok) students.value = outcome.students;
+    return outcome.report;
+  }
+
+  function importAbsentBytes(data: Uint8Array): AbsentImportReport {
+    try {
+      return importAbsentSheets(readWorkbook(data));
+    } catch (err) {
+      return {
+        ok: false,
+        error: `读不出这个 Excel：${err instanceof Error ? err.message : String(err)}`,
+        keys: 0,
+        matched: 0,
+        unmatched: 0,
+        unmatchedSamples: [],
+        issues: [],
+      };
+    }
   }
 
   function guessMappingForCurrentSheet(): Partial<RosterMapping> {
@@ -207,11 +232,13 @@ export const useRosterStore = defineStore("roster", () => {
     bytes.value = null;
     sheets.value = [];
     students.value = createDemoStudents();
-    mapping.value = null;
+    // 示例名单的列映射直接给好：页面不再让老师从头手选
+    mapping.value = { id: 0, name: 1, className: 2 };
     headers.value = ["学号", "姓名", "班级"];
     sheetName.value = "示例名单";
     sheetNames.value = ["示例名单"];
     issues.value = [];
+    absentMarked.value = 0;
     errorMessage.value = "";
     fileName.value = "示例名单（18 个班 × 54 人）";
   }
@@ -228,6 +255,7 @@ export const useRosterStore = defineStore("roster", () => {
     sheetNames.value = [];
     issues.value = [];
     fileName.value = "";
+    absentMarked.value = 0;
     errorMessage.value = "";
     bytes.value = null;
     sheets.value = [];
@@ -257,6 +285,7 @@ export const useRosterStore = defineStore("roster", () => {
     issues,
     fileName,
     errorMessage,
+    absentMarked,
     sheets,
     total,
     classNames,
@@ -271,6 +300,9 @@ export const useRosterStore = defineStore("roster", () => {
     studentById,
     isIncluded,
     importBytes,
+    importSheets,
+    importAbsentBytes,
+    importAbsentSheets,
     selectSheet,
     updateMapping,
     guessMappingForCurrentSheet,

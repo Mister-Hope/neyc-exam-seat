@@ -7,40 +7,67 @@ import { useRouter } from "vue-router";
 import VirtualTable from "@/components/VirtualTable.vue";
 import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
 import { readFileBytes } from "@/lib/download";
+import { columnLabel } from "@/lib/roster-import";
 import { useRosterStore } from "@/stores/roster";
+import { suggestMapping } from "@exam-seat/io";
 import type { RosterIssue, RosterMapping } from "@exam-seat/io";
 
-/** 第 ① 步：导入名单。拖拽 / 选择 .xlsx → readRoster 解析 → 展示自动列映射，允许手动改列。 */
+/** 第 ① 步：导入名单。拖拽 / 选择 .xlsx → 自动选表 + 自动预填列映射，认不出的必填列标红； 名单里带「缺考」列时自动标记 `included:false`。 */
 const roster = useRosterStore();
 const router = useRouter();
 
-const mappingFields: { key: keyof RosterMapping; label: string; required: boolean }[] = [
-  { key: "id", label: "学号", required: true },
+const mappingFields: {
+  key: keyof RosterMapping;
+  label: string;
+  required: boolean;
+  hint?: string;
+}[] = [
+  { key: "id", label: "准考证号", required: true, hint: "学号 / 准考证号 / 考证号" },
   { key: "name", label: "姓名", required: true },
   { key: "className", label: "班级", required: true },
+  { key: "absent", label: "缺考", required: false, hint: "有内容即不参加" },
   { key: "gender", label: "性别", required: false },
   { key: "combination", label: "选科", required: false },
   { key: "note", label: "备注", required: false },
 ];
 
-const columnLetter = (index: number): string => {
-  let value = index;
-  let label = "";
-  do {
-    label = String.fromCodePoint(65 + (value % 26)) + label;
-    value = Math.floor(value / 26) - 1;
-  } while (value >= 0);
-  return label;
-};
-
 const headerOptions = computed(() =>
   roster.headers.map((header, index) => ({
     value: index,
-    label: `${columnLetter(index)} 列：${header || "(空表头)"}`,
+    label: `${columnLabel(index)} 列：${header || "(空表头)"}`,
   })),
 );
 
 const mappingValue = (key: keyof RosterMapping): number => roster.mapping?.[key] ?? -1;
+
+/** 自动识别结果（可能被老师手动改过，页面上分别标注）。 */
+const autoMapping = computed(() => suggestMapping(roster.headers).mapping);
+
+/** 每个映射字段的展示信息：识别到了哪列、是自动还是手动、必填列缺没缺。 */
+const fieldViews = computed(() =>
+  mappingFields.map((field) => {
+    const index = mappingValue(field.key);
+    const autoIndex = autoMapping.value[field.key];
+    return {
+      ...field,
+      /** 没映射时给 undefined，让下拉显示 placeholder 而不是 "-1"。 */
+      value: index < 0 ? undefined : index,
+      missing: field.required && index < 0,
+      column: index < 0 ? null : columnLabel(index),
+      header: index < 0 ? "" : (roster.headers[index] ?? ""),
+      auto: index >= 0 && autoIndex === index,
+    };
+  }),
+);
+
+const missingColumns = computed(() =>
+  fieldViews.value.filter((field) => field.required && field.missing),
+);
+const recognizedRequired = computed(
+  () => fieldViews.value.filter((field) => field.required && !field.missing).length,
+);
+const requiredCount = mappingFields.filter((field) => field.required).length;
+const absentColumnMapped = computed(() => (roster.mapping?.absent ?? -1) >= 0);
 
 const issuesSorted = computed(() =>
   [...roster.issues].sort((a, b) =>
@@ -65,15 +92,6 @@ const hasCombination = computed(() => roster.combinationSizes.length > 0);
 const classRows = computed(() =>
   [...roster.classSizes].sort((a, b) => a.className.localeCompare(b.className, "zh")),
 );
-
-const missingColumns = computed(() => {
-  const { mapping } = roster;
-  if (roster.total > 0) return [] as string[];
-  return ["id", "name", "className"].filter((key) => {
-    const value = mapping?.[key as keyof RosterMapping];
-    return value == null || value < 0;
-  });
-});
 
 async function handleFile(file: File | undefined): Promise<void> {
   if (!file) return;
@@ -114,7 +132,7 @@ function setMapping(key: keyof RosterMapping, value: number): void {
         <div class="upload-inner">
           <div class="upload-title">把 Excel 名单拖到这里，或点击选择</div>
           <div class="upload-sub">
-            需要包含「学号 / 姓名 / 班级」三列，其余列自动忽略；性别、备注可选
+            需要包含「准考证号（学号 / 考证号）/ 姓名 / 班级」三列，其余列自动忽略；列映射会自动预填
           </div>
         </div>
       </el-upload>
@@ -138,27 +156,35 @@ function setMapping(key: keyof RosterMapping, value: number): void {
       <template #header>
         <strong>列映射</strong>
         <span class="muted">
-          ｜自动识别结果，认错了就在这里改（{{ roster.fileName || "未命名文件" }}）
+          ｜已自动识别 {{ recognizedRequired }}/{{ requiredCount }} 个必填列，认错了就在这里改（{{
+            roster.fileName || "未命名文件"
+          }}）
         </span>
       </template>
 
-      <el-form label-width="88px" class="mapping-form">
+      <el-form label-width="96px" class="mapping-form">
         <el-form-item v-if="roster.sheetNames.length > 1" label="工作表">
           <el-select
             :model-value="roster.sheetName"
-            style="width: 320px"
+            style="width: 360px"
             @update:model-value="roster.selectSheet($event)"
           >
             <el-option v-for="name in roster.sheetNames" :key="name" :value="name" :label="name" />
           </el-select>
+          <span class="ml muted">已优先选能识别出必填列的工作表</span>
         </el-form-item>
 
-        <el-form-item v-for="field in mappingFields" :key="field.key" :label="field.label">
+        <el-form-item
+          v-for="field in fieldViews"
+          :key="field.key"
+          :label="field.label"
+          :error="field.missing ? '没认出来，请手动指定' : undefined"
+        >
           <el-select
-            :model-value="mappingValue(field.key)"
-            :placeholder="field.required ? '必须指定' : '不使用'"
+            :model-value="field.value"
+            :placeholder="field.required ? '还没认出来，请手动指定' : '不使用'"
             clearable
-            style="width: 320px"
+            style="width: 360px"
             @update:model-value="setMapping(field.key, $event ?? -1)"
           >
             <el-option
@@ -168,9 +194,11 @@ function setMapping(key: keyof RosterMapping, value: number): void {
               :label="option.label"
             />
           </el-select>
-          <el-tag v-if="field.required && mappingValue(field.key) < 0" type="danger" class="ml">
-            必填
-          </el-tag>
+          <el-tag v-if="field.required" type="info" class="ml">必填</el-tag>
+          <div v-if="field.column" class="mapping-hint">
+            {{ field.auto ? "自动识别" : "手动指定" }}：{{ field.header || "(空表头)" }} →
+            {{ field.column }} 列<template v-if="field.hint">（{{ field.hint }}）</template>
+          </div>
         </el-form-item>
       </el-form>
 
@@ -179,9 +207,10 @@ function setMapping(key: keyof RosterMapping, value: number): void {
         type="error"
         :closable="false"
         show-icon
-        :title="`还认不出这些必填列：${missingColumns
-          .map((k) => mappingFields.find((f) => f.key === k)?.label)
-          .join('、')}，请手动指定`"
+        :title="`没认出来这些必填列：${missingColumns
+          .map((field) => field.label)
+          .join('、')}，请在下面手动指定`"
+        description="准考证号列叫「学号 / 准考证号 / 考证号」都能认；表头带空格（如「班 级」「姓 名」）也会自动归一化识别。"
       />
     </el-card>
 
@@ -197,6 +226,16 @@ function setMapping(key: keyof RosterMapping, value: number): void {
           <el-statistic title="问题行（提醒）" :value="roster.issueCount.warnings" />
         </el-col>
       </el-row>
+
+      <el-alert
+        v-if="absentColumnMapped"
+        class="mt"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="识别到缺考列"
+        :description="`${roster.absentMarked} 人已标记为不参加（可在第 ② 步恢复）`"
+      />
 
       <template v-if="hasCombination">
         <el-divider content-position="left">
@@ -268,7 +307,13 @@ function setMapping(key: keyof RosterMapping, value: number): void {
   color: var(--el-text-color-secondary);
 }
 .mapping-form {
-  max-width: 640px;
+  max-width: 720px;
+}
+.mapping-hint {
+  flex-basis: 100%;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .row-actions {
   margin-top: 12px;

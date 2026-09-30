@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
+import type { UploadFile } from "element-plus";
 import { computed, nextTick, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import VirtualTable from "@/components/VirtualTable.vue";
 import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
+import { readFileBytes } from "@/lib/download";
+import type { AbsentImportReport } from "@/lib/roster-import";
 import { filterStudents } from "@/lib/search";
 import { useRosterStore } from "@/stores/roster";
 import type { Student } from "@exam-seat/core";
@@ -18,6 +21,8 @@ const classFilter = ref<string[]>([]);
 /** 勾选只存学号：表格是虚拟滚动的，选中状态必须挂在「当前筛选结果」上，不能挂在已渲染的行上。 */
 const selectedKeys = ref<string[]>([]);
 const drawerVisible = ref(false);
+/** 最近一次「导入缺考名单」的结果（命中 / 未匹配）。 */
+const absentReport = ref<AbsentImportReport | null>(null);
 
 const rows = computed(() =>
   filterStudents(roster.students, { text: query.value, classNames: classFilter.value }),
@@ -82,6 +87,32 @@ function includeOne(id: string): void {
   roster.setIncluded([id], true);
 }
 
+/** 导入缺考名单：准考证号优先，没有准考证号列才用 姓名+班级；未匹配的行要报出来。 */
+async function onAbsentChange(file: UploadFile): Promise<void> {
+  const { raw } = file;
+  if (!raw) return;
+  if (!/\.(?:xlsx|xls)$/i.test(raw.name)) {
+    ElMessage.error("只支持 .xlsx / .xls 文件");
+    return;
+  }
+  try {
+    const report = roster.importAbsentBytes(await readFileBytes(raw));
+    absentReport.value = report;
+    if (!report.ok) {
+      ElMessage.error(report.error ?? "缺考名单导入失败");
+      return;
+    }
+    if (report.unmatched > 0) {
+      ElMessage.warning(`缺考名单：命中 ${report.matched} 人，未匹配 ${report.unmatched} 行`);
+    } else {
+      ElMessage.success(`缺考名单：命中 ${report.matched} 人，全部匹配成功`);
+    }
+  } catch (err) {
+    absentReport.value = null;
+    ElMessage.error(err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function openDrawer(): Promise<void> {
   drawerVisible.value = true;
   await nextTick();
@@ -137,7 +168,35 @@ function resetQuery(): void {
         </el-button>
         <el-button @click="clearSelection">清空勾选</el-button>
         <el-button @click="openDrawer">查看已排除（{{ roster.excludedCount }}）</el-button>
+        <el-upload
+          accept=".xlsx,.xls"
+          :auto-upload="false"
+          :show-file-list="false"
+          :on-change="onAbsentChange"
+        >
+          <el-button>导入缺考名单</el-button>
+        </el-upload>
       </el-space>
+
+      <el-alert
+        v-if="absentReport"
+        class="mb"
+        :type="absentReport.ok ? (absentReport.unmatched > 0 ? 'warning' : 'success') : 'error'"
+        :closable="true"
+        show-icon
+        :title="
+          absentReport.ok
+            ? `缺考名单：命中 ${absentReport.matched} 人，未匹配 ${absentReport.unmatched} 行`
+            : `缺考名单导入失败：${absentReport.error ?? ''}`
+        "
+      >
+        <div v-if="absentReport.unmatchedSamples.length > 0">
+          未匹配示例：{{ absentReport.unmatchedSamples.join("；")
+          }}<template v-if="absentReport.unmatched > absentReport.unmatchedSamples.length">
+            …等 {{ absentReport.unmatched }} 行</template
+          >
+        </div>
+      </el-alert>
 
       <VirtualTable
         :rows="rows"

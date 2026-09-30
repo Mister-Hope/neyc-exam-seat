@@ -409,6 +409,7 @@ describe("collectMultiDiagnostics 纯函数", () => {
       emptyRooms: [],
       overRoomLimit: [],
       diagnostics: [duplicate],
+      unmetConstraints: [],
     };
     expect(collectMultiDiagnostics(result).map((item) => item.message)).toEqual([
       "共用考场",

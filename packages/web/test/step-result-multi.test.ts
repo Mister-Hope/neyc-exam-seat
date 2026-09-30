@@ -293,6 +293,7 @@ function multiResult(): PlanAllResult {
     emptyRooms: ["R99"],
     overRoomLimit: [],
     diagnostics: [],
+    unmetConstraints: [],
   };
 }
 
