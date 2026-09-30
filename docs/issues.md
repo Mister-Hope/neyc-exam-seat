@@ -48,7 +48,7 @@
 
 core / io / CLI 已经支持多场次（`planAll`、按班级与按考场的两种导出、`exam-seat plan` 自动识别选科），
 但**网页第 ⑤ 步目前只跑单场 `plan`**：名单里带选科时，网页会在求解页显示一条提示，让老师改用 CLI。
-设计见 `docs/design-selection.md` 的 S7，进度表见其 §10。
+设计见 `docs/design.md` §5（选科与多场次），实施进度见 §5.7 的 S7。
 
 **验收标准**
 

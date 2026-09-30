@@ -126,7 +126,7 @@ watch(
       type="info"
       :closable="false"
       show-icon
-      title="名单里有选科：多场次（场次编排）界面仍在实施中（docs/design-selection.md S7），本页按单场求解；需要多场次请用 CLI：exam-seat plan --job job.json --out-dir out"
+      title="名单里有选科：多场次（场次编排）界面仍在实施中（docs/design.md §5.7），本页按单场求解；需要多场次请用 CLI：exam-seat plan --job job.json --out-dir out"
     />
 
     <el-card shadow="never">

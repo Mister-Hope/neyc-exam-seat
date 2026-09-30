@@ -199,7 +199,7 @@ function setMapping(key: keyof RosterMapping, value: number): void {
           type="info"
           :closable="false"
           show-icon
-          title="名单里有选科：core 已经能按时段冲突推导场次（多场次排考）。网页第 ⑤ 步的「场次编排」界面仍在实施中（见 docs/design-selection.md S7），当前网页按单场求解；需要多场次请用 CLI 的 exam-seat plan（加 --single 可强制单场）。"
+          title="名单里有选科：core 已经能按时段冲突推导场次（多场次排考）。网页第 ⑤ 步的「场次编排」界面仍在实施中（见 docs/design.md §5.7），当前网页按单场求解；需要多场次请用 CLI 的 exam-seat plan（加 --single 可强制单场）。"
         />
       </template>
 
