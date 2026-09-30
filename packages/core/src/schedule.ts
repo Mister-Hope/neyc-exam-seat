@@ -63,6 +63,12 @@ export function buildConflictGraph(
  *
  * `coreSubjects` 是**全体都考**的科目（默认语数外）。它们不在选科文本里， 但和所有科目都冲突，所以必须显式并进每个人的科目集合。传 `[]` 表示本次只考选考科目。
  */
+/** 时段内科目的展示顺序；不在顺序表里的排到最后。 */
+function orderIndex(subject: string): number {
+  const at = SLOT_DISPLAY_ORDER.indexOf(subject);
+  return at === -1 ? SLOT_DISPLAY_ORDER.length : at;
+}
+
 export function deriveTimeSlots(
   combinations: readonly (readonly string[])[],
   coreSubjects: readonly string[] = CORE_SUBJECTS,
@@ -70,11 +76,6 @@ export function deriveTimeSlots(
   const fullSets = combinations.map((combo) => [...coreSubjects, ...combo]);
   const adjacency = buildConflictGraph(fullSets);
   if (adjacency.size === 0) return [];
-
-  const orderIndex = (subject: string): number => {
-    const at = SLOT_DISPLAY_ORDER.indexOf(subject);
-    return at === -1 ? SLOT_DISPLAY_ORDER.length : at;
-  };
 
   const colorOf = new Map<string, number>();
   const remaining = new Set(adjacency.keys());
@@ -142,7 +143,7 @@ export function findSlotConflicts(
 ): { studentIndex: number; slotId: string; subjects: string[] }[] {
   const problems: { studentIndex: number; slotId: string; subjects: string[] }[] = [];
   for (let i = 0; i < studentSubjects.length; i += 1) {
-    const own = new Set(studentSubjects[i] ?? []);
+    const own = new Set(studentSubjects[i]);
     for (const slot of slots) {
       const hit = slot.subjects.filter((s) => own.has(s));
       if (hit.length > 1) problems.push({ studentIndex: i, slotId: slot.id, subjects: hit });

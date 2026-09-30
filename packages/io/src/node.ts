@@ -1,9 +1,15 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import type { PlanResult, RoomSpec } from "@exam-seat/core";
+import type { PlanAllResult, PlanResult, RoomSpec } from "@exam-seat/core";
 
-import { buildPlanWorkbook, buildRoomSheets, readRoster } from "./index";
+import {
+  buildClassScheduleWorkbook,
+  buildInvigilatorWorkbook,
+  buildPlanWorkbook,
+  buildRoomSheets,
+  readRoster,
+} from "./index";
 import type { ReadRosterOptions, RosterReadResult } from "./index";
 
 /** Node 侧：直接读一个 .xlsx 名单文件。 */
@@ -65,6 +71,38 @@ export function writePlanFiles(result: PlanResult, options: WritePlanOptions): s
     writeFileSync(jobPath, JSON.stringify(options.job, null, 2));
     written.push(jobPath);
   }
+
+  return written;
+}
+
+/** 多场次（选科）结果的落盘：按班级 + 按考场 两份表 */
+export function writeMultiPlanFiles(
+  result: PlanAllResult,
+  options: { outDir: string; rooms?: RoomSpec[] },
+): string[] {
+  const outDir = resolve(options.outDir);
+  mkdirSync(outDir, { recursive: true });
+  const written: string[] = [];
+
+  const byId = new Map((options.rooms ?? []).map((r) => [r.id, r]));
+
+  const classPath = join(outDir, "按班级考场安排.xlsx");
+  writeFileSync(classPath, buildClassScheduleWorkbook(result));
+  written.push(classPath);
+
+  const invigilatorPath = join(outDir, "考场监考表.xlsx");
+  writeFileSync(
+    invigilatorPath,
+    buildInvigilatorWorkbook(result, (roomId) => {
+      const room = byId.get(roomId);
+      return room ? { location: room.location, note: room.note } : undefined;
+    }),
+  );
+  written.push(invigilatorPath);
+
+  const planPath = join(outDir, "plan.json");
+  writeFileSync(planPath, JSON.stringify(result, null, 2));
+  written.push(planPath);
 
   return written;
 }

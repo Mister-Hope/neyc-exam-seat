@@ -84,7 +84,7 @@ describe("时段推导", () => {
     expect(
       findSlotConflicts(
         slots,
-        withNew.map((c) => [...CORE, ...c]),
+        withNew.map((c) => CORE.concat(c)),
       ),
     ).toEqual([]);
   });

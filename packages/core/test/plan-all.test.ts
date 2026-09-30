@@ -178,7 +178,7 @@ describe("多场次排考 planAll", () => {
   });
 
   it("非常规主考场只覆盖语数外物化", () => {
-    const main = result.seatings.filter((s) => s.subjects.includes("physics")).at(-1)!;
+    const main = result.seatings.findLast((s) => s.subjects.includes("physics"))!;
     // 主考场包含语数外 + 物 + 化，但不含生物/政治/地理
     expect(main.subjects).toEqual(
       expect.arrayContaining(["chinese", "math", "english", "physics", "chemistry"]),

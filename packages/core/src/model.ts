@@ -114,7 +114,9 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
 
     // subjects 优先；没给就尝试从 combination 文本解析
     let subjects: string[] | null = student.subjects ? [...student.subjects] : null;
-    let combination = student.combination?.trim() || null;
+    // 空串按「没给」处理：下面第 127 行的 `??=` 依赖这个归一化
+    const combinationText = student.combination?.trim();
+    let combination: string | null = combinationText ? combinationText : null;
     if (!subjects && combination) {
       subjects = parseCombination(combination).subjects;
     }

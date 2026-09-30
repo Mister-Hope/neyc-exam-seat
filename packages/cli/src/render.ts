@@ -1,5 +1,6 @@
 import { rcToSeatNo } from "@exam-seat/core";
-import type { Diagnostic, DoorSide, PlanResult } from "@exam-seat/core";
+import { subjectLabel, subjectListLabel } from "@exam-seat/core";
+import type { Diagnostic, DoorSide, PlanAllResult, PlanResult } from "@exam-seat/core";
 
 const ICON: Record<Diagnostic["severity"], string> = {
   error: "❌",
@@ -94,4 +95,50 @@ export function renderPlan(result: PlanResult, limit = 0): string {
     }
   }
   return lines.join("\n");
+}
+
+/** 多场次（选科）结果的终端摘要 */
+export function renderPlanAll(result: PlanAllResult): string {
+  const lines: string[] = [];
+  const conflicts = result.seatings.reduce((sum, s) => sum + s.result.stats.conflicts, 0);
+  lines.push("─".repeat(56));
+  lines.push(result.ok ? "✅ 多场次排考完成（零冲突，全部时段已安排）" : "❌ 未能完全安排");
+  lines.push("─".repeat(56));
+  lines.push(
+    `时段 ${result.slots.length} 个 ｜ 考生 ${result.byStudent.length} 人 ｜ 座位方案 ${result.seatings.length} 套`,
+  );
+  lines.push(`冲突 ${conflicts} ｜ 超过考场数上限的学生 ${result.overRoomLimit.length} 人`);
+  if (result.emptyRooms.length > 0) {
+    lines.push(`可取消的空置考场：${result.emptyRooms.join("、")}`);
+  }
+  lines.push("");
+
+  lines.push("时段划分：");
+  for (const slot of result.slots) {
+    lines.push(`  ${slot.id}  ${slot.subjects.join(" + ") || "（单场）"}`);
+  }
+  lines.push("");
+
+  if (result.diagnostics.length > 0) {
+    lines.push("诊断：");
+    lines.push(renderDiagnostics(result.diagnostics));
+    lines.push("");
+  }
+
+  const movers = result.byStudent.filter((s) => s.distinctRooms > 1);
+  lines.push(`需要换考场的学生：${movers.length} 人`);
+  for (const student of movers.slice(0, 10)) {
+    const route = student.rooms
+      .map((r) => `${r.roomName}（${subjectRoomLabel(r.subjects)}）`)
+      .join(" → ");
+    lines.push(`  ${student.className} ${student.name}：${route}`);
+  }
+  if (movers.length > 10) lines.push(`  … 还有 ${movers.length - 10} 人`);
+  return lines.join("\n");
+}
+
+/** 单科目用全名，多科目用简称拼 —— 与导出表格保持一致 */
+function subjectRoomLabel(subjects: readonly string[]): string {
+  if (subjects.length === 1) return subjectLabel(subjects[0]!);
+  return subjectListLabel(subjects);
 }

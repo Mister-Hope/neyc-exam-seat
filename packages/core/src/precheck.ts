@@ -1,7 +1,7 @@
 import type { DomainBundle } from "./domain";
 import { checkSeatMatching, compileDomains } from "./domain";
 import type { CompiledModel } from "./model";
-import { describeCols, describeRows, roomCapacity, seatId } from "./numbering";
+import { describeCols, describeRows, seatId } from "./numbering";
 import type { Adjacency, Diagnostic, Job, RelaxMode, Suggestion } from "./types";
 
 export interface PrecheckResult {
@@ -396,15 +396,13 @@ export function runPrecheck(
   }
 
   const fatal = diagnostics.some((d) => d.severity === "error");
-  if (!fatal) {
-    if (diagnostics.length === 0) {
-      diagnostics.push({
-        code: "OK",
-        severity: "info",
-        message: `预检通过：${participants} 名考生、${classCount} 个班、${rooms.length} 个考场`,
-        suggestions: [],
-      });
-    }
+  if (!fatal && diagnostics.length === 0) {
+    diagnostics.push({
+      code: "OK",
+      severity: "info",
+      message: `预检通过：${participants} 名考生、${classCount} 个班、${rooms.length} 个考场`,
+      suggestions: [],
+    });
   }
 
   return { diagnostics, fatal, adjacency: ctx.adjacency, downgraded: ctx.downgraded, domains };
@@ -587,4 +585,5 @@ export function describeRoomLoad(model: CompiledModel, seatOwner: Int32Array): s
   return lines;
 }
 
-export { roomCapacity };
+// 保持既有公共 API：core 的入口一直从这里取 roomCapacity
+export { roomCapacity } from "./numbering";

@@ -157,6 +157,35 @@ function roomName(room: RoomSpec): string {
   return room.name?.trim() || room.id;
 }
 
+/**
+ * 按班级轮流交错学生。
+ *
+ * 名单通常是**按班级排**的，如果直接按下标顺序切分考场，第一个考场会被同一个班塞满 —— 而 30 座考场里同班上限只有 9 人，直接无解。所以分房前必须按班级轮流取人，
+ * 让每个考场都拿到混合的班级。
+ */
+function interleaveByClass(members: readonly number[], classOfStudent: Int32Array): number[] {
+  if (members.length <= 1) return [...members];
+  const buckets = new Map<number, number[]>();
+  for (const index of members) {
+    const cls = classOfStudent[index]!;
+    const list = buckets.get(cls) ?? [];
+    list.push(index);
+    buckets.set(cls, list);
+  }
+  if (buckets.size === 1) return [...members];
+
+  // 班级大的先取，保证每轮都能取到最多的人
+  const lists = [...buckets.values()].sort((a, b) => b.length - a.length);
+  const out: number[] = [];
+  for (let round = 0; out.length < members.length; round += 1) {
+    for (const list of lists) {
+      const item = list[round];
+      if (item !== undefined) out.push(item);
+    }
+  }
+  return out;
+}
+
 /** 把一批学生按考场容量依次填满给定考场 */
 function fillRooms(
   students: number[],
@@ -264,7 +293,12 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     for (const [combo, members] of regularEntries) {
       const subjects = new Set<string>(core);
       for (const i of members) for (const s of model.subjectOfStudent[i] ?? []) subjects.add(s);
-      demands.push({ kind: "regular", key: combo, students: members, subjects: [...subjects] });
+      demands.push({
+        kind: "regular",
+        key: combo,
+        students: interleaveByClass(members, model.classOfStudent),
+        subjects: [...subjects],
+      });
     }
 
     // 4b. 非常规主考场：语数外 + 选考科目里「没被专用考场接走」的那些
@@ -279,7 +313,7 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
         demands.push({
           kind: "irregular-main",
           key: "irregular-main",
-          students: irregular,
+          students: interleaveByClass(irregular, model.classOfStudent),
           subjects: [...subjects],
         });
       }
@@ -327,7 +361,7 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
           suggestions: [],
         });
       }
-      for (const chunk of fillRooms(takers, rooms)) {
+      for (const chunk of fillRooms(interleaveByClass(takers, model.classOfStudent), rooms)) {
         groups.push({
           kind: "dedicated",
           key: subject,

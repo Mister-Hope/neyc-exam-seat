@@ -62,8 +62,8 @@ export function readWorkbook(bytes: Uint8Array | ArrayBuffer): SheetData[] {
       defval: "",
       blankrows: false,
     });
-    const headers = (aoa[0] ?? []).map((cell) => String(cell ?? "").trim());
-    const rows = aoa.slice(1).map((row) => headers.map((_, i) => String(row[i] ?? "").trim()));
+    const headers = (aoa[0] ?? []).map((cell) => (cell ?? "").trim());
+    const rows = aoa.slice(1).map((row) => headers.map((_, i) => (row[i] ?? "").trim()));
     return { name, headers, rows };
   });
 }
@@ -99,7 +99,7 @@ export function suggestMapping(headers: string[]): {
   mapping: Partial<RosterMapping>;
   missing: (keyof RosterMapping)[];
 } {
-  const normalized = headers.map(normalizeHeader);
+  const normalized = headers.map((header) => normalizeHeader(header));
   const mapping: Partial<RosterMapping> = {};
   for (const key of Object.keys(HEADER_ALIASES) as (keyof RosterMapping)[]) {
     const aliases = HEADER_ALIASES[key];
@@ -130,9 +130,9 @@ export function parseRoster(
 
   sheet.rows.forEach((row, index) => {
     const excelRow = index + 2; // 含表头行
-    const id = String(row[mapping.id] ?? "").trim();
-    const name = String(row[mapping.name] ?? "").trim();
-    const className = String(row[mapping.className] ?? "").trim();
+    const id = (row[mapping.id] ?? "").trim();
+    const name = (row[mapping.name] ?? "").trim();
+    const className = (row[mapping.className] ?? "").trim();
 
     if (!id && !name && !className) return; // 空行
     if (!id) {
@@ -152,15 +152,15 @@ export function parseRoster(
     seen.add(id);
     const student: Student = { id, name, className };
     if (mapping.gender !== undefined) {
-      const gender = String(row[mapping.gender] ?? "").trim();
+      const gender = (row[mapping.gender] ?? "").trim();
       if (gender) student.gender = gender;
     }
     if (mapping.note !== undefined) {
-      const note = String(row[mapping.note] ?? "").trim();
+      const note = (row[mapping.note] ?? "").trim();
       if (note) student.meta = { note };
     }
     if (mapping.combination !== undefined) {
-      const raw = String(row[mapping.combination] ?? "").trim();
+      const raw = (row[mapping.combination] ?? "").trim();
       if (raw) {
         const parsed = parseCombination(raw);
         student.combination = raw;

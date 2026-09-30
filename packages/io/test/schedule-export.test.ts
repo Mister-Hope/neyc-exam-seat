@@ -84,7 +84,7 @@ describe("输出 A：按班级", () => {
   it("表尾给出各班需要换考场的人数", () => {
     const movers = result.byStudent.filter((s) => s.distinctRooms > 1);
     expect(movers).toHaveLength(12);
-    const {rows} = readWorkbook(buildClassScheduleWorkbook(result))[0]!;
+    const { rows } = readWorkbook(buildClassScheduleWorkbook(result))[0]!;
     expect(rows.some((r) => r[0] === "班级" && r[1] === "需要换考场的人数")).toBe(true);
   });
 

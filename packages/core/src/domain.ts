@@ -45,21 +45,21 @@ export function resolveConstraintStudents(model: CompiledModel, constraint: Cons
 
   const out = new Set<number>();
 
-  if (constraint.studentIds?.length) {
+  if ((constraint.studentIds?.length ?? 0) > 0) {
     for (const id of constraint.studentIds) {
       const index = model.studentIndexById.get(id);
       if (index !== undefined) out.add(index);
     }
   }
 
-  if (constraint.classes?.length) {
+  if ((constraint.classes?.length ?? 0) > 0) {
     const wanted = new Set(constraint.classes.map((c) => c.trim()));
     for (let i = 0; i < model.students.length; i += 1) {
       if (wanted.has(model.students[i]!.className)) out.add(i);
     }
   }
 
-  if (constraint.combinations?.length) {
+  if ((constraint.combinations?.length ?? 0) > 0) {
     const wanted = new Set(constraint.combinations.map((c) => normalizeCombination(c)));
     for (let i = 0; i < model.students.length; i += 1) {
       const combo = model.combinationOfStudent[i];
@@ -67,7 +67,7 @@ export function resolveConstraintStudents(model: CompiledModel, constraint: Cons
     }
   }
 
-  if (constraint.subjects?.length) {
+  if ((constraint.subjects?.length ?? 0) > 0) {
     const wanted = new Set(constraint.subjects);
     for (let i = 0; i < model.students.length; i += 1) {
       const subjects = model.subjectOfStudent[i];
@@ -255,7 +255,7 @@ export function checkSeatMatching(
   const tryAssign = (student: number, visited: Uint8Array): boolean => {
     const domain = domains[student]!;
     for (const seat of domain) {
-      if (visited[seat]) continue;
+      if (visited[seat] === 1) continue;
       visited[seat] = 1;
       const owner = seatOwner[seat]!;
       if (owner === -1 || tryAssign(owner, visited)) {

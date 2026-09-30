@@ -3,11 +3,11 @@ import { resolve } from "node:path";
 
 import { Command } from "commander";
 
-import { plan, precheckJob, validate } from "@exam-seat/core";
+import { plan, planAll, precheckJob, validate } from "@exam-seat/core";
 import type { Adjacency, Job, PlanOptions, PlanResult, RelaxMode, RoomSpec } from "@exam-seat/core";
-import { readRosterFile, writePlanFiles } from "@exam-seat/io/node";
+import { readRosterFile, writeMultiPlanFiles, writePlanFiles } from "@exam-seat/io/node";
 
-import { renderDiagnostics, renderNumbering, renderPlan } from "./render";
+import { renderDiagnostics, renderNumbering, renderPlan, renderPlanAll } from "./render";
 
 export const EXIT_OK = 0;
 export const EXIT_USAGE = 1;
@@ -315,6 +315,7 @@ export async function main(argv: string[]): Promise<number> {
     .option("--force-king", "即使班级数不足 9 个也坚持 8 邻域，不自动退化")
     .option("--time-limit <ms>", "求解时间上限（毫秒）")
     .option("--show <n>", "终端里最多打印多少条名单", "20")
+    .option("--single", "强制单场模式（忽略名单里的选科列）")
     .action(
       async (options: {
         job: string;
@@ -325,6 +326,7 @@ export async function main(argv: string[]): Promise<number> {
         forceKing?: boolean;
         timeLimit?: string;
         show: string;
+        single?: boolean;
       }) => {
         const job = await loadJob(options.job);
         const overrides: PlanOptions = {};
@@ -350,6 +352,34 @@ export async function main(argv: string[]): Promise<number> {
           const ms = Number(options.timeLimit);
           if (!Number.isInteger(ms) || ms < 0) fail("--time-limit 必须是非负整数");
           overrides.timeLimitMs = ms;
+        }
+
+        // 名单里带选科就走多场次；否则就是普通单场
+        const multi =
+          !options.single && (job.students ?? []).some((s) => s.subjects?.length || s.combination);
+
+        if (multi) {
+          const multiResult = planAll(job, overrides);
+          if (options.outDir) {
+            const written = writeMultiPlanFiles(multiResult, {
+              outDir: options.outDir,
+              rooms: job.rooms,
+            });
+            log(`已导出 ${written.length} 个文件：`);
+            for (const path of written) log(`  ${path}`);
+          }
+          if (globalJson()) {
+            writeJson(multiResult);
+          } else {
+            process.stdout.write(`${renderPlanAll(multiResult)}\n`);
+          }
+          exitCode =
+            multiResult.seatings.length === 0
+              ? EXIT_INFEASIBLE
+              : multiResult.ok
+                ? EXIT_OK
+                : EXIT_DEGRADED;
+          return;
         }
 
         const result: PlanResult = plan(job, overrides);

@@ -56,7 +56,7 @@ export function solve(input: SolveInput): SolveOutput {
       seatOfStudent,
       studentAtSeat,
       violatedStudents: [],
-      unplacedStudents: [...Array(nStudents).keys()],
+      unplacedStudents: Array.from({ length: nStudents }, (_, index) => index),
       conflicts: [],
       conflictCount: 0,
       iterations: 0,
@@ -295,10 +295,11 @@ export function solve(input: SolveInput): SolveOutput {
   const pickSeat = (): number => {
     if (occupied.length === 0) return -1;
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      const s = occupied[(rng() * occupied.length) | 0]!;
+      // rng() ∈ [0,1)，乘出来必为非负且远小于 2^31，Math.trunc 与原来的 `| 0` 完全等价
+      const s = occupied[Math.trunc(rng() * occupied.length)]!;
       if (seatConflictCount(s) > 0) return s;
     }
-    return occupied[(rng() * occupied.length) | 0]!;
+    return occupied[Math.trunc(rng() * occupied.length)]!;
   };
 
   const pickPartner = (s1: number): number => {
@@ -316,14 +317,14 @@ export function solve(input: SolveInput): SolveOutput {
         if (v >= 0 && cls >= 0 && model.classOfStudent[v] === cls) conflicting.push(n);
         else others.push(n);
       }
-      if (conflicting.length > 0) return conflicting[(rng() * conflicting.length) | 0]!;
-      if (others.length > 0) return others[(rng() * others.length) | 0]!;
+      if (conflicting.length > 0) return conflicting[Math.trunc(rng() * conflicting.length)]!;
+      if (others.length > 0) return others[Math.trunc(rng() * others.length)]!;
     }
     if (roll < 0.9) {
       const room = model.rooms[model.seatRoom[s1]!]!;
-      return room.firstSeat + ((rng() * room.seatCount) | 0);
+      return room.firstSeat + Math.trunc(rng() * room.seatCount);
     }
-    return occupied[(rng() * occupied.length) | 0]!;
+    return occupied[Math.trunc(rng() * occupied.length)]!;
   };
 
   const maxIterations = 4_000_000;
