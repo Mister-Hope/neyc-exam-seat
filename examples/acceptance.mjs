@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { read as readWorkbook } from "xlsx";
+import { read as readWorkbook, utils as xlsxUtils, write as writeWorkbook } from "xlsx";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = path.join(ROOT, "packages/cli/bin/exam-seat.mjs");
@@ -284,6 +284,49 @@ function roomCombinations(result) {
   }
   return rooms;
 }
+
+/** 独立实现 seatNo → { row, col }（业务列，从靠门侧起算），与 design §4.1 一致。 */
+const seatNoToRowCol = (rows, seatNo) => {
+  const k = Math.floor((seatNo - 1) / rows);
+  const off = (seatNo - 1) % rows;
+  return { row: k % 2 === 0 ? off + 1 : rows - off, col: k + 1 };
+};
+
+/** 某学生每一次已安排的座位，用 job 的考场规格独立解析行列。 */
+function studentSeatAssignments(result, job, studentId) {
+  const schedule = (result.byStudent ?? []).find((student) => student.studentId === studentId);
+  const out = [];
+  for (const [slotId, item] of Object.entries(schedule?.slots ?? {})) {
+    if (!item) continue;
+    const room = (job.rooms ?? []).find((r) => r.id === item.roomId);
+    const rc = room ? seatNoToRowCol(room.rows, item.seatNo) : { row: undefined, col: undefined };
+    out.push({ slotId, ...item, row: rc.row, col: rc.col });
+  }
+  return out;
+}
+
+/** 用 aoa 写一份临时 xlsx（表头 + 数据行）。 */
+const writeSheet = (file, rows, sheetName = "名单") => {
+  const sheet = xlsxUtils.aoa_to_sheet(rows);
+  const book = xlsxUtils.book_new();
+  xlsxUtils.book_append_sheet(book, sheet, sheetName);
+  writeFileSync(file, writeWorkbook(book, { bookType: "xlsx", type: "buffer" }));
+};
+
+/** 跑 `roster`，同时拿 stdout / stderr / 退出码 / 解析后的 JSON（不抛异常）。 */
+const runRoster = (args) => {
+  const run = runFull(["--json", "roster", ...args]);
+  let json = null;
+  try {
+    json = JSON.parse(run.stdout);
+  } catch {
+    json = null;
+  }
+  return { ...run, json, output: `${run.stdout}${run.stderr}` };
+};
+
+/** 学生数组 → id 下标，便于逐字段核对。 */
+const byStudentId = (students) => new Map((students ?? []).map((s) => [s.id, s]));
 
 /** 同一套座位方案内，座位号必须一人一位（不能两人同座或一人两座）。 */
 function seatingSeatViolations(result) {
@@ -964,7 +1007,7 @@ check(
   sampleFiles.length > 0 ? `样例：${sampleFiles.join("、")}` : "读不到 examples 目录",
 );
 
-/* ---------- 14. 多场次忽略 constraints：必须显式告警，且 warning 不阻塞 ---------- */
+/* ---------- 14. 多场次限定：必须真正生效，且不得静默忽略 ---------- */
 // 独立复现「四选择器取并集」的命中规则，自己数一遍限定条数与涉及学生数。
 const matchesConstraint = (student, constraint) =>
   (constraint.studentIds ?? []).includes(student.id) ||
@@ -974,7 +1017,7 @@ const matchesConstraint = (student, constraint) =>
 
 const constrainedJob = {
   jobVersion: 2,
-  meta: { title: "多场次 + 限定（当前应显式告警）" },
+  meta: { title: "多场次 + 限定（应真正生效）" },
   options: { seed: 20260930 },
   students: thinStudents,
   rooms: [
@@ -1007,36 +1050,28 @@ const constrainedRun = runFull([
   constrainedDir,
 ]);
 const constrainedResult = JSON.parse(constrainedRun.stdout || "{}");
-const ignoredDiagnostics = (constrainedResult.diagnostics ?? []).filter(
-  (d) => d.code === "CONSTRAINTS_IGNORED_MULTI",
-);
 
 check(
-  "多场次 + 非空 constraints：恰有一条 CONSTRAINTS_IGNORED_MULTI（warning）",
-  ignoredDiagnostics.length === 1 && ignoredDiagnostics[0].severity === "warning",
-  `命中 ${ignoredDiagnostics.length} 条，severity=${ignoredDiagnostics[0]?.severity ?? "无"}；诊断码：${
-    [...new Set(diagnosticCodes(constrainedResult))].join(",") || "无"
-  }`,
+  "多场次 + 非空 constraints：限定已生效，不再出现 CONSTRAINTS_IGNORED_MULTI",
+  !diagnosticCodes(constrainedResult).includes("CONSTRAINTS_IGNORED_MULTI") &&
+    constrainedResult.ok === true,
+  `诊断码：${[...new Set(diagnosticCodes(constrainedResult))].join(",") || "无"}；涉及 ${involvedStudents} 名学生 / ${constrainedJob.constraints.length} 条限定`,
 );
 
-const evidenceNumbers = new Set();
-const collectNumbers = (value) => {
-  if (typeof value === "number") evidenceNumbers.add(value);
-  else if (Array.isArray(value)) {
-    // 证据用 id 数组表达时，长度就是条数 / 人数
-    evidenceNumbers.add(value.length);
-    for (const item of value) collectNumbers(item);
-  } else if (value && typeof value === "object") {
-    for (const item of Object.values(value)) collectNumbers(item);
-  }
-};
-for (const diagnostic of ignoredDiagnostics) collectNumbers(diagnostic.evidence);
+// 限定必须真的落到「学生自己那套座位」：C1 点名两人首排、C2 按班靠门（独立解析 seatNo → 行列）。
+const constrainedFirstRow = (constrainedJob.constraints[0].studentIds ?? []).flatMap((id) =>
+  studentSeatAssignments(constrainedResult, constrainedJob, id),
+);
+const constrainedDoorCol = thinStudents
+  .filter((student) => matchesConstraint(student, constrainedJob.constraints[1]))
+  .flatMap((student) => studentSeatAssignments(constrainedResult, constrainedJob, student.id));
 check(
-  "该诊断的 evidence 限定条数 / 涉及学生数正确",
-  evidenceNumbers.has(constrainedJob.constraints.length) && evidenceNumbers.has(involvedStudents),
-  `期望 constraints=${constrainedJob.constraints.length}、students=${involvedStudents}；evidence=${JSON.stringify(
-    ignoredDiagnostics[0]?.evidence ?? null,
-  )}`,
+  "多场次限定生效：点名两人首排、按班三人靠门（独立解析行列）",
+  constrainedFirstRow.length > 0 &&
+    constrainedFirstRow.every((assignment) => assignment.row === 1) &&
+    constrainedDoorCol.length > 0 &&
+    constrainedDoorCol.every((assignment) => assignment.col === 1),
+  `首排 ${constrainedFirstRow.length} 次（行=${[...new Set(constrainedFirstRow.map((a) => a.row))].join("/")}）；靠门 ${constrainedDoorCol.length} 次（列=${[...new Set(constrainedDoorCol.map((a) => a.col))].join("/")}）`,
 );
 
 check(
@@ -1046,7 +1081,7 @@ check(
 );
 
 check(
-  "warning 不阻塞导出：多场次 + constraints 仍然 ok=true、exit=0 且写出了名单",
+  "多场次 + constraints：限定满足时照常导出（ok=true、exit=0、写出名单）",
   constrainedResult.ok === true &&
     constrainedRun.status === 0 &&
     fileSize(path.join(constrainedDir, "按班级考场安排.xlsx")) > 0,
@@ -1068,9 +1103,9 @@ check(
   "诊断分级：error 级阻塞 ok，warning 级不阻塞 ok",
   severityOf(tightResult, "CAPACITY_INSUFFICIENT") === "error" &&
     tightResult.ok === false &&
-    severityOf(constrainedResult, "CONSTRAINTS_IGNORED_MULTI") === "warning" &&
-    constrainedResult.ok === true,
-  `CAPACITY_INSUFFICIENT：exit=${tightRun.status}、ok=${tightResult.ok}；CONSTRAINTS_IGNORED_MULTI：exit=${constrainedRun.status}、ok=${constrainedResult.ok}`,
+    severityOf(fewResult, "TOO_FEW_CLASSES") === "warning" &&
+    fewResult.ok === true,
+  `CAPACITY_INSUFFICIENT：exit=${tightRun.status}、ok=${tightResult.ok}；TOO_FEW_CLASSES：level=${fewResult.level}、ok=${fewResult.ok}`,
 );
 
 /* ---------- 15. fillRooms 共用考场：合并成一套座位 + 只出一张监考表 ---------- */
@@ -1438,7 +1473,7 @@ check(
   }；座位方案 ${allDedicatedResult.seatings?.length ?? 0} 套`,
 );
 
-// 16g. validate 喂多场次 plan.json（PlanAllResult）：必须明确报错，不能抛内部错误（C8）。
+// 16g. validate 喂多场次 plan.json：走 core 的 validateAll（task-13 契约），逐 seating 给结论。
 const multiPlanPath = path.join(thinDir, "plan.json");
 const validateMultiRun = runFull(["validate", "--job", thinPath, "--plan", multiPlanPath]);
 const validateMultiJsonRun = runFull([
@@ -1451,17 +1486,630 @@ const validateMultiJsonRun = runFull([
 ]);
 const validateMultiJson = JSON.parse(validateMultiJsonRun.stdout || "{}");
 check(
-  "validate 喂多场次 plan.json：明确报错、退出码 1、不抛内部错误",
-  validateMultiRun.status === 1 &&
-    validateMultiRun.status === validateMultiJsonRun.status &&
+  "validate 喂多场次 plan.json：走 validateAll（exit 0、逐 seating 有结论、不抛内部错误）",
+  validateMultiRun.status === 0 &&
+    validateMultiJsonRun.status === 0 &&
     !validateMultiRun.stderr.includes("内部错误") &&
-    /多场次|只支持单场/.test(validateMultiRun.stderr) &&
-    validateMultiJson.ok === false &&
-    validateMultiJson.error === "MULTI_PLAN_NOT_SUPPORTED",
-  `exit=${validateMultiRun.status}；stderr：${validateMultiRun.stderr
+    validateMultiJson.ok === true &&
+    Array.isArray(validateMultiJson.seatings) &&
+    validateMultiJson.seatings.length === (thinResult.seatings?.length ?? 0) &&
+    validateMultiJson.seatings.every((seating) => seating.ok === true),
+  `exit=${validateMultiRun.status} ok=${validateMultiJson.ok}；seating 结论 ${validateMultiJson.seatings?.length ?? 0}/${thinResult.seatings?.length ?? 0}；stderr：${validateMultiRun.stderr
     .replaceAll(/\s+/g, " ")
     .trim()
-    .slice(0, 90)}；json.error=${validateMultiJson.error ?? "无"}`,
+    .slice(0, 80)}`,
+);
+
+/* ---------- 17. 输入契约（task-11）：表头宽容 / 缺考两路 / 未匹配不静默 ---------- */
+
+// 17a. 表头花样：准 考 证 号（空格）/ 姓（全角空格）名 / 班 级
+const spacedHeaderFile = path.join(work, "input-header-spaced.xlsx");
+writeSheet(spacedHeaderFile, [
+  ["准 考 证 号", "姓\u3000名", "班 级"],
+  ["H1", "张三", "高三(1)班"],
+  ["H2", "李四", "高三(1)班"],
+  ["H3", "王五", "高三(2)班"],
+]);
+const spacedHeaderRun = runRoster(["--file", spacedHeaderFile]);
+const spacedHeaderStudents = byStudentId(spacedHeaderRun.json?.students);
+const spacedHeaderExpected = [
+  ["H1", "张三", "高三(1)班"],
+  ["H2", "李四", "高三(1)班"],
+  ["H3", "王五", "高三(2)班"],
+];
+check(
+  "输入契约：带空格/全角空格的 准考证号·姓名·班级 表头都能识别",
+  spacedHeaderRun.status === 0 &&
+    spacedHeaderRun.json?.mapping?.id !== undefined &&
+    spacedHeaderRun.json?.mapping?.name !== undefined &&
+    spacedHeaderRun.json?.mapping?.className !== undefined &&
+    spacedHeaderRun.json?.studentCount === 3 &&
+    spacedHeaderExpected.every(([id, name, className]) => {
+      const student = spacedHeaderStudents.get(id);
+      return student?.name === name && student?.className === className;
+    }),
+  `studentCount=${spacedHeaderRun.json?.studentCount ?? "?"}；mapping.id=${spacedHeaderRun.json?.mapping?.id ?? "无"} name=${spacedHeaderRun.json?.mapping?.name ?? "无"} class=${spacedHeaderRun.json?.mapping?.className ?? "无"}`,
+);
+
+// 17b. 别名「考证号」也要认成 id
+const examNoHeaderFile = path.join(work, "input-header-examno.xlsx");
+writeSheet(examNoHeaderFile, [
+  ["考证号", "姓名", "班级"],
+  ["E1", "考生甲", "高三(1)班"],
+  ["E2", "考生乙", "高三(2)班"],
+]);
+const examNoHeaderRun = runRoster(["--file", examNoHeaderFile]);
+const examNoStudents = byStudentId(examNoHeaderRun.json?.students);
+check(
+  "输入契约：「考证号」表头识别为 id",
+  examNoHeaderRun.status === 0 &&
+    examNoHeaderRun.json?.mapping?.id !== undefined &&
+    examNoStudents.get("E1")?.className === "高三(1)班" &&
+    examNoStudents.get("E2")?.className === "高三(2)班",
+  `id 列=${examNoHeaderRun.json?.mapping?.id ?? "无"}；id=${[...examNoStudents.keys()].join("、") || "无"}`,
+);
+
+// 17c. 「班主任」不能当班级列
+const headTeacherFile = path.join(work, "input-header-headteacher.xlsx");
+writeSheet(headTeacherFile, [
+  ["准考证号", "姓名", "班级", "班主任"],
+  ["T1", "考生丙", "高三(3)班", "张老师"],
+  ["T2", "考生丁", "高三(3)班", "李老师"],
+]);
+const headTeacherRun = runRoster(["--file", headTeacherFile]);
+const headTeacherStudents = headTeacherRun.json?.students ?? [];
+check(
+  "输入契约：「班主任」不会被当成班级列",
+  headTeacherRun.status === 0 &&
+    headTeacherStudents.length === 2 &&
+    headTeacherStudents.every(
+      (student) => student.className === "高三(3)班" && !String(student.className).includes("老师"),
+    ) &&
+    headTeacherRun.json?.mapping?.className !== 3,
+  `mapping.className=${headTeacherRun.json?.mapping?.className ?? "无"}；解析出的班级=${[...new Set(headTeacherStudents.map((s) => s.className))].join("/") || "无"}`,
+);
+
+// 17d. 缺考列取值矩阵（空 / 否 / N / no / false / 0 / 正常 / 参加 / 无 / - / — / / 视为不缺席）
+const absentCellValues = [
+  "",
+  "否",
+  "N",
+  "no",
+  "false",
+  "0",
+  "正常",
+  "参加",
+  "无",
+  "-",
+  "—",
+  "/",
+  "病假",
+  "是",
+  "缺席",
+];
+const absentMatrixRows = [["准考证号", "姓名", "班级", "缺考"]];
+absentCellValues.forEach((value, index) => {
+  absentMatrixRows.push([
+    `M${String(index + 1).padStart(2, "0")}`,
+    `考生${index + 1}`,
+    "高三(1)班",
+    value,
+  ]);
+});
+const absentMatrixFile = path.join(work, "input-absent-matrix.xlsx");
+writeSheet(absentMatrixFile, absentMatrixRows);
+const absentMatrixRun = runRoster(["--file", absentMatrixFile]);
+const absentMatrixAbsentIds = (absentMatrixRun.json?.students ?? [])
+  .filter((student) => student.included === false)
+  .map((student) => student.id)
+  .sort();
+check(
+  "输入契约：缺考列取值矩阵（只有 病假/是/缺席 视为缺席）",
+  absentMatrixRun.status === 0 &&
+    absentMatrixRun.json?.studentCount === absentCellValues.length &&
+    JSON.stringify(absentMatrixAbsentIds) === JSON.stringify(["M13", "M14", "M15"]),
+  `缺席=${absentMatrixAbsentIds.join("、") || "无"}（期望 M13、M14、M15）；共 ${absentMatrixRun.json?.studentCount ?? "?"} 人`,
+);
+
+// 17e–17h 共用完整名单（8 人）
+const fullRosterRows = [
+  ["准考证号", "姓名", "班级"],
+  ["S01", "学生01", "高三(1)班"],
+  ["S02", "学生02", "高三(1)班"],
+  ["S03", "学生03", "高三(2)班"],
+  ["S04", "学生04", "高三(2)班"],
+  ["S05", "学生05", "高三(3)班"],
+  ["S06", "学生06", "高三(3)班"],
+  ["S07", "学生07", "高三(1)班"],
+  ["S08", "学生08", "高三(2)班"],
+];
+const fullRosterFile = path.join(work, "input-full-roster.xlsx");
+writeSheet(fullRosterFile, fullRosterRows);
+const absentFromRoster = (result) =>
+  (result.json?.students ?? [])
+    .filter((student) => student.included === false)
+    .map((student) => student.id)
+    .sort();
+
+// 17e. 缺考名单按准考证号（优先）
+const absentByIdFile = path.join(work, "input-absent-by-id.xlsx");
+writeSheet(absentByIdFile, [["准考证号"], ["S02"], ["S04"], ["S05"], ["S07"], ["S08"]]);
+const absentByIdRun = runRoster(["--file", fullRosterFile, "--absent", absentByIdFile]);
+check(
+  "输入契约：缺考名单按准考证号匹配（命中 5 人）",
+  absentByIdRun.status === 0 &&
+    absentByIdRun.json?.studentCount === 8 &&
+    JSON.stringify(absentFromRoster(absentByIdRun)) ===
+      JSON.stringify(["S02", "S04", "S05", "S07", "S08"]) &&
+    /命中/.test(absentByIdRun.output),
+  `included=false：${absentFromRoster(absentByIdRun).join("、") || "无"}；stderr：${absentByIdRun.stderr.replaceAll(/\s+/g, " ").trim().slice(0, 80)}`,
+);
+
+// 17f. 缺考名单按 姓名 + 班级
+const absentByNameClassFile = path.join(work, "input-absent-by-name-class.xlsx");
+writeSheet(absentByNameClassFile, [
+  ["姓名", "班级"],
+  ["学生02", "高三(1)班"],
+  ["学生05", "高三(3)班"],
+  ["学生08", "高三(2)班"],
+]);
+const absentByNameClassRun = runRoster([
+  "--file",
+  fullRosterFile,
+  "--absent",
+  absentByNameClassFile,
+]);
+check(
+  "输入契约：缺考名单按 姓名+班级 匹配（命中 3 人）",
+  absentByNameClassRun.status === 0 &&
+    JSON.stringify(absentFromRoster(absentByNameClassRun)) ===
+      JSON.stringify(["S02", "S05", "S08"]),
+  `included=false：${absentFromRoster(absentByNameClassRun).join("、") || "无"}（期望 S02、S05、S08）`,
+);
+
+// 17g. 未匹配必须报出来（键值可见，不能静默）
+const absentUnmatchedFile = path.join(work, "input-absent-unmatched.xlsx");
+writeSheet(absentUnmatchedFile, [["准考证号"], ["S02"], ["S99"]]);
+const absentUnmatchedRun = runRoster(["--file", fullRosterFile, "--absent", absentUnmatchedFile]);
+const unmatchedOutput = absentUnmatchedRun.output;
+const unmatchedVisible =
+  /未匹配|未找到|找不到|未命中/.test(unmatchedOutput) && unmatchedOutput.includes("S99");
+check(
+  "输入契约：缺考名单未匹配的行必须报出来（不静默）",
+  absentUnmatchedRun.status === 0 &&
+    JSON.stringify(absentFromRoster(absentUnmatchedRun)) === JSON.stringify(["S02"]) &&
+    unmatchedVisible,
+  `included=false：${absentFromRoster(absentUnmatchedRun).join("、") || "无"}；输出含未匹配字样=${/未匹配|未找到|找不到|未命中/.test(unmatchedOutput)}、含键值 S99=${unmatchedOutput.includes("S99")}`,
+);
+
+// 17h. 缺考名单自带「缺考」列 → 完整名单 + 标记，只取真正缺席的行
+const markedFullRows = [["准考证号", "姓名", "班级"]];
+const markedAbsentRows = [["准考证号", "姓名", "班级", "缺考"]];
+const markedValues = { A01: "", A02: "否", A03: "病假", A04: "是", A05: "正常", A06: "-" };
+for (const [id, value] of Object.entries(markedValues)) {
+  markedFullRows.push([id, `标记${id}`, "高三(1)班"]);
+  markedAbsentRows.push([id, `标记${id}`, "高三(1)班", value]);
+}
+const markedFullFile = path.join(work, "input-marked-full.xlsx");
+const markedAbsentFile = path.join(work, "input-marked-absent.xlsx");
+writeSheet(markedFullFile, markedFullRows);
+writeSheet(markedAbsentFile, markedAbsentRows);
+const markedRun = runRoster(["--file", markedFullFile, "--absent", markedAbsentFile]);
+check(
+  "输入契约：缺考名单自带「缺考」列时只取真正缺席的行",
+  markedRun.status === 0 &&
+    markedRun.json?.studentCount === 6 &&
+    JSON.stringify(absentFromRoster(markedRun)) === JSON.stringify(["A03", "A04"]),
+  `included=false：${absentFromRoster(markedRun).join("、") || "无"}（期望 A03、A04）`,
+);
+
+// 17i. 多个疑似 id 列（准考证号 + 学号，值不同）：必须稳定地只认一列，不能混用/串列。
+const dualIdFile = path.join(work, "input-dual-id.xlsx");
+writeSheet(dualIdFile, [
+  ["准考证号", "学号", "姓名", "班级"],
+  ["Z1", "X1", "甲", "高三(1)班"],
+  ["Z2", "X2", "乙", "高三(2)班"],
+]);
+const dualIdRun = runRoster(["--file", dualIdFile]);
+const dualIdStudents = dualIdRun.json?.students ?? [];
+const dualIds = dualIdStudents.map((student) => student.id).sort();
+const dualByName = new Map(dualIdStudents.map((student) => [student.name, student]));
+const dualIdOneColumn =
+  dualIds.every((id) => id.startsWith("Z")) || dualIds.every((id) => id.startsWith("X"));
+check(
+  "输入契约：多个疑似 id 列（准考证号 + 学号）时只认一列、不混用",
+  dualIdRun.status === 0 &&
+    dualIdStudents.length === 2 &&
+    dualIdOneColumn &&
+    dualByName.get("甲")?.className === "高三(1)班" &&
+    dualByName.get("乙")?.className === "高三(2)班",
+  `id 列=${dualIdRun.json?.mapping?.id ?? "无"}；ids=${dualIds.join("、") || "无"}；班级=${dualIdStudents.map((s) => s.className).join("、") || "无"}`,
+);
+
+// 17j. 名单自带「缺考」列 + 缺考名单同时存在 → 两份来源取并集，不能互相覆盖/吞掉。
+const unionFullRows = [["准考证号", "姓名", "班级", "缺考"]];
+for (const row of fullRosterRows.slice(1)) {
+  unionFullRows.push([...row, row[0] === "S03" ? "病假" : ""]);
+}
+const unionFullFile = path.join(work, "input-union-full.xlsx");
+const unionAbsentFile = path.join(work, "input-union-absent.xlsx");
+writeSheet(unionFullFile, unionFullRows);
+writeSheet(unionAbsentFile, [["准考证号"], ["S05"]]);
+const unionRun = runRoster(["--file", unionFullFile, "--absent", unionAbsentFile]);
+check(
+  "输入契约：名单「缺考」列与缺考名单同时存在时取并集（S03 + S05）",
+  unionRun.status === 0 &&
+    JSON.stringify(absentFromRoster(unionRun)) === JSON.stringify(["S03", "S05"]),
+  `included=false：${absentFromRoster(unionRun).join("、") || "无"}（期望 S03、S05）`,
+);
+
+// 17k. 读名单 / 应用缺考名单不能原地改原文件。
+const rosterBytesBefore = readFileSync(fullRosterFile);
+runRoster(["--file", fullRosterFile, "--absent", absentByIdFile]);
+const rosterBytesAfter = readFileSync(fullRosterFile);
+check(
+  "输入契约：读取名单与应用缺考名单不会改动原文件",
+  Buffer.compare(rosterBytesBefore, rosterBytesAfter) === 0,
+  `原文件 ${rosterBytesBefore.length} → ${rosterBytesAfter.length} 字节`,
+);
+
+// 17l. 缺考名单既无 id 又缺班级：必须明确报错，不能按姓名静默匹配。
+const nameOnlyAbsentFile = path.join(work, "input-absent-name-only.xlsx");
+writeSheet(nameOnlyAbsentFile, [["姓名"], ["学生02"]]);
+const nameOnlyRun = runRoster(["--file", fullRosterFile, "--absent", nameOnlyAbsentFile]);
+check(
+  "输入契约：缺考名单既无 id 又缺班级时必须明确报错（不能静默）",
+  (nameOnlyRun.status !== 0 || /班级|className|缺少|无法/.test(nameOnlyRun.output)) &&
+    !absentFromRoster(nameOnlyRun).includes("S02"),
+  `exit=${nameOnlyRun.status}；included=false：${absentFromRoster(nameOnlyRun).join("、") || "无"}；输出：${nameOnlyRun.output
+    .replaceAll(/\s+/g, " ")
+    .trim()
+    .slice(0, 90)}`,
+);
+
+/* ---------- 18. 多场次限定 + 多场次校验（task-14） ---------- */
+
+const constraintStudents = [];
+const addConstraintStudents = (prefix, combination, count) => {
+  for (let i = 1; i <= count; i += 1) {
+    constraintStudents.push({
+      id: `${prefix}${String(i).padStart(2, "0")}`,
+      name: `${prefix}考生${i}`,
+      className: `高三(${i})班`,
+      combination,
+      subjects: COMBO_SUBJECT_IDS[combination],
+    });
+  }
+};
+addConstraintStudents("P", "物化生", 6);
+addConstraintStudents("H", "政史地", 5);
+addConstraintStudents("Z", "物化政", 4);
+addConstraintStudents("D", "物化地", 4);
+
+const constraintJob = {
+  jobVersion: 2,
+  meta: { title: "多场次限定验收" },
+  options: { seed: 20260930 },
+  students: constraintStudents,
+  rooms: [
+    { id: "R1", name: "第1考场", rows: 6, cols: 5 },
+    { id: "R2", name: "第2考场", rows: 7, cols: 6 },
+    { id: "R3", name: "第3考场", rows: 6, cols: 5, dedicatedSubjects: ["politics"] },
+    { id: "R4", name: "第4考场", rows: 6, cols: 5 },
+    { id: "R5", name: "第5考场", rows: 6, cols: 5 },
+    { id: "R6", name: "第6考场", rows: 7, cols: 6 },
+  ],
+  constraints: [
+    { id: "C1", note: "指定大考场首排", studentIds: ["P01", "P02"], roomId: "R2", rows: ["first"] },
+    { id: "C2", note: "指定大考场靠门", studentIds: ["P03"], roomId: "R2", cols: ["door"] },
+    { id: "C3", note: "指定小考场首排", studentIds: ["P06"], roomId: "R1", rows: ["first"] },
+    { id: "C4", note: "指定大考场靠窗", studentIds: ["P05"], roomId: "R2", cols: ["window"] },
+    { id: "C5", note: "首排（与 C6 交集）", studentIds: ["P04"], rows: ["first"] },
+    { id: "C6", note: "靠门（与 C5 交集）", studentIds: ["P04"], cols: ["door"] },
+    { id: "C7", note: "政史地全体末排", combinations: ["政史地"], rows: ["last"] },
+    { id: "C8", note: "H01 靠窗", studentIds: ["H01"], cols: ["window"] },
+    { id: "C9", note: "物化政全体靠门", combinations: ["物化政"], cols: ["door"] },
+    { id: "C10", note: "物化地全体首排", combinations: ["物化地"], rows: ["first"] },
+    { id: "C11", note: "考历史的末排（subjects 选择器）", subjects: ["history"], rows: ["last"] },
+    { id: "C12", note: "指定小考场靠窗", studentIds: ["P06"], roomId: "R1", cols: ["window"] },
+  ],
+};
+const constraintPath = path.join(work, "multi-constraints.json");
+const constraintDir = path.join(work, "multi-constraints-out");
+writeFileSync(constraintPath, JSON.stringify(constraintJob, null, 2));
+const constraintRun = runFull([
+  "--json",
+  "plan",
+  "--job",
+  constraintPath,
+  "--out-dir",
+  constraintDir,
+]);
+const constraintResult = JSON.parse(constraintRun.stdout || "{}");
+const assignMany = (ids) =>
+  ids.flatMap((id) => studentSeatAssignments(constraintResult, constraintJob, id));
+
+// 18a. rows:["first"]：大考场（R2，7×6，C1 钉住）与小考场（R1，6×5，C3 钉住）各一例；
+//      另复核物化地全体（C10，不钉考场）。
+const largeFirst = assignMany(["P01", "P02"]);
+const smallFirst = assignMany(["P06"]);
+const dFirst = assignMany(["D01", "D02", "D03", "D04"]);
+const constraintErrors = (constraintResult.diagnostics ?? []).filter(
+  (diagnostic) => diagnostic.severity === "error",
+);
+check(
+  '多场次限定：rows:["first"] 在大考场（R2）与小考场（R1）都落第 1 排',
+  constraintResult.ok === true &&
+    (constraintResult.unmetConstraints ?? []).length === 0 &&
+    constraintErrors.length === 0 &&
+    largeFirst.length > 0 &&
+    largeFirst.every((assignment) => assignment.roomId === "R2" && assignment.row === 1) &&
+    smallFirst.length > 0 &&
+    smallFirst.every((assignment) => assignment.roomId === "R1" && assignment.row === 1) &&
+    dFirst.length > 0 &&
+    dFirst.every((assignment) => assignment.row === 1),
+  `ok=${constraintResult.ok} unmet=${(constraintResult.unmetConstraints ?? []).length} errors=${
+    constraintErrors.map((diagnostic) => diagnostic.code).join(",") || "无"
+  }；R2 首排 ${largeFirst.length} 次；R1 首排 ${smallFirst.length} 次；物化地首排 ${dFirst.length} 次`,
+);
+
+// 18b. cols:["door"] = 业务第 1 列；cols:["window"] = 大考场第 6 列（R2）/ 小考场第 5 列（R1）
+const doorAssignments = assignMany(["P03", "Z01", "Z02", "Z03", "Z04"]);
+const largeWindow = assignMany(["P05"]);
+const smallWindow = assignMany(["P06"]);
+const hWindow = assignMany(["H01"]);
+check(
+  '多场次限定：cols:["door"]=第 1 列；["window"]=大考场第 6 列 / 小考场第 5 列',
+  constraintResult.ok === true &&
+    doorAssignments.length > 0 &&
+    doorAssignments.every((assignment) => assignment.col === 1) &&
+    largeWindow.length > 0 &&
+    largeWindow.every((assignment) => assignment.roomId === "R2" && assignment.col === 6) &&
+    smallWindow.length > 0 &&
+    smallWindow.every((assignment) => assignment.roomId === "R1" && assignment.col === 5) &&
+    hWindow.length > 0 &&
+    hWindow.every(
+      (assignment) =>
+        assignment.col ===
+        (constraintJob.rooms.find((room) => room.id === assignment.roomId)?.cols ?? -1),
+    ),
+  `靠门 ${doorAssignments.length} 次（列=${[...new Set(doorAssignments.map((a) => a.col))].join("/")}）；R2 靠窗 ${largeWindow.map((a) => a.col).join("/") || "—"}；R1 靠窗 ${smallWindow.map((a) => a.col).join("/") || "—"}；H01=${hWindow.map((a) => `${a.roomId}#${a.col}`).join("、") || "无"}`,
+);
+
+// 18c. roomId:"R2" → 命中学生所有时段都在 R2，且 R2 是其组合批次
+const roomIdAssignments = assignMany(["P01", "P02"]);
+const p01Seatings = (constraintResult.seatings ?? []).filter((seating) =>
+  seating.studentIds.includes("P01"),
+);
+check(
+  '多场次限定：roomId:"R2" 的命中学生所有时段都在 R2，且 R2 是其组合批次',
+  constraintResult.ok === true &&
+    roomIdAssignments.length > 0 &&
+    roomIdAssignments.every((assignment) => assignment.roomId === "R2") &&
+    p01Seatings.length >= 1 &&
+    p01Seatings.every((seating) => seating.roomId === "R2") &&
+    p01Seatings.every((seating) =>
+      seating.studentIds.every(
+        (id) =>
+          constraintJob.students.find((student) => student.id === id)?.combination === "物化生",
+      ),
+    ),
+  `P01/P02 共 ${roomIdAssignments.length} 次，房间=${[...new Set(roomIdAssignments.map((a) => a.roomId))].join("/") || "—"}；P01 所属座位方案=${p01Seatings.map((s) => `${s.roomId}(${s.studentIds.length}人)`).join("、") || "无"}`,
+);
+
+// 18d. 两条规则取交集：P04 = 首排（C3）∩ 靠门（C4）
+const p04Assignments = assignMany(["P04"]);
+check(
+  "多场次限定：同一学生两条规则取交集（首排 ∩ 靠门 → 第 1 排第 1 列）",
+  p04Assignments.length > 0 &&
+    p04Assignments.every((assignment) => assignment.row === 1 && assignment.col === 1),
+  `P04 共 ${p04Assignments.length} 次；行列=${p04Assignments.map((a) => `(${a.row},${a.col})`).join(" ") || "无"}`,
+);
+
+// 18e. combinations / subjects 选择器在多场次下同样生效
+const hAssignments = assignMany(["H01", "H02", "H03", "H04", "H05"]);
+const zAssignments = assignMany(["Z01", "Z02", "Z03", "Z04"]);
+check(
+  "多场次限定：combinations / subjects 选择器生效（政史地末排、物化政靠门、物化地首排）",
+  constraintResult.ok === true &&
+    hAssignments.length > 0 &&
+    hAssignments.every(
+      (assignment) =>
+        assignment.row ===
+        (constraintJob.rooms.find((room) => room.id === assignment.roomId)?.rows ?? -1),
+    ) &&
+    dFirst.length > 0 &&
+    dFirst.every((assignment) => assignment.row === 1) &&
+    zAssignments.length > 0 &&
+    zAssignments.every((assignment) => assignment.col === 1),
+  `政史地 ${hAssignments.length} 次（末排）；物化政 ${zAssignments.length} 次（靠门）；物化地 ${dFirst.length} 次（首排）`,
+);
+
+// 18f. 无法满足的限定：必须明确诊断且不导出名单，绝不静默
+const unsatisfiableJob = {
+  jobVersion: 2,
+  meta: { title: "多场次限定不可满足" },
+  options: { seed: 20260930 },
+  students: constraintStudents.filter(
+    (student) => student.combination === "物化生" || student.combination === "物化政",
+  ),
+  rooms: [
+    { id: "R1", name: "第1考场", rows: 6, cols: 5 },
+    { id: "R2", name: "第2考场", rows: 6, cols: 5, dedicatedSubjects: ["politics"] },
+    { id: "R3", name: "第3考场", rows: 6, cols: 5 },
+  ],
+  constraints: [{ id: "X1", note: "把物化生钉进政治专用考场", studentIds: ["P01"], roomId: "R2" }],
+};
+const unsatisfiablePath = path.join(work, "multi-constraints-unsat.json");
+const unsatisfiableDir = path.join(work, "multi-constraints-unsat-out");
+writeFileSync(unsatisfiablePath, JSON.stringify(unsatisfiableJob, null, 2));
+const unsatisfiableRun = runFull([
+  "--json",
+  "plan",
+  "--job",
+  unsatisfiablePath,
+  "--out-dir",
+  unsatisfiableDir,
+]);
+const unsatisfiableResult = JSON.parse(unsatisfiableRun.stdout || "{}");
+const unsatisfiableDiagnostics = (unsatisfiableResult.diagnostics ?? []).map(
+  (diagnostic) => `${diagnostic.code}: ${diagnostic.message}`,
+);
+check(
+  "多场次限定无法满足：明确诊断 + 不静默 + 不导出名单",
+  unsatisfiableResult.ok === false &&
+    (unsatisfiableDiagnostics.some((entry) =>
+      /CONSTRAINT|RULE_INTERSECT|ROOM|SEARCH_FAILED|NO_ROOMS|CAPACITY/.test(entry),
+    ) ||
+      (unsatisfiableResult.unmetConstraints ?? []).length > 0) &&
+    /P01|X1|限定|专用/.test(`${unsatisfiableRun.stdout}${unsatisfiableRun.stderr}`) &&
+    fileSize(path.join(unsatisfiableDir, "按班级考场安排.xlsx")) < 0 &&
+    unsatisfiableRun.status !== 0,
+  `ok=${unsatisfiableResult.ok} exit=${unsatisfiableRun.status}；诊断：${
+    unsatisfiableDiagnostics.slice(0, 3).join(" | ") || "无"
+  }；unmet=${(unsatisfiableResult.unmetConstraints ?? []).length}`,
+);
+
+// 18g. validate 对多场次正常结果：exit 0，每套 seating 都有结论
+const constraintPlanPath = path.join(constraintDir, "plan.json");
+const validateAllJsonRun = runFull([
+  "--json",
+  "validate",
+  "--job",
+  constraintPath,
+  "--plan",
+  constraintPlanPath,
+]);
+let validateAllJson = {};
+try {
+  validateAllJson = JSON.parse(validateAllJsonRun.stdout);
+} catch {
+  validateAllJson = {};
+}
+const validateAllTextRun = runFull([
+  "validate",
+  "--job",
+  constraintPath,
+  "--plan",
+  constraintPlanPath,
+]);
+const validateAllSeatings = validateAllJson.seatings ?? [];
+const validateTextOutput = `${validateAllTextRun.stdout}${validateAllTextRun.stderr}`;
+check(
+  "多场次校验：validate 对正常结果 exit 0，且每套 seating 都有结论",
+  constraintRun.status === 0 &&
+    validateAllJsonRun.status === 0 &&
+    validateAllJson.ok === true &&
+    validateAllSeatings.length === (constraintResult.seatings ?? []).length &&
+    validateAllSeatings.every((seating) => seating.ok === true) &&
+    validateAllSeatings.every((seating) => (seating.seats ?? 0) > 0) &&
+    validateAllTextRun.status === 0 &&
+    (constraintResult.seatings ?? []).every((seating) =>
+      validateTextOutput.includes(seating.roomName),
+    ),
+  `exit=${validateAllJsonRun.status} ok=${validateAllJson.ok}；seating 结论 ${validateAllSeatings.length}/${constraintResult.seatings?.length ?? 0}；issues=${(validateAllJson.issues ?? []).length}`,
+);
+
+// 18h. 人为改坏：同一座位两人 → exit 3 且原因可读
+const corruptedDupPlan = JSON.parse(readFileSync(constraintPlanPath, "utf8"));
+let corruptedDupApplied = false;
+const dupSeating = (corruptedDupPlan.seatings ?? []).find(
+  (seating) => (seating.result?.entries ?? []).length >= 2,
+);
+if (dupSeating) {
+  const { entries } = dupSeating.result;
+  entries[1].seatNo = entries[0].seatNo;
+  corruptedDupApplied = true;
+}
+const corruptedDupPath = path.join(work, "plan-corrupted-duplicate-seat.json");
+writeFileSync(corruptedDupPath, JSON.stringify(corruptedDupPlan, null, 2));
+const corruptedDupRun = runFull([
+  "--json",
+  "validate",
+  "--job",
+  constraintPath,
+  "--plan",
+  corruptedDupPath,
+]);
+let corruptedDupJson = {};
+try {
+  corruptedDupJson = JSON.parse(corruptedDupRun.stdout);
+} catch {
+  corruptedDupJson = {};
+}
+check(
+  "多场次校验：人为造同址两人 → exit 3 且原因可读",
+  corruptedDupApplied &&
+    corruptedDupRun.status === 3 &&
+    corruptedDupJson.ok === false &&
+    (corruptedDupJson.issues ?? []).length > 0 &&
+    /SEAT|座位/.test(JSON.stringify(corruptedDupJson.issues)),
+  `exit=${corruptedDupRun.status} ok=${corruptedDupJson.ok}；issues=${(corruptedDupJson.issues ?? []).map((issue) => issue.code).join(",") || "无"}`,
+);
+
+// 18i. 人为改坏：把受限学生挪出首排 → exit 3 且限定未满足被指出
+const corruptedConstraintPlan = JSON.parse(readFileSync(constraintPlanPath, "utf8"));
+const targetSeating = (corruptedConstraintPlan.seatings ?? []).find((seating) =>
+  (seating.studentIds ?? []).includes("P01"),
+);
+const targetRoom = targetSeating
+  ? constraintJob.rooms.find((room) => room.id === targetSeating.roomId)
+  : undefined;
+const targetEntry = targetSeating?.result?.entries?.find((entry) => entry.studentId === "P01");
+let corruptedConstraintApplied = false;
+if (targetSeating && targetRoom && targetEntry) {
+  const usedSeats = new Set(Object.values(targetSeating.seatNoById ?? {}));
+  let nextSeat = targetRoom.rows + 1;
+  while (usedSeats.has(nextSeat)) nextSeat += 1;
+  const rc = seatNoToRowCol(targetRoom.rows, nextSeat);
+  const oldSeat = targetEntry.seatNo;
+  targetEntry.seatNo = nextSeat;
+  targetEntry.row = rc.row;
+  targetEntry.col = rc.col;
+  targetEntry.physicalCol = targetRoom.cols - rc.col + 1;
+  targetSeating.seatNoById.P01 = nextSeat;
+  targetSeating.studentBySeatNo = Object.fromEntries(
+    Object.entries(targetSeating.studentBySeatNo).filter(([seatNo]) => Number(seatNo) !== oldSeat),
+  );
+  targetSeating.studentBySeatNo[nextSeat] = "P01";
+  corruptedConstraintApplied = true;
+}
+const corruptedConstraintPath = path.join(work, "plan-corrupted-constraint-seat.json");
+writeFileSync(corruptedConstraintPath, JSON.stringify(corruptedConstraintPlan, null, 2));
+const corruptedConstraintRun = runFull([
+  "--json",
+  "validate",
+  "--job",
+  constraintPath,
+  "--plan",
+  corruptedConstraintPath,
+]);
+let corruptedConstraintJson = {};
+try {
+  corruptedConstraintJson = JSON.parse(corruptedConstraintRun.stdout);
+} catch {
+  corruptedConstraintJson = {};
+}
+check(
+  "多场次校验：把受限学生挪出首排 → exit 3 且限定未满足被指出",
+  corruptedConstraintApplied &&
+    corruptedConstraintRun.status === 3 &&
+    corruptedConstraintJson.ok === false &&
+    /CONSTRAINT|限定|未满足/.test(JSON.stringify(corruptedConstraintJson.issues ?? [])),
+  `exit=${corruptedConstraintRun.status} ok=${corruptedConstraintJson.ok}；issues=${
+    (corruptedConstraintJson.issues ?? []).map((issue) => issue.code).join(",") || "无"
+  }`,
+);
+
+// 18j. 带限定场景的硬规则独立复核
+check(
+  "带限定的多场次结果：硬规则独立复核零违规",
+  constraintResult.ok === true &&
+    hardRuleViolations(constraintResult).length === 0 &&
+    seatingSubjectViolations(constraintResult).length === 0 &&
+    seatCollisions(constraintResult).length === 0 &&
+    !diagnosticCodes(constraintResult).includes("ROOM_SUBJECT_CLASH"),
+  `座位方案 ${constraintResult.seatings?.length ?? 0} 套；硬规则违规 ${hardRuleViolations(constraintResult).length} 处`,
 );
 
 /* ---------- 汇总 ---------- */
