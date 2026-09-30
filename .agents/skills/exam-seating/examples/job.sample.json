@@ -347,9 +347,9 @@
     },
     {
       "id": "C2",
-      "note": "考政治的靠窗",
-      "subjects": ["politics"],
-      "cols": ["window"]
+      "note": "物化政全体靠门（常规班不坐这个考场）",
+      "combinations": ["物化政"],
+      "cols": ["door"]
     },
     {
       "id": "C3",

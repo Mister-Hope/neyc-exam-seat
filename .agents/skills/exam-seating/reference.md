@@ -1,7 +1,77 @@
 # exam-seat 参考手册
 
-配套 `SKILL.md` 使用。这里放完整字段表（含 job.json v2 的选科与多场次）、诊断码全表、CLI 全参数。
+配套 `SKILL.md` 使用。这里放名单输入契约、完整字段表（含 job.json v2 的选科与多场次）、诊断码全表、CLI 全参数。
 字段语义以 `docs/design.md` 为准。
+
+---
+
+## 0. 名单输入契约
+
+### 0.1 必填列与列别名
+
+| 字段          | 必填   | 列别名（识别用，至少含这些）                                                                                     |
+| ------------- | ------ | ---------------------------------------------------------------------------------------------------------------- |
+| `id`          | **是** | 准考证号、**考证号**、学号、考号、考生号、准考证、学籍号、考籍号、编号、id、studentid、studentno、examid、examno |
+| `name`        | **是** | 姓名、学生姓名、考生姓名、名字、name、studentname                                                                |
+| `className`   | **是** | 班级、行政班、所在班级、教学班、班、class、classname、grade                                                      |
+| `absent`      | 否     | 缺考、是否缺考、缺考标记、缺考状态、缺考情况、不参加、不参加考试、缺席、isexcluded、absent                       |
+| `combination` | 否     | 选科、选考、科目、组合                                                                                           |
+| `gender`      | 否     | 性别、sex、gender                                                                                                |
+| `note`        | 否     | 备注、说明、note、remark                                                                                         |
+
+**表头识别是宽松的**：先把表头归一化（去掉**所有空白**含全角空格与 `\t`、全角 ASCII → 半角、
+去掉 `_ - （） () ： :` 等分隔符、转小写）再匹配——所以 `班 级`、`姓 名`、`准 考 证 号` 都能认。
+匹配顺序是**先全等、再包含**，且包含匹配要求别名长度 ≥ 2，所以 **`班主任` 不会被当成班级列**。
+同一列只会被一个字段占用（优先级 `id → name → className → absent → combination → gender → note`）。
+
+**不要手写列名 / 猜列位置**：用 `@exam-seat/io` 的 `readRoster`（以及 `parseRoster` / `normalizeHeader`），
+拿不准就把输出的 `headers` 与 `mapping` 交给用户确认。
+
+### 0.2 缺考路线 A：同一份名单里的「缺考」列
+
+名单里若有 `absent` 列，这份文件就是**完整名单 + 标记**：
+
+| 单元格内容（去空白、全角转半角后）                                                                   | 判定     |
+| ---------------------------------------------------------------------------------------------------- | -------- |
+| 空                                                                                                   | 不缺席   |
+| `否` / `0` / `N` / `no` / `false` / `正常` / `参加` / `参加考试` / `不缺考` / `无` / `-` / `—` / `/` | 不缺席   |
+| 其它任何内容（如 `是` / `1` / `Y` / `病假` / `缺考`）                                                | **缺席** |
+
+缺席的学生置 `included: false`（等价于网页上的「排除缺考」），容量校验与统计都按**实际参考**算。
+
+### 0.3 缺考路线 B：独立的缺考名单文件
+
+```bash
+exam-seat --json roster --file 全名单.xlsx --absent 缺考名单.xlsx > roster.json
+exam-seat --json roster --file 全名单.xlsx --absent 缺考名单.xlsx --absent-sheet 缺考
+```
+
+匹配规则：
+
+- 缺考名单里**有 `id` 列就优先用 `id`**（准考证号/考证号…）精确匹配；
+- 没有 `id` 列时，必须**同时**有 `姓名 + 班级`，按 (班级, 姓名) 成对匹配；缺列 → error issue 说明缺哪列；
+- 匹配键会归一化（去全部空白、全角转半角、字母数字转小写）；
+- 命中者 `included: false`；**未命中的行会被报出来**（写出第几行与键值，warning），不能静默丢弃——要么让用户核对，要么说明这些行没匹配上；
+- 如果「缺考名单」文件**自己带 `absent` 列**，就按 §0.2 的「完整名单 + 标记」处理，只取真正缺席的行。
+
+CLI 应用后会打印「缺考名单命中 N 人 / 未匹配 M 行」（措辞以实际输出为准）。
+
+### 0.4 在代码里怎么读
+
+`@exam-seat/io` 根入口（浏览器 / Node 通用）：
+
+| API                                           | 作用                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------ |
+| `readRoster(sheet, mapping?)` / `parseRoster` | 表 → `students`（含 `included`）+ `issues` + `headers` / `mapping`       |
+| `readAbsentKeys(sheet, mapping?)`             | 缺考名单表 → `{ keys, issues }`（按 §0.3 规则）                          |
+| `applyAbsentKeys(students, keys)`             | → `{ students, matched, unmatched, issues }`；**返回新数组，不改原数组** |
+
+`included: false` 就是「本次不参加」，它是 `Student` 的字段，不是新字段。
+
+### 0.5 网页侧
+
+网页「导入名单」会自动预填列映射（可手改，改完立刻重解析并保住已排除状态），并支持「导入**缺考名单**」
+走同一套匹配规则；页面上的「排除缺考」与 `included: false` 是同一件事，AI 给用户的说明要与之一致。
 
 ---
 
@@ -16,7 +86,7 @@
 | `options`     | object       | 否     | 见下表                                |
 | `students`    | Student[]    | **是** | 全部学生                              |
 | `rooms`       | RoomSpec[]   | **是** | 考场列表，顺序即「第1考场、第2考场…」 |
-| `constraints` | Constraint[] | 否     | 限定规则（多场次暂不应用，见 §2.6）   |
+| `constraints` | Constraint[] | 否     | 限定规则；多场次同样生效（见 §2.6）   |
 
 ### options
 
@@ -193,13 +263,22 @@
 
 `SEARCH_FAILED` 不一样：它是 `--relax` / 降级后的**主动选择**，结果**照常导出**（见 §3.4）。
 
-### 2.6 多场次暂不支持 `constraints`（限定）
+### 2.6 多场次也支持 `constraints`（限定）
 
-`planAll` 现在**不应用** job 里的限定（限定可能要求把学生钉在指定考场，而多场次是「按组合分组分房」，暂时没有把限定纳入分房的算法）。
-但**绝不静默**：只要 job 带了非空 `constraints`，多场次结果诊断里必有 `CONSTRAINTS_IGNORED_MULTI`（warning）。
+多场次（`planAll`）**会应用** job 里的限定，规则如下：
 
-- 需要限定生效：先用 `--single` 按单场排，或去掉限定。
-- 真正支持限定仍是待办，见 `docs/issues.md` 议题 4。
+- 每套座位只下发「命中该座位学生 **且** `roomId` 为空或等于本考场」的规则；
+- `rows` / `cols` 按**该学生实际坐的那套座位的考场**解析：`first` / `last` / `door` / `window`，
+  以及指定考场后的绝对行列号，都生效；
+- `roomId` **参与分房**：被钉到某考场的学生只能进那个考场（所在批次优先排进去）。
+
+**满足不了就是失败，绝不静默放宽**：装不下 / 与其它限定冲突 / `roomId` 指向学生不会去的考场，
+一律报 error（`CONSTRAINT_OVERSATURATED` / `RULE_INTERSECT_EMPTY` / `CONSTRAINT_EMPTY_DOMAIN`），
+**不导出名单**，也不会偷偷改成「不限考场」。
+
+**未满足的限定 = 结果失败**：`PlanAllResult.unmetConstraints` 非空即 `ok=false`
+（每项带 `roomId` / `roomName`）；CLI 多场次摘要里单列一段「未满足的限定：<id> · <考场> ｜ 涉及 N 人 ｜ 原因」。
+`CONSTRAINTS_IGNORED_MULTI` 只是**历史码**（正常路径不再产生），见到它说明数据来自旧版本。
 
 ### 2.7 空置考场
 
@@ -227,15 +306,16 @@
 
 ### 3.2 多场次 `PlanAllResult`
 
-| 字段            | 类型                           | 说明                                                 |
-| --------------- | ------------------------------ | ---------------------------------------------------- |
-| `ok`            | boolean                        | 所有座位方案都 ok 且没有 error 诊断                  |
-| `slots`         | `TimeSlot[]`                   | 时段划分（`id` / `name` / `subjects`，见 §2.3）      |
-| `seatings`      | `SeatingPlan[]`                | 一套座位方案 = 一个考场里一批固定学生 + 一套固定座位 |
-| `byStudent`     | `StudentSchedule[]`            | 每人「时段 → 考场 + 座位」                           |
-| `emptyRooms`    | string[]                       | 一个学生都没安排的考场 id → 可以取消                 |
-| `overRoomLimit` | `{ studentId, name, count }[]` | 考场数超过 `maxRoomsPerStudent` 的学生（正常为空）   |
-| `diagnostics`   | `Diagnostic[]`                 | 诊断与建议                                           |
+| 字段               | 类型                                                       | 说明                                                      |
+| ------------------ | ---------------------------------------------------------- | --------------------------------------------------------- |
+| `ok`               | boolean                                                    | 所有座位方案都 ok、没有 error、且 `unmetConstraints` 为空 |
+| `slots`            | `TimeSlot[]`                                               | 时段划分（`id` / `name` / `subjects`，见 §2.3）           |
+| `seatings`         | `SeatingPlan[]`                                            | 一套座位方案 = 一个考场里一批固定学生 + 一套固定座位      |
+| `byStudent`        | `StudentSchedule[]`                                        | 每人「时段 → 考场 + 座位」                                |
+| `emptyRooms`       | string[]                                                   | 一个学生都没安排的考场 id → 可以取消                      |
+| `overRoomLimit`    | `{ studentId, name, count }[]`                             | 考场数超过 `maxRoomsPerStudent` 的学生（正常为空）        |
+| `unmetConstraints` | `{ constraintId, studentIds, reason, roomId, roomName }[]` | 各套座位汇总的未满足限定；**非空即 `ok=false`**           |
+| `diagnostics`      | `Diagnostic[]`                                             | 诊断与建议                                                |
 
 `SeatingPlan`：
 
@@ -301,8 +381,9 @@
 - **阻止导出**：`ROOM_SUBJECT_CLASH`、`CAPACITY_INSUFFICIENT`、`NO_STUDENTS`、`NO_ROOMS`、`INVALID_ROOM_SIZE`、
   `STUDENT_DUPLICATE_ID`、`STUDENT_MISSING_CLASS`、`CLASS_LIMIT_EXCEEDED`、`SEAT_CONFLICT`、`UNKNOWN_ROOM_ID`、
   `CONSTRAINT_*`、`RULE_INTERSECT_EMPTY`
-- **不阻止导出**：`SEARCH_FAILED`、`TOO_FEW_CLASSES`、`ROOMS_SHARED`、`ROOMS_OVERPROVISIONED`、`CONSTRAINTS_IGNORED_MULTI`、
+- **不阻止导出**：`SEARCH_FAILED`、`TOO_FEW_CLASSES`、`ROOMS_SHARED`、`ROOMS_OVERPROVISIONED`、
   `STUDENT_MISSING_NAME` / `STUDENT_MISSING_SUBJECTS`、`UNKNOWN_STUDENT_ID`、`ABSOLUTE_ROWCOL_WITHOUT_ROOM`
+  （`CONSTRAINTS_IGNORED_MULTI` 是历史码，正常不再产生）
 
 CLI 拦下时会在 stderr 说明「结果未通过校验，已只导出 plan.json / job.json，未导出名单与监考表」并逐条列出 error；
 判据来自 core 的 `blocksListExport(diagnostics)`（码表 `BLOCKING_EXPORT_CODES`）。
@@ -337,7 +418,7 @@ CLI 拦下时会在 stderr 说明「结果未通过校验，已只导出 plan.js
 | `ROOMS_OVERPROVISIONED`         | info    | 座位远多于考生，靠后的考场会空置                   | 提示可减少考场数                                                                   |
 | `ROOMS_SHARED`                  | warning | 多场次：`fillRooms` 下多个批次共用考场             | 合并成一套座位（学生并集），标题 = 考场名（科目并集），仍出 1 张监考表             |
 | `ROOM_SUBJECT_CLASH`            | error   | 同一考场同一时段出现两门科目（违反硬规则）         | 调整分房或加考场；该结果**不得导出**                                               |
-| `CONSTRAINTS_IGNORED_MULTI`     | warning | 多场次模式下 job 带了 `constraints`                | 本次未应用限定：改用 `--single` 单场排，或去掉限定                                 |
+| `CONSTRAINTS_IGNORED_MULTI`     | warning | **历史码**：多场次曾忽略限定                       | 现已支持限定（§2.6），正常路径不再产生；见到说明数据来自旧版本                     |
 | `TOO_FEW_CLASSES`               | warning | 班级数 < 9，已自动退化到 4 邻域                    | **不算错误**，但必须告诉用户「对角允许同班了」                                     |
 | `SEARCH_FAILED`                 | error   | 预检通过但求解没做到零冲突                         | 读 `evidence.bottleneck` 定位瓶颈，再决定降级还是调整考场                          |
 
@@ -360,7 +441,7 @@ CLI 拦下时会在 stderr 说明「结果未通过校验，已只导出 plan.js
 exam-seat [--json] <命令> [选项]
 
 命令：
-  roster     --file <xlsx> [--sheet <名|下标>] [--out <file>]
+  roster     --file <xlsx> [--sheet <名|下标>] [--absent <xlsx>] [--absent-sheet <名|下标>] [--out <file>]
   rooms      --spec "1-20:small,21-25:large,26:6x4"
   numbering  [--rows 6] [--cols 5] [--door right|left]
   template   [--out job.json]
@@ -372,7 +453,11 @@ exam-seat [--json] <命令> [选项]
 
 - `--job -` / `--plan -` 从 **stdin** 读，不用落临时文件。
 - `--json` 时 **stdout 只输出一个 JSON 对象**，所有日志走 stderr。
+- `roster --absent <缺考名单.xlsx>` 应用缺考名单（见 §0.3），并打印命中 / 未匹配统计。
 - `plan` 在名单带选科时自动走多场次；`--single` 强制单场。
+- `validate` **单场与多场次都能校验**：多场次（`plan.json` 里含 `seatings`）走 `validateAll()`，
+  逐 seating 重建子 job 重验并**独立复核**「限定是否真的满足」「同一考场同一时段只有一科」「座位唯一」，
+  输出每套座位结论 + 汇总，`ok` → 退出码 `0`，否则 `3`。交付前跑一次。
 - `--out-dir` 单场写出：`考场安排名单.xlsx`、`考场座位表.xlsx`、`plan.json`、`job.json`；
   **多场次写出：`按班级考场安排.xlsx`、`考场监考表.xlsx`、`plan.json`、`job.json`**（`job.json` 已剔除空置考场；结构性 error 时只写 `plan.json` + `job.json`，见 §3.4）。
 
@@ -415,8 +500,8 @@ exam-seat precheck --job job.multi.json
 exam-seat plan --job job.multi.json --out-dir out
 # → out/按班级考场安排.xlsx + out/考场监考表.xlsx + out/plan.json + out/job.json（job.json 已剔除空置考场）
 
-# 需要限定生效时回单场
-exam-seat plan --job job.multi.json --single --out-dir out-single
+# 交付前独立校验多场次结果（限定满足 / 硬规则 / 座位唯一）
+exam-seat validate --job job.multi.json --plan out/plan.json
 ```
 
 用 stdio 免落盘：
@@ -426,4 +511,5 @@ cat job.json | exam-seat --json plan --job - | jq '.ok, .stats.conflicts'
 ```
 
 可运行样例：`examples/job.sample.json`（36 人、四种组合、政治/地理共用一个专用考场）。
-它带 4 条 `constraints`，所以多场次跑出来会有一条 `CONSTRAINTS_IGNORED_MULTI`（warning）——这正是「多场次不应用限定」的提醒。
+它带 4 条 `constraints`（首排 / 按科目与班级选择器 / 四角），多场次下这些限定会**真正生效**；
+跑完记得用 `exam-seat validate --job … --plan out/plan.json` 复核。
