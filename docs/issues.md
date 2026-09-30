@@ -61,3 +61,34 @@ core / io / CLI 已经支持多场次（`planAll`、按班级与按考场的两�
 
 - 单场路径（没有选科字段的名单）行为不能变。
 - 第 ⑤ 步的预检 / 诊断 / 建议一键应用机制要复用，不要另起一套。
+
+---
+
+## 议题 3：Skill 还没跟上 job.json v2 / 多场次（S8）
+
+**现状**
+
+`.agents/skills/exam-seating/SKILL.md` 与同目录 `reference.md` 里，
+`选科` / `combination` / `planAll` / `多场次` / `dedicatedSubjects` 这些关键词出现 **0 次**。
+也就是说：core / io / CLI 已经支持选科与多场次，但**项目级 skill 完全没写**——
+AI 照 skill 办事时，不知道 job.json 已经是 v2，也不知道「名单带选科会自动走多场次、
+交付物是 `按班级考场安排.xlsx` + `考场监考表.xlsx`」。
+
+这是目前最容易让 AI 走错路的信息缺口（比代码缺口更紧急）。
+
+**验收标准**
+
+1. 只带这份 skill 的 agent，能完成这条链路：
+   「名单在 `roster.xlsx`（含选科列），物化政的人政治去专用考场」→ 生成 v2 job.json →
+   `exam-seat plan --job job.json --out-dir out` → 交付两个多场次工作簿，
+   并说明「常规组合全程不换考场、非常规组合中途换一次」。
+2. `SKILL.md` 渲染后仍 **< 8192 字符**（当前约 5.5 KB）；完整字段表与诊断码表放 `reference.md`。
+3. `examples/job.sample.json` 里有一个**带选科**的样例（含 `combination` / `subjects` /
+   `dedicatedSubjects`）。
+4. 不改 core 行为，`pnpm verify` 全绿（当前基线 177 单测 / 26 验收）。
+
+**约束**
+
+- v2 的高频坑位至少写进 SKILL.md：名单带选科即多场次、`--single` 才回单场、
+  专用考场用 `dedicatedSubjects` 手工指定（可兼多科）、空置考场会被上报可取消。
+- 不要复制整份 JSON Schema 进 SKILL.md，指路到 `reference.md`。
