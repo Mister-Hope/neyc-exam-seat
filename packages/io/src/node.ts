@@ -4,19 +4,69 @@ import nodePath from "node:path";
 import type { Job, PlanAllResult, PlanResult, RoomSpec } from "@exam-seat/core";
 
 import {
+  applyAbsentKeys,
   buildClassScheduleWorkbook,
   buildInvigilatorWorkbook,
   buildPlanWorkbook,
   buildRoomSheets,
   pruneEmptyRooms,
+  readAbsentKeys,
   readRoster,
+  readWorkbook,
   usedRoomIds,
 } from "./index";
-import type { ReadRosterOptions, RosterReadResult } from "./index";
+import type { ReadRosterOptions, RosterReadResult, SheetData } from "./index";
 
-/** Node 侧：直接读一个 .xlsx 名单文件。 */
-export function readRosterFile(path: string, options?: ReadRosterOptions): RosterReadResult {
-  return readRoster(readFileSync(nodePath.resolve(path)), options);
+/** 工作表名或下标 → 具体某张表；缺省取第一张。 */
+function pickSheet(sheets: SheetData[], sheet?: string | number): SheetData | undefined {
+  if (typeof sheet === "number") return sheets[sheet];
+  if (typeof sheet === "string") return sheets.find((item) => item.name === sheet);
+  return sheets[0];
+}
+
+/**
+ * Node 侧：直接读一个 .xlsx 名单文件。
+ *
+ * 传了 `absentFile` 时会再读一份**缺考名单**并作用到主名单上（缺考名单有准考证号列就按准考证号匹配， 否则按「姓名 + 班级」成对匹配），结果放在
+ * `RosterReadResult.absent` 里。
+ */
+export function readRosterFile(path: string, options: ReadRosterOptions = {}): RosterReadResult {
+  const result = readRoster(readFileSync(nodePath.resolve(path)), options);
+  if (options.absentFile === undefined) return result;
+
+  const absentPath = nodePath.resolve(options.absentFile);
+  const sheets = readWorkbook(readFileSync(absentPath));
+  if (sheets.length === 0) throw new Error(`缺考名单文件里没有任何工作表：${options.absentFile}`);
+  const sheet = pickSheet(sheets, options.absentSheet);
+  if (!sheet) {
+    throw new Error(
+      `找不到缺考名单的工作表 ${String(options.absentSheet)}，可用的有：${sheets
+        .map((item) => item.name)
+        .join("、")}`,
+    );
+  }
+
+  const { keys, issues } = readAbsentKeys(sheet, options.absentMapping);
+  // 列都认不出来时不要去匹配（keys 必为空），把 error issue 原样交给调用方（CLI 会明确报错）
+  if (issues.some((issue) => issue.level === "error")) {
+    return {
+      ...result,
+      absent: { file: absentPath, keys, matched: [], unmatched: keys, issues },
+    };
+  }
+
+  const applied = applyAbsentKeys(result.students, keys);
+  return {
+    ...result,
+    students: applied.students,
+    absent: {
+      file: absentPath,
+      keys,
+      matched: applied.matched,
+      unmatched: applied.unmatched,
+      issues: [...issues, ...applied.issues],
+    },
+  };
 }
 
 export function writeBinaryFile(path: string, bytes: Uint8Array): string {
