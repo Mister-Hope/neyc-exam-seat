@@ -126,7 +126,19 @@ AI 照 skill 办事时，不知道 job.json 已经是 v2，也不知道「名单
 
 ---
 
-## 议题 4：多场次暂不支持 `constraints`（限定）
+## 议题 4：多场次支持 `constraints`（限定）—— ✅ 已解决
+
+**解决方式**：`planAll` 为每套座位只下发「命中本座位学生 且 `roomId` 为空或等于本考场」的限定，
+`rows` / `cols` 由该考场解析（`first` / `last` / `door` / `window` 与「指定考场后的绝对号」都生效）；
+`roomId` 参与分房（被钉住的学生只能进那个考场）；装不下 / 冲突 / 指向不会去的考场 →
+`CONSTRAINT_OVERSATURATED` / `RULE_INTERSECT_EMPTY` / `CONSTRAINT_EMPTY_DOMAIN`（error）且不导出名单。
+各套座位未满足的限定汇总进 `PlanAllResult.unmetConstraints`，CLI 摘要单列「未满足的限定」。
+`CONSTRAINTS_IGNORED_MULTI` 退场（仅保留历史枚举）。
+**证据**：`core/src/plan-all.ts`；`core/test/plan-all.test.ts`（+27 项，core 共 122）；
+验收第 84–93 项（大/小考场首排、靠门/靠窗按考场行列解析、`roomId` 全时段同考场、交集、选择器、
+不可满足时 error + 不导出、带限定结果硬规则独立复核 0 违规）。
+
+**原始现状（保留存档）**
 
 **现状**
 
@@ -151,7 +163,18 @@ AI 照 skill 办事时，不知道 job.json 已经是 v2，也不知道「名单
 
 ---
 
-## 议题 5：多场次结果的独立校验（`exam-seat validate`）
+## 议题 5：多场次结果的独立校验（`exam-seat validate`）—— ✅ 已解决
+
+**解决方式**：core 新增 `validateAll(job, result: PlanAllResult): PlanAllValidation`，
+逐 seating 重建子 job 调 `validate()`，并**独立**复核「限定是否满足」「同一考场同一时段最多一门科目」
+「座位唯一 / 编号一致 / 应考却漏排」；`seatings` 为空报 `NO_STUDENTS`（不真空通过）。
+CLI `exam-seat validate --job job.json --plan plan.json` 遇到多场次走 `validateAll`，`--json` 输出结构化结论，
+退出码 ok → 0 / 不通过 → 3。
+**证据**：`core/src/validate.ts`；`cli/test/validate-multi.test.ts`（8 项 e2e，含人为改坏 → 3）；
+验收第 88–93 项（正常结果 exit 0 + 每套 seating 有结论、同址两人 → `ENTRY_DUPLICATE_SEAT`、
+把受限学生挪出首排 → `CONSTRAINT_UNMET`）。
+
+**原始现状（保留存档）**
 
 **现状**
 
