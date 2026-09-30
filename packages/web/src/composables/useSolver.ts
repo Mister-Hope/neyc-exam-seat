@@ -146,8 +146,19 @@ export function useSolver() {
       });
 
       // 真正把求解任务发进 Worker。监听器先挂好再发，避免同步实现的 Worker 抢先回消息丢事件。
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Worker.postMessage 没有 targetOrigin 参数，这条规则只适用于 window.postMessage
-      instance.postMessage({ id, job, overrides, mode } satisfies SolverRequest);
+      try {
+        // job / overrides 来自 Pinia 与 computed，是 Vue 的响应式 Proxy，而结构化克隆不支持 Proxy
+        // （浏览器抛 DataCloneError）。job.json 本来就是 JSON 契约，这里做一次 JSON 往返：
+        // 一次剥掉整棵对象树上的 Proxy（不只是顶层）、undefined 与函数，只把纯数据发给 Worker。
+        const payload = JSON.parse(JSON.stringify({ id, job, overrides, mode })) as SolverRequest;
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Worker.postMessage 没有 targetOrigin 参数，这条规则只适用于 window.postMessage
+        instance.postMessage(payload);
+      } catch (err) {
+        // 发送失败（含结构化克隆失败 / 不可序列化的请求体）：不抛异常、不留 unhandled rejection，
+        // 交给 StepSolve 的错误分支展示。
+        error.value = `求解请求无法发送：${err instanceof Error ? err.message : String(err)}`;
+        finish(null);
+      }
     });
   }
 

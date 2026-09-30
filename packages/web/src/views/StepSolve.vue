@@ -131,8 +131,13 @@ async function start(): Promise<void> {
   resultStore.setRunning();
   const outcome = await run(snapshot, snapshot.options, mode);
   if (!outcome) {
-    if (solverError.value) resultStore.setError(solverError.value);
-    else resultStore.cancelRun();
+    if (solverError.value) {
+      resultStore.setError(solverError.value);
+      // 例如请求体无法克隆 / Worker 报错：必须让老师看到原因，而不是无声失败
+      ElMessage.error(solverError.value);
+    } else {
+      resultStore.cancelRun();
+    }
     return;
   }
 
