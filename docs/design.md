@@ -3,9 +3,10 @@
 > **本文档是唯一的设计说明**：由原 `design.md`（v5.3）与 `design-selection.md`（选科与多场次，v3 草案）合并重写。
 > 后续所有设计变更都改在这里；原来的 `design-selection.md` 已并入本文 §5，不再单独维护。
 >
-> **实现状态**：`pnpm verify` 全绿 —— lint:check / typecheck（core · io · cli · web）/ build / **177 项单测** / **26 项验收**。
-> 单测分布：core 80 ｜ io 23 ｜ cli 6 ｜ web 68。验收场景：990 名考生 / 38 个考场，蛇形编号逐座核对，
-> 独立暴力复核 6108 组相邻关系零违规，多场次路径同样逐项断言。
+> **实现状态**：`pnpm verify` 全绿 —— lint:check / typecheck（core · io · cli · web）/ build / **280 项单测** / **71 项验收**。
+> 单测分布：core 104 ｜ io 38 ｜ cli 15 ｜ web 123。验收场景：990 名考生 / 38 个考场，蛇形编号逐座核对，
+> 独立暴力复核 6108 组相邻关系零违规；多场次逐「考场 × 时段」复核 205 个格子零违规，
+> 一个考场一个时段只能考一科、导出闸门、空置考场剔除、skill 覆盖全部逐条断言。
 >
 > **文档纪律**：文档与实现不一致时，**以代码为准**，并把本文档同步过来（有测试的以测试为准）。
 > 没做的东西不许写成事实：要么删掉，要么显式标注「未实现 / 部分完成」，并登记到 `docs/issues.md`。
@@ -15,22 +16,26 @@
 
 ## 0. 实现状态一览
 
-| 能力                                           | 状态      | 证据                                                                                        |
-| ---------------------------------------------- | --------- | ------------------------------------------------------------------------------------------- |
-| 蛇形编号、行列换算、座位网格                   | ✅ 已完成 | `core/src/numbering.ts`；两张编号图与设计逐座一致（core 单测 + 验收「蛇形编号与设计一致」） |
-| 预检 `precheckJob` + 诊断与建议（含 patch）    | ✅ 已完成 | `core/src/precheck.ts`、`core/src/plan.ts`                                                  |
-| 单场求解 `plan`（贪心 + 模拟退火 + 独立校验）  | ✅ 已完成 | `core/src/solver.ts`、`core/src/validate.ts`                                                |
-| Excel 名单导入 / 三种单场导出                  | ✅ 已完成 | `io/src/index.ts`、`io/src/node.ts`                                                         |
-| CLI 七个子命令 + 分级退出码                    | ✅ 已完成 | `cli/src/cli.ts`、`examples/acceptance.mjs`                                                 |
-| Web 六个步骤页 + job.json 双向互通             | ✅ 已完成 | `web/src/views/*.vue`、`web/test/*`                                                         |
-| job.json v2：选科解析 + `Constraint` 选择器    | ✅ 已完成 | `core/src/subjects.ts`、`core/src/domain.ts`                                                |
-| 时段推导 + 分组分房 + `planAll` 多场次         | ✅ 已完成 | `core/src/schedule.ts`、`core/src/plan-all.ts`                                              |
-| 多场次两种输出（按班级 / 按考场）              | 🟡 部分   | `io` 两个工作簿已实现；「导出时自动剔除空置考场」未做 → `docs/issues.md`                    |
-| CLI 多场次编排                                 | ✅ 已完成 | `plan` 检测到选科自动 `planAll`，`--single` 回退单场                                        |
-| Web 场次编排界面                               | ⏳ 未实现 | 网页目前单场求解，界面已明确提示；`docs/issues.md` 议题 2                                   |
-| Web 表格虚拟滚动                               | ⏳ 未实现 | 六页用普通 `el-table`；`docs/issues.md` 议题 1                                              |
-| 同考场同组合排布倾向 `options.groupPreference` | ⏳ 未实现 | core 不读该字段，网页/CLI 只做「原样保留、往返不丢」                                        |
-| AI Skill 覆盖 job.json v2 / 多场次             | ⏳ 未实现 | `SKILL.md` / `reference.md` 里选科 / `planAll` / 多场次 出现 0 次；`docs/issues.md` 议题 3  |
+| 能力                                          | 状态      | 证据                                                                                            |
+| --------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------- |
+| 蛇形编号、行列换算、座位网格                  | ✅ 已完成 | `core/src/numbering.ts`；两张编号图与设计逐座一致（core 单测 + 验收「蛇形编号与设计一致」）     |
+| 预检 `precheckJob` + 诊断与建议（含 patch）   | ✅ 已完成 | `core/src/precheck.ts`、`core/src/plan.ts`                                                      |
+| 单场求解 `plan`（贪心 + 模拟退火 + 独立校验） | ✅ 已完成 | `core/src/solver.ts`、`core/src/validate.ts`                                                    |
+| Excel 名单导入 / 三种单场导出                 | ✅ 已完成 | `io/src/index.ts`、`io/src/node.ts`                                                             |
+| CLI 七个子命令 + 分级退出码                   | ✅ 已完成 | `cli/src/cli.ts`、`examples/acceptance.mjs`                                                     |
+| Web 六个步骤页 + job.json 双向互通            | ✅ 已完成 | `web/src/views/*.vue`、`web/test/*`                                                             |
+| job.json v2：选科解析 + `Constraint` 选择器   | ✅ 已完成 | `core/src/subjects.ts`、`core/src/domain.ts`                                                    |
+| 时段推导 + 分组分房 + `planAll` 多场次        | ✅ 已完成 | `core/src/schedule.ts`、`core/src/plan-all.ts`                                                  |
+| 多场次两种输出（按班级 / 按考场）             | ✅ 已完成 | `io` 两个工作簿 + 导出时自动剔除空置考场（`usedRoomIds` / `pruneEmptyRooms`）                   |
+| CLI 多场次编排                                | ✅ 已完成 | `plan` 检测到选科自动 `planAll`，`--single` 回退单场                                            |
+| Web 场次编排界面                              | ✅ 已完成 | 第 ⑤ 步多场次求解 + 第 ⑥ 步「时段 → 考场 + 座位」与两份工作簿导出；`web/test/*`                 |
+| Web 表格虚拟滚动                              | ✅ 已完成 | `web/src/components/VirtualTable.vue`（`el-table-v2` + `el-auto-resizer`），1000 行只渲染可见行 |
+| 同考场同组合分房 `options.groupPreference`    | ✅ 已完成 | `core/src/plan-all.ts`；`sameCombination`（默认）/ `fillRooms`，共用必合并座位（§5.1）          |
+| 一个考场一个时段只能考一科（硬规则）          | ✅ 已完成 | `findRoomSubjectClashes()` + `ROOM_SUBJECT_CLASH`；k×slot 真校验，违反即 error                  |
+| AI Skill 覆盖 job.json v2 / 多场次            | ✅ 已完成 | `SKILL.md` / `reference.md` / 带选科样例（选科、`planAll`、`dedicatedSubjects` 均已写入）       |
+
+> 已知缺口（唯一一处）：多场次仍不应用 `constraints`（限定），但**绝不静默**——
+> 只要 job 带限定就会报 `CONSTRAINTS_IGNORED_MULTI`（warning）。见 `docs/issues.md` 议题 4。
 
 ---
 
@@ -128,7 +133,9 @@ AI 也可以生成 job.json 让老师在网页里打开复核、微调。任何�
     "forceKing": false, // 班级数 < 9 时默认自动退化；置 true 则坚持 8 邻域
     "relax": "none", // none | softConstraints | minConflicts
     "timeLimitMs": 10000,
-    // ⚠️ groupPreference 是 S5 的设计目标，core 目前【不读】；网页与 CLI 会原样保留、往返不丢
+    // 分房倾向（见 §5.4）：
+    //   sameCombination = 每个考场只放同一种组合（默认，监考表最干净；考场不够宁可报错）
+    //   fillRooms       = 考场紧张时允许先把当前考场填满（可混批次，但仍受 §5.1 硬规则约束）
     "groupPreference": "sameCombination",
   },
 
@@ -200,6 +207,7 @@ AI 也可以生成 job.json 让老师在网页里打开复核、微调。任何�
 | `combination` / `subjects`       | v2 选科：原文 + 规范化科目 id；名单里有选科即进入多场次模式                                                                             |
 | `location` / `dedicatedSubjects` | v2 考场：地点（出现在监考表与座位表表头）与专用科目标记                                                                                 |
 | `included: false`                | 本次不参加考试，容量校验按「实际参考」算                                                                                                |
+| `groupPreference`                | 分房倾向：`"sameCombination"`（默认，一个考场只放同一组合）/ `"fillRooms"`（先填满当前考场）；两者都必须满足 §5.1 的硬规则              |
 
 > ⚠️ 为什么 `last` / `window` 必须用语义值而不是数字：考场有 5×6 和 6×7 两种，
 > **同一个数字在不同考场指向不同位置**。详见 §4.2。
@@ -453,6 +461,23 @@ allowedSeats(student) =
 
 > **常规组合（物化生、政史地）整个考试期间不换考场；只有非常规组合（物化政、物化地）中途换一次。**
 
+#### 硬规则：一个考场，一个时段，只能考一科
+
+**任何时刻，同一个考场里只能有一门科目在考**（只能发一张卷子）：某时段坐在这个考场里的学生，
+必须全部在答同一门科目；没考试的学生就是不在这个考场，与规则无关。这条规则**不可降级、不可绕过**——
+排不出来时宁可报容量不足，也不许把两门科目塞进同一个考场。
+
+由此推出两条推论，实现时必须遵守：
+
+| 推论                   | 说明                                                                                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **可以共用考场的前提** | 只有**逐时段不冲突**的批次才能共用一个考场：对每个时段，两批考生在这个时段要考的科目合起来**最多一门**（要么是同一门，要么只有一批有考试）。例：物化政 + 物化地共用一个「非常规主考场」（T1–T5 科目完全相同，T6/T7 各自去专用考场）；物化生 + 物化政也可以共用（T1–T5 同科，T6 只有物化生考生物） |
+| **绝对不能共用的组合** | 常规理（物化生）× 常规文（政史地）：T4 一个考物理、一个考历史，T6 一个考生物、一个考政治，同一时段出现两门科目，必须分开考                                                                                                                                                                        |
+| **共用就要合并座位**   | 能共用的批次在每个有考试的时段是**同时坐在这个考场里**的，所以必须合并成**一套座位方案**（学生并集、一次 `plan()`），否则两套座位会各自从 1 号开始排、座位号撞车                                                                                                                                  |
+
+`planAll` 会逐「考场 × 时段」核对这条规则；一旦发现同一考场同时段出现两门科目，
+立即报 `ROOM_SUBJECT_CLASH`（error），并且该结果不得导出。
+
 这条原则把「多场次耦合优化」退化成**分组 + 分房间**：
 
 - 每个**常规考场 = 一个组合 + 一套座位**，用到底；
@@ -540,8 +565,25 @@ allowedSeats(student) =
 **关键点：每一步都只是「把一批考生喂给现有求解器」**，没有新算法。
 第 ④ 步里「8 邻域不能同班」的约束，在跨组合混排时依然成立（同班同学可能选不同科）。
 
-分房策略：优先让每个组合独占考场（监考表最干净）；考场不够时退让为「先填满当前考场再换下一个」，
-尾房可能混两个组合 —— 该考场会拆成多张监考表，并给出 `ROOMS_SHARED` 警告。
+分房策略（由 `options.groupPreference` 决定，见 §5.4）：
+
+- `"sameCombination"`（默认）：每个批次（组合）独占若干考场，一个考场里只有一个组合 → 监考表最干净；
+  考场不够时**直接报** `CAPACITY_INSUFFICIENT`，不偷偷混排。
+- `"fillRooms"`：先把当前考场填满再换下一个，省考场；只允许与**逐时段不冲突**的批次共用（同一时段最多一门科目），
+  共用时**合并成一套座位方案**（学生并集、一次 `plan()`、座位号唯一）并报 `ROOMS_SHARED` 警告。
+- 两者都必须满足 §5.1 的硬规则，违反时报 `ROOM_SUBJECT_CLASH`。
+
+> ⚠️ **分配失败时保留「已成功批次」的座位**：`sameCombination` 下考场不够时，已排上的批次仍会产出座位方案，
+> 用于诊断「谁排上了、谁没排上」；但结果 `ok=false`（`CAPACITY_INSUFFICIENT` + 不导出名单）。
+> 因此「已排人数 = 参考人数」**不等于**安排成功——判定成功只看 `ok`，以及每个学生**应考时段**是否都排满
+> （专用考场可能只覆盖某个时段，例如物化生 40 + 物化政 20 只有 2 个普通考场时，物化政只拿到 T6 政治，
+> T1–T5 仍是空的）。验收与网页判定都必须按「时段排满」，不要只数「有没有座位」。
+
+> ⚠️ **多场次暂不支持 `constraints`（限定）——但绝不静默**：`planAll` 现在会忽略 job 里的限定，
+> 因此只要 job 带了非空 `constraints`，结果诊断里**必然**出现 `CONSTRAINTS_IGNORED_MULTI`（warning），
+> 说清「本次多场次排考没有应用这 N 条限定（涉及 M 名学生）」。原因是：限定可能要求把某个学生钉在
+> 指定考场，而多场次是「按组合分组分房」（§5.1），目前没有把限定纳入分房的算法。
+> 需要限定就先用 `--single` 单场排，或等后续阶段实现（已登记 `docs/issues.md` 议题 4）。
 
 ### 5.5 考场的地点与专用科目
 
@@ -563,7 +605,9 @@ interface RoomSpec {
   整体安排进去。政治在 T6、地理在 T7，时间不冲突，**同一个房间可以既当政治专用又当地理专用**。
 - **空考场取消**：排完之后如果某个考场一个学生都没安排上，`planAll` 会在 `emptyRooms` 里点名列出，
   CLI 也会打印「可取消的空置考场」。
-  🟡 遗留：「导出时自动把它们从名单里去掉」与网页按结果的一键移除尚未实现（见 `docs/issues.md`）。
+  ✅ 已实现闭环：`--out-dir` 写出的 `job.json` 会自动剔除空置考场（`io` 的 `usedRoomIds` / `pruneEmptyRooms`，
+  一个考场都没用到时安全阀不掏空配置），CLI 打印「已剔除空置考场：…」；网页第 ⑤⑥ 步按**求解结果**
+  给出「一键移除空置考场」（作用于考场配置并提示重排）。
 
 ### 5.6 输出 A / 输出 B
 
@@ -584,14 +628,14 @@ interface RoomSpec {
 
 **分组规则：同一考场 × 同一批考生的时段合并成一张表。**
 
-| 情形                   | 出几张                                                            |
-| ---------------------- | ----------------------------------------------------------------- |
-| 常规理考场（纯物化生） | **1 张**：「第一考场（语数外物化生）」                            |
-| 常规文考场（纯政史地） | **1 张**：「第二考场（语数外历政地）」                            |
-| 非常规主考场           | **1 张**：「第三考场（语数外物化）」                              |
-| 政治专用考场           | **1 张**：「第二十考场（政治）」                                  |
-| 地理专用考场           | **1 张**：「第二十一考场（地理）」                                |
-| 万一某考场混了组合     | 按考生集合拆分，如「第一考场（语数外物化）」+「第一考场（生物）」 |
+| 情形                   | 出几张                                                                                                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 常规理考场（纯物化生） | **1 张**：「第一考场（语数外物化生）」                                                                                                                                   |
+| 常规文考场（纯政史地） | **1 张**：「第二考场（语数外历政地）」                                                                                                                                   |
+| 非常规主考场           | **1 张**：「第三考场（语数外物化）」                                                                                                                                     |
+| 政治专用考场           | **1 张**：「第二十考场（政治）」                                                                                                                                         |
+| 地理专用考场           | **1 张**：「第二十一考场（地理）」                                                                                                                                       |
+| 万一某考场混了批次     | **1 张**：合并成一套座位，标题 = 考场名（科目并集），如「第一考场（语数外物化生）」；只在 `groupPreference: "fillRooms"` 且两批考生逐时段不冲突时才会发生（§5.1 硬规则） |
 
 每张表的格式：
 
@@ -612,19 +656,22 @@ interface RoomSpec {
 
 ### 5.7 实施进度（S1–S8）
 
-> 核对时间：2026-09-30。基线：`pnpm verify` 全绿（**177 项单测 / 26 项验收**）。
+> 核对时间：2026-09-30。基线：`pnpm verify` 全绿（**280 项单测 / 71 项验收**）。
 > 「依据」一列是可以直接去核对的代码与测试文件。
 
-| 阶段 | 内容                                                        | 状态      | 依据（代码 / 测试）                                                                                                                                                                                                                                                                                                                                |
-| ---- | ----------------------------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| S1   | 选科解析（`物化政` 简写）+ 3+1+2 校验 + `Constraint` 选择器 | ✅ 已完成 | `core/src/subjects.ts`；`core/src/domain.ts` 的 `hasAnySelector` / `resolveConstraintStudents`；`core/test/subjects.test.ts`（19 项）；网页 `web/test/constraint-selectors.test.ts`（4 项，与 core 语义逐条对齐）                                                                                                                                  |
-| S2   | 预检 / 求解改用「选择器 → 学生集合」                        | ✅ 已完成 | `ConstraintSeatSet.studentIndices` → `compileDomains` 用它建定义域；预检新增 `CONSTRAINT_NO_SELECTOR`；`core/test/core.test.ts` 有多处选择器用例                                                                                                                                                                                                   |
-| S3   | 时段自动推导（按冲突关系图着色）                            | ✅ 已完成 | `core/src/schedule.ts`（`buildConflictGraph` / `deriveTimeSlots` / `findSlotConflicts` / `subjectInSlot`）；`core/test/schedule.test.ts`（11 项）；验收断言「时段数 = 7」                                                                                                                                                                          |
-| S4   | `location` / `dedicatedSubjects` + 分组分房 + `planAll`     | ✅ 已完成 | `core/src/plan-all.ts`、`core/src/types.ts`；`core/test/plan-all.test.ts`（18 项）；`io/test/schedule-export.test.ts`（12 项）；CLI `plan` 自动走多场次                                                                                                                                                                                            |
-| S5   | 同考场同组合的排布倾向（`options.groupPreference`）         | ⏳ 未开始 | 全仓搜不到 core 读取 `groupPreference` 的代码；网页与 CLI 只是**原样保留**这个字段（往返不丢，见 `web/src/lib/job.ts` 的 `mergeOptions`）                                                                                                                                                                                                          |
-| S6   | 输出 A / B（C 本期不做）+ 空考场取消                        | 🟡 部分   | 已有：`io/src/index.ts` 的 `buildClassScheduleWorkbook`（按班级考场安排.xlsx）与 `buildInvigilatorWorkbook`（考场监考表.xlsx）、`planAll().emptyRooms`、CLI 打印「可取消的空置考场」、验收断言「空置考场会被列出（便于取消）」。**缺**：导出时自动剔除空置考场；网页按**求解结果**的一键移除（网页现在只有排考前按容量预测的「删掉会空置的考场」） |
-| S7   | CLI 场次编排 + Web 第 ⑤ 步「场次编排」                      | 🟡 部分   | 已有：CLI `plan` 在名单带选科时自动 `planAll`，`--single` 回退单场（验收有断言）。**缺**：网页的场次界面与两个多场次工作簿导出——网页目前按单场求解，并在求解页明确提示改用 CLI，见 `docs/issues.md` 议题 2                                                                                                                                         |
-| S8   | Skill 更新（job.json v2 / 多场次）+ 验收脚本扩展            | 🟡 部分   | 已有：`examples/acceptance.mjs` 的 26 项里有约 16 项覆盖选科/多场次（四种组合、7 时段、专用考场、两个 xlsx 导出、空置考场列出、`--single` 回退）。**缺**：`SKILL.md` 与 `reference.md` 里 `选科` / `planAll` / `多场次` / `dedicatedSubjects` 出现 **0 次**——AI 走 skill 时不知道 job.json v2 的存在，见 `docs/issues.md` 议题 3                   |
+| 阶段 | 内容                                                        | 状态      | 依据（代码 / 测试）                                                                                                                                                                                                                                                                                                                                                          |
+| ---- | ----------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S1   | 选科解析（`物化政` 简写）+ 3+1+2 校验 + `Constraint` 选择器 | ✅ 已完成 | `core/src/subjects.ts`；`core/src/domain.ts` 的 `hasAnySelector` / `resolveConstraintStudents`；`core/test/subjects.test.ts`（19 项）；网页 `web/test/constraint-selectors.test.ts`（4 项，与 core 语义逐条对齐）                                                                                                                                                            |
+| S2   | 预检 / 求解改用「选择器 → 学生集合」                        | ✅ 已完成 | `ConstraintSeatSet.studentIndices` → `compileDomains` 用它建定义域；预检新增 `CONSTRAINT_NO_SELECTOR`；`core/test/core.test.ts` 有多处选择器用例                                                                                                                                                                                                                             |
+| S3   | 时段自动推导（按冲突关系图着色）                            | ✅ 已完成 | `core/src/schedule.ts`（`buildConflictGraph` / `deriveTimeSlots` / `findSlotConflicts` / `subjectInSlot`）；`core/test/schedule.test.ts`（11 项）；验收断言「时段数 = 7」                                                                                                                                                                                                    |
+| S4   | `location` / `dedicatedSubjects` + 分组分房 + `planAll`     | ✅ 已完成 | `core/src/plan-all.ts`、`core/src/types.ts`；`core/test/plan-all.test.ts`（18 项）；`io/test/schedule-export.test.ts`（12 项）；CLI `plan` 自动走多场次                                                                                                                                                                                                                      |
+| S5   | 同考场同组合分房 + `options.groupPreference`                | ✅ 已完成 | `core/src/plan-all.ts` 的 `allocateDemands(demands, rooms, slots, preference)`；`sameCombination`（默认，批次独占考场，不够直接 `CAPACITY_INSUFFICIENT`）与 `fillRooms`（先填满，**只与逐时段不冲突的批次合并成一套座位**，报 `ROOMS_SHARED`）；`findRoomSubjectClashes()` + `ROOM_SUBJECT_CLASH` 真跑「考场 × 时段」硬校验；`core/test/plan-all.test.ts`（本轮 18 → 31 项） |
+| S6   | 输出 A / B（C 本期不做）+ 空考场取消                        | ✅ 已完成 | `io/src/index.ts` 的 `buildClassScheduleWorkbook` / `buildInvigilatorWorkbook`、`usedRoomIds` / `pruneEmptyRooms`；`io/src/node.ts` 导出 `job.json` 时自动剔除空置考场（零安排时安全阀不掏空）；CLI 打印「已剔除空置考场：…」；网页第 ⑤⑥ 步「按求解结果一键移除空置考场」；`io/test/prune-empty-rooms.test.ts`、`cli/test/plan-out-dir.test.ts`                              |
+| S7   | CLI 场次编排 + Web 第 ⑤ 步「场次编排」                      | ✅ 已完成 | CLI `plan` 带选科自动 `planAll`、`--single` 回退单场；网页第 ⑤ 步默认多场次（时段划分 / 座位方案数 / 换考场人数 / 空置考场一键移除），第 ⑥ 步展示「时段 → 考场 + 座位」并导出两份工作簿；`web/test/result-store-multi.test.ts`、`step-solve-multi.test.ts`、`step-result-multi.test.ts`、`session-export.test.ts`                                                            |
+| S8   | Skill 更新（job.json v2 / 多场次）+ 验收脚本扩展            | ✅ 已完成 | `SKILL.md`（8060 字节 < 8192）与 `reference.md` 已覆盖选科 / `combination` / `planAll` / 多场次 / `dedicatedSubjects` / `groupPreference` / `ROOM_SUBJECT_CLASH` / `CONSTRAINTS_IGNORED_MULTI` / 导出闸门；`examples/job.sample.json` 为带选科样例（CLI `precheck` 通过）；`examples/acceptance.mjs` 由 26 项扩到 **71 项**                                                  |
+
+> 本轮唯一未做的设计目标：多场次仍不应用 `constraints`（限定）。它不会再被静默忽略——
+> job 带限定即报 `CONSTRAINTS_IGNORED_MULTI`（warning），已登记 `docs/issues.md` 议题 4。
 
 ---
 
@@ -672,30 +719,32 @@ interface RoomSpec {
 
 全部取值以 `packages/core/src/types.ts` 的 `DiagnosticCode` 为准；单场与多场次共用一个码表。
 
-| 代码                            | 级别    | 触发条件                                          | 给老师的说法 / 建议动作                                      |
-| ------------------------------- | ------- | ------------------------------------------------- | ------------------------------------------------------------ |
-| `STUDENT_DUPLICATE_ID`          | error   | 名单里有重复学号                                  | 列出前几个重复学号，请先修名单                               |
-| `STUDENT_MISSING_CLASS`         | error   | 学生没有班级                                      | 班级是相邻约束的基础，必须补                                 |
-| `STUDENT_MISSING_NAME`          | warning | 学生没有姓名                                      | 名单里会显示为空                                             |
-| `STUDENT_MISSING_SUBJECTS`      | warning | 多场次模式下有学生没有选科信息                    | 这些学生不会进入任何时段                                     |
-| `UNKNOWN_ROOM_ID`               | error   | 限定引用了不存在的考场                            | 改为「不限考场」或选一个真实考场                             |
-| `UNKNOWN_STUDENT_ID`            | warning | 限定点名了名单里不存在的学生                      | 修正 `studentIds` 或改用选择器                               |
-| `INVALID_ROOM_SIZE`             | error   | 考场行列数不是 ≥1 的整数                          | 修正考场尺寸                                                 |
-| `NO_ROOMS` / `NO_STUDENTS`      | error   | 没配考场 / 参考人数为 0                           | 加考场 / 取消排除                                            |
-| `CAPACITY_INSUFFICIENT`         | error   | 参考人数 > 总座位                                 | 还缺 N 个座位：小场改大场(+12) / 加考场 / 多排除 N 人        |
-| `CONSTRAINT_EMPTY_DOMAIN`       | error   | 可用座位集合为空                                  | 「第 3 考场是 6×4，没有第 5 排」→ 改考场 / 改行 / 改列       |
-| `CONSTRAINT_INDEX_OUT_OF_RANGE` | error   | 绝对号在所有候选考场都越界                        | 改用「靠窗列」语义值 / 指定一个 6 列考场                     |
-| `ABSOLUTE_ROWCOL_WITHOUT_ROOM`  | warning | 没指定考场却写了绝对号                            | 将在各类考场分别解析，建议改用语义值（不阻塞）               |
-| `CONSTRAINT_NO_SELECTOR`        | error   | 一条限定没写任何选择器                            | 这条限定不会生效，补一个选择器或删掉                         |
-| `CONSTRAINT_OVERSATURATED`      | error   | 限定可用座位数 < 该组人数（含座位唯一性匹配失败） | 多出的人改考场 / 放宽行或列                                  |
-| `RULE_INTERSECT_EMPTY`          | error   | 同一学生多条规则交集为空                          | 「同时指定了第 3 和第 5 考场」→ 删其中一条                   |
-| `SEAT_CONFLICT`                 | error   | 两人被指定到同一个座位                            | 改其一                                                       |
-| `CLASS_LIMIT_EXCEEDED`          | error   | 某班超出可用考场容量上限                          | 「高三2班还差 N 个位置」→ 加考场                             |
-| `ROOMS_OVERPROVISIONED`         | info    | 座位明显多于参考人数                              | 「第 26–30 考场将空置」→ 可少配考场                          |
-| `ROOMS_SHARED`                  | warning | 多场次：普通考场不足，多个组合共用考场            | 该考场会拆成多张监考表                                       |
-| `TOO_FEW_CLASSES`               | warning | 班级数 ≤ 8                                        | **非错误**：已自动退化为 4 邻域，`level` 会变成 `orthogonal` |
-| `SEARCH_FAILED`                 | error   | 预检通过但退火后仍有冲突 / 未满足限定             | 见 §7.2，带 evidence 与可一键应用的 suggestions              |
-| `OK`                            | info    | 预检通过                                          | 「预检通过：N 名考生、M 个班、K 个考场」                     |
+| 代码                            | 级别    | 触发条件                                                  | 给老师的说法 / 建议动作                                      |
+| ------------------------------- | ------- | --------------------------------------------------------- | ------------------------------------------------------------ |
+| `STUDENT_DUPLICATE_ID`          | error   | 名单里有重复学号                                          | 列出前几个重复学号，请先修名单                               |
+| `STUDENT_MISSING_CLASS`         | error   | 学生没有班级                                              | 班级是相邻约束的基础，必须补                                 |
+| `STUDENT_MISSING_NAME`          | warning | 学生没有姓名                                              | 名单里会显示为空                                             |
+| `STUDENT_MISSING_SUBJECTS`      | warning | 多场次模式下有学生没有选科信息                            | 这些学生不会进入任何时段                                     |
+| `UNKNOWN_ROOM_ID`               | error   | 限定引用了不存在的考场                                    | 改为「不限考场」或选一个真实考场                             |
+| `UNKNOWN_STUDENT_ID`            | warning | 限定点名了名单里不存在的学生                              | 修正 `studentIds` 或改用选择器                               |
+| `INVALID_ROOM_SIZE`             | error   | 考场行列数不是 ≥1 的整数                                  | 修正考场尺寸                                                 |
+| `NO_ROOMS` / `NO_STUDENTS`      | error   | 没配考场 / 参考人数为 0                                   | 加考场 / 取消排除                                            |
+| `CAPACITY_INSUFFICIENT`         | error   | 参考人数 > 总座位                                         | 还缺 N 个座位：小场改大场(+12) / 加考场 / 多排除 N 人        |
+| `CONSTRAINT_EMPTY_DOMAIN`       | error   | 可用座位集合为空                                          | 「第 3 考场是 6×4，没有第 5 排」→ 改考场 / 改行 / 改列       |
+| `CONSTRAINT_INDEX_OUT_OF_RANGE` | error   | 绝对号在所有候选考场都越界                                | 改用「靠窗列」语义值 / 指定一个 6 列考场                     |
+| `ABSOLUTE_ROWCOL_WITHOUT_ROOM`  | warning | 没指定考场却写了绝对号                                    | 将在各类考场分别解析，建议改用语义值（不阻塞）               |
+| `CONSTRAINT_NO_SELECTOR`        | error   | 一条限定没写任何选择器                                    | 这条限定不会生效，补一个选择器或删掉                         |
+| `CONSTRAINT_OVERSATURATED`      | error   | 限定可用座位数 < 该组人数（含座位唯一性匹配失败）         | 多出的人改考场 / 放宽行或列                                  |
+| `RULE_INTERSECT_EMPTY`          | error   | 同一学生多条规则交集为空                                  | 「同时指定了第 3 和第 5 考场」→ 删其中一条                   |
+| `SEAT_CONFLICT`                 | error   | 两人被指定到同一个座位                                    | 改其一                                                       |
+| `CLASS_LIMIT_EXCEEDED`          | error   | 某班超出可用考场容量上限                                  | 「高三2班还差 N 个位置」→ 加考场                             |
+| `ROOMS_OVERPROVISIONED`         | info    | 座位明显多于参考人数                                      | 「第 26–30 考场将空置」→ 可少配考场                          |
+| `ROOMS_SHARED`                  | warning | 多场次：`groupPreference: "fillRooms"` 下多个批次共用考场 | 该考场的学生合并成一套座位；标题为考场名（科目并集）         |
+| `ROOM_SUBJECT_CLASH`            | error   | 同一考场同一时段出现两门科目（违反 §5.1 硬规则）          | 调整分房或加考场；该结果不得导出                             |
+| `CONSTRAINTS_IGNORED_MULTI`     | warning | 多场次模式下 job 带了 `constraints`（§5.4）               | 本次未应用限定：改用 `--single` 单场排，或去掉限定           |
+| `TOO_FEW_CLASSES`               | warning | 班级数 ≤ 8                                                | **非错误**：已自动退化为 4 邻域，`level` 会变成 `orthogonal` |
+| `SEARCH_FAILED`                 | error   | 预检通过但退火后仍有冲突 / 未满足限定                     | 见 §7.2，带 evidence 与可一键应用的 suggestions              |
+| `OK`                            | info    | 预检通过                                                  | 「预检通过：N 名考生、M 个班、K 个考场」                     |
 
 每条 `Diagnostic` 都带 `code` / `severity` / `message`（中文人话）/ `evidence` / `suggestions[]`，
 其中每条 `Suggestion` 带**可机器应用的 `patch`**（JSON Patch：add / remove / replace）——
@@ -745,6 +794,22 @@ L2/L3 **只把「限定太紧」降级为惩罚**；结构性错误（座位不�
 - 导出前强制跑一次 `validate()`，这是 CLI 与 Web 共用的安全闸门。CLI 的 `exam-seat validate` 不过就退出码 `3`；
   网页会先拦一道，老师坚持时只能「仍然导出（仅供人工微调）」并在界面上说清楚。
 
+### 8.1 什么时候**不**导出名单 / 监考表
+
+`--out-dir` 默认会写名单与监考表；只有下面这类**结构性**问题才拒绝写（`plan.json` 与 `job.json` 照写，留痕）：
+
+| 判定           | 包含的诊断码                                                                                                                                                                                                                                       | 理由                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **阻止导出**   | `ROOM_SUBJECT_CLASH`、`CAPACITY_INSUFFICIENT`、`NO_STUDENTS`、`NO_ROOMS`、`INVALID_ROOM_SIZE`、`STUDENT_DUPLICATE_ID`、`STUDENT_MISSING_CLASS`、`CLASS_LIMIT_EXCEEDED`、`SEAT_CONFLICT`、`UNKNOWN_ROOM_ID`、`CONSTRAINT_*`、`RULE_INTERSECT_EMPTY` | 这些是「名单本身不成立」，交出去会误导老师                                                              |
+| **不阻止导出** | `SEARCH_FAILED`、`TOO_FEW_CLASSES`、`ROOMS_SHARED`、`ROOMS_OVERPROVISIONED`、`CONSTRAINTS_IGNORED_MULTI`、`STUDENT_MISSING_NAME` / `STUDENT_MISSING_SUBJECTS`、`UNKNOWN_STUDENT_ID`、`ABSOLUTE_ROWCOL_WITHOUT_ROOM`                                | 这些是**主动选择的降级**或提示：`--relax` 本来就是要「违反最少」并交付，强行拦下来会把 L2/L3 这条腿打断 |
+
+- 核心 API：`core` 导出 `blocksListExport(diagnostics)`，CLI 单场与多场次共用同一条判据；判为阻止时 stderr 明确说明
+  「结果未通过校验，已只导出 plan.json / job.json，未导出名单与监考表」并逐条列出 error 诊断。
+  码表以 core 的 `BLOCKING_EXPORT_CODES` 为准（与 §7.1 一样，文档与实现不一致时以代码为准并回写本文档）。
+- 降级（`level != "strict"`，退出码 `2`）**照常导出**，但必须挂黄色横幅 / 写进「校验报告」表，
+  `stats.conflicts` 与 `unmetConstraints` 是谁都能核对的硬证据。
+- 网页同一套语义：拦一道并说明原因，老师坚持时可「仍然导出（仅供人工微调）」。
+
 ---
 
 ## 9. CLI
@@ -763,14 +828,15 @@ exam-seat validate  --job job.json --plan plan.json
 
 约定（**为 agent 设计**）：
 
-| 项          | 约定                                                                                                                                      |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `--job -`   | 从 stdin 读 job.json，AI 可以不落临时文件直接管道传入                                                                                     |
-| `--json`    | **stdout 只输出一个 JSON 对象**；进度与日志全部走 stderr                                                                                  |
-| 退出码      | `0` 完美 ｜ `2` 已降级 ｜ `3` 预检失败 / 排不出来 ｜ `1` 用法或 IO 错误                                                                   |
-| 幂等        | 同 `--job` + 同 seed → 同输出                                                                                                             |
-| `--out-dir` | 单场写 `考场安排名单.xlsx` / `考场座位表.xlsx` / `plan.json` / `job.json`；多场写 `按班级考场安排.xlsx` / `考场监考表.xlsx` / `plan.json` |
-| 单场 / 多场 | 名单里带选科（`combination` 或 `subjects`）自动走 `planAll`；`--single` 强制按单场处理                                                    |
+| 项          | 约定                                                                                                                                                                        |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--job -`   | 从 stdin 读 job.json，AI 可以不落临时文件直接管道传入                                                                                                                       |
+| `--json`    | **stdout 只输出一个 JSON 对象**；进度与日志全部走 stderr                                                                                                                    |
+| 退出码      | `0` 完美 ｜ `2` 已降级 ｜ `3` 预检失败 / 排不出来 / **结构性 error**（名单不成立，如 `CAPACITY_INSUFFICIENT`、`ROOM_SUBJECT_CLASH`）｜ `1` 用法或 IO 错误                   |
+| 幂等        | 同 `--job` + 同 seed → 同输出                                                                                                                                               |
+| `--out-dir` | 单场写 `考场安排名单.xlsx` / `考场座位表.xlsx` / `plan.json` / `job.json`；多场写 `按班级考场安排.xlsx` / `考场监考表.xlsx` / `plan.json`                                   |
+| 单场 / 多场 | 名单里带选科（`combination` 或 `subjects`）自动走 `planAll`；`--single` 强制按单场处理                                                                                      |
+| `validate`  | 只支持**单场** `plan.json`；喂多场次结果（含 `seatings`）时明确报 `MULTI_PLAN_NOT_SUPPORTED`（退出码 `1`），不再抛内部错误 —— 逐 seating 汇总校验见 `docs/issues.md` 议题 5 |
 
 退出码让 agent 能直接分支：拿到 `3` 就去读 `diagnostics[].suggestions`，拿到 `2` 就把 `level` 明确告诉用户。
 
@@ -847,10 +913,14 @@ exam-seat validate  --job job.json --plan plan.json
 - **回灌**：诊断建议应用后会把整份 job 写回各个 store，保证「界面看到的 = 求解器看到的」；
 - **持久化**：`localStorage`，键名前缀 `exam-seat:`；清空数据会把本应用的键全删掉（不动同域其它键）。
 
-### 10.4 未实现（指向 `docs/issues.md`）
+### 10.4 实现情况
 
-- **表格虚拟滚动**（议题 1）：六页目前用普通 `el-table`，1000 行时会偏重；
-- **场次编排界面**（议题 2）：多场次目前在网页上只能靠 CLI 完成。
+- **表格虚拟滚动**（议题 1）：已实现。`web/src/components/VirtualTable.vue` 基于 `el-table-v2` + `el-auto-resizer`，
+  第 ②④①⑥ 步的四张表（含结果页主表）都走它；1000 行只渲染可见区（单测：1000 行 → DOM 24 行，表头「全选当前结果」仍勾中全量 1000 人）。
+  考场配置页（第 ③ 步）是行内编辑表、且考场数量级很小（几十行），按议题 1 的约束保留 `el-table`。
+- **场次编排界面**（议题 2）：已实现。第 ⑤ 步默认走多场次 `planAll`（可切回单场），第 ⑥ 步展示「时段 → 考场 + 座位」、
+  座位方案概览与校验摘要，并导出 `按班级考场安排.xlsx` / `考场监考表.xlsx`；空置考场按求解结果一键移除。
+- 仍缺一件：多场次不应用 `constraints`（显式 `CONSTRAINTS_IGNORED_MULTI` warning，见 `docs/issues.md` 议题 4）。
 
 ---
 
@@ -885,10 +955,13 @@ DSH 的发现规则：扫描根目录下的**直接子项**，`<name>/SKILL.md` 
 - 名单带选科 ⇒ 自动多场次；交付物是「按班级考场安排.xlsx + 考场监考表.xlsx」；
   常规组合全程不换考场，非常规组合中途换一次；`--single` 才回到单场。
 - 专用考场用 `dedicatedSubjects` 手工指定（可兼多科），只收非常规组合中考了该科目的学生。
+- **一个考场、一个时段、只能考一科**（§5.1 硬规则，不可降级；违反报 `ROOM_SUBJECT_CLASH`，结果不得交付）。
+- `options.groupPreference`：`sameCombination`（默认，一个考场只放同一组合）/ `fillRooms`（先填满考场，共用时合并座位并报 `ROOMS_SHARED`）。
+- 多场次**不应用** `constraints`：job 带限定会报 `CONSTRAINTS_IGNORED_MULTI`（warning），要限定请用 `--single`。
 
-> 🟡 **现状**：`SKILL.md` 与 `reference.md` 里还没有任何 v2 / 多场次内容
-> （`选科`、`planAll`、`多场次`、`dedicatedSubjects` 出现 0 次）。这是目前最容易让 AI 走错路的信息缺口，
-> 已登记为 `docs/issues.md` 议题 3。
+> ✅ **现状**：`SKILL.md`（7927 字节 < 8192）与 `reference.md` 已覆盖 job.json v2 / 多场次 /
+> `dedicatedSubjects` / `groupPreference` / 两个新诊断码；`examples/job.sample.json` 是带选科样例，
+> `exam-seat precheck --job` 可直接跑通。议题 3 已解决。
 
 ---
 
@@ -913,6 +986,10 @@ CORE_SUBJECTS / PREFERRED_SUBJECTS / SECONDARY_SUBJECTS / SUBJECT_LABELS / SUBJE
 
 // 时段推导（多场次）
 buildConflictGraph(combinations) / deriveTimeSlots(...) / findSlotConflicts(...) / subjectInSlot(...)
+
+// 多场次硬规则与导出闸门
+findRoomSubjectClashes(result)                   // 逐「考场 × 时段」找同场多科 → ROOM_SUBJECT_CLASH 的证据源
+blocksListExport(diagnostics)                    // true = 结构性 error，拒绝写名单 / 监考表（§8.1，码表 BLOCKING_EXPORT_CODES）
 
 // 模型与定义域
 compileModel(job, adjacency?)                    // Job → 扁平结构（座位表、邻接表、班级编号）
@@ -951,17 +1028,17 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 
 ## 13. 技术选型与工程化
 
-| 层     | 选型                                                | 说明                                                                     |
-| ------ | --------------------------------------------------- | ------------------------------------------------------------------------ |
-| 语言   | TypeScript 6.0.x（**不要升 7**）                    | 全仓统一；`core` 出 ESM + CJS + IIFE + `.d.ts`（IIFE 全局名 `ExamSeat`） |
-| 构建   | **tsdown**（core / io / cli）+ Vite 8（web）        | 全仓**不用 tsup**                                                        |
-| 包管理 | pnpm 12 workspace                                   | 本地互相 link；Node ≥ 22.12                                              |
-| Web    | Vue 3.5 + Vue Router 5 + Pinia 4 + Element Plus 2   | 纯前端无后端；**localStorage** 持久化（键前缀 `exam-seat:`）；hash 路由  |
-| 表格   | 目前用 `el-table`                                   | 🟡 **虚拟滚动尚未实现**（1000 行会偏重），议题见 `docs/issues.md`        |
-| Excel  | SheetJS 0.20.3（`vendor/xlsx-0.20.3.tgz` vendored） | 只在 `@exam-seat/io` 依赖，core 保持零依赖                               |
-| CLI    | Node ≥ 22.12，`bin: exam-seat`                      | 七个子命令，自带 `--help`，`--json` 时 stdout 只有一个 JSON 对象         |
-| 并发   | core 同步；web 放 Web Worker                        | 取消 = `worker.terminate()`；进度 = 阶段 + 已用时间 / 上限               |
-| 质量   | oxlint + oxfmt + Vitest 5                           | `pnpm verify` = `lint:check → typecheck → build → test → acceptance`     |
+| 层     | 选型                                                           | 说明                                                                     |
+| ------ | -------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 语言   | TypeScript 6.0.x（**不要升 7**）                               | 全仓统一；`core` 出 ESM + CJS + IIFE + `.d.ts`（IIFE 全局名 `ExamSeat`） |
+| 构建   | **tsdown**（core / io / cli）+ Vite 8（web）                   | 全仓**不用 tsup**                                                        |
+| 包管理 | pnpm 12 workspace                                              | 本地互相 link；Node ≥ 22.12                                              |
+| Web    | Vue 3.5 + Vue Router 5 + Pinia 4 + Element Plus 2              | 纯前端无后端；**localStorage** 持久化（键前缀 `exam-seat:`）；hash 路由  |
+| 表格   | `el-table-v2` + `el-auto-resizer`（封装成 `VirtualTable.vue`） | 1000 行只渲染可见区；行内编辑的考场配置表仍用 `el-table`（行数少）       |
+| Excel  | SheetJS 0.20.3（`vendor/xlsx-0.20.3.tgz` vendored）            | 只在 `@exam-seat/io` 依赖，core 保持零依赖                               |
+| CLI    | Node ≥ 22.12，`bin: exam-seat`                                 | 七个子命令，自带 `--help`，`--json` 时 stdout 只有一个 JSON 对象         |
+| 并发   | core 同步；web 放 Web Worker                                   | 取消 = `worker.terminate()`；进度 = 阶段 + 已用时间 / 上限               |
+| 质量   | oxlint + oxfmt + Vitest 5                                      | `pnpm verify` = `lint:check → typecheck → build → test → acceptance`     |
 
 工程化细节：
 
@@ -974,18 +1051,18 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 
 ## 14. 里程碑与进度总表
 
-| 里程碑 | 内容                                            | 验收                                          | 状态                |
-| ------ | ----------------------------------------------- | --------------------------------------------- | ------------------- |
-| M1     | `core`：模型 + 编号 + 定义域 + 预检 + 校验器    | 单测覆盖，纯函数、零依赖                      | ✅ 已完成           |
-| M2     | `core`：贪心 + 模拟退火求解器                   | 18 班 1000 人零冲突 < 3 秒                    | ✅ 已完成           |
-| M3     | `io` + `cli`                                    | 子命令可用，退出码正确                        | ✅ 已完成           |
-| M4     | `.agents/skills/exam-seating/`                  | AI 能凭 skill 独立完成 口述 → job.json → 结果 | ✅ 已完成           |
-| M5     | `web` 六个步骤页                                | 网页上完成全流程并导出 xlsx                   | ✅ 已完成           |
-| M6     | job.json 双向互通 + 降级横幅 + 诊断建议一键应用 | 网页 ↔ CLI ↔ AI 三方接力无信息损失            | ✅ 已完成           |
-| M7     | job.json v2：选科、时段、分组分房、`planAll`    | 见 §5.7 的 S1–S8                              | S1–S4 ✅ / S5–S8 🟡 |
+| 里程碑 | 内容                                            | 验收                                          | 状态      |
+| ------ | ----------------------------------------------- | --------------------------------------------- | --------- |
+| M1     | `core`：模型 + 编号 + 定义域 + 预检 + 校验器    | 单测覆盖，纯函数、零依赖                      | ✅ 已完成 |
+| M2     | `core`：贪心 + 模拟退火求解器                   | 18 班 1000 人零冲突 < 3 秒                    | ✅ 已完成 |
+| M3     | `io` + `cli`                                    | 子命令可用，退出码正确                        | ✅ 已完成 |
+| M4     | `.agents/skills/exam-seating/`                  | AI 能凭 skill 独立完成 口述 → job.json → 结果 | ✅ 已完成 |
+| M5     | `web` 六个步骤页                                | 网页上完成全流程并导出 xlsx                   | ✅ 已完成 |
+| M6     | job.json 双向互通 + 降级横幅 + 诊断建议一键应用 | 网页 ↔ CLI ↔ AI 三方接力无信息损失            | ✅ 已完成 |
+| M7     | job.json v2：选科、时段、分组分房、`planAll`    | 见 §5.7 的 S1–S8                              | S1–S8 ✅  |
 
-**待办（按建议执行顺序）**：① S8 skill 补 v2（`docs/issues.md` 议题 3）→
-② Web 表格虚拟滚动（议题 1）→ ③ Web 场次编排（议题 2）→ ④ S5 `groupPreference` → ⑤ S6 空考场取消。
+**待办**：只剩一件事——多场次支持 `constraints`（限定），见 `docs/issues.md` 议题 4。
+本轮已把「静默忽略限定」改成显式 `CONSTRAINTS_IGNORED_MULTI` warning，因此不会再有「以为生效其实没生效」的坑。
 
 ---
 
@@ -996,18 +1073,19 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 3. **输出只做两种**：按班级（学生 / 班主任）、按考场（监考老师）；第三种本期不做。
 4. **专用考场手工指定**：在考场配置里给考场打「专用科目」标记（`dedicatedSubjects`），可兼多科。
 5. **常规组合全程不换考场**；只有非常规组合中途换一次（§5.1）。
-6. **空考场自动上报可取消**（`planAll().emptyRooms`）。
+6. **空考场自动上报可取消**（`planAll().emptyRooms`），导出 `job.json` 时自动剔除，网页可一键移除。
 7. **job.json 是唯一契约**，字段语义只由 core 解释；网页与 CLI 不得私自扩展含义。
 
 ---
 
 ## 16. 变更记录
 
-| 版本 | 变更                                                                                                                                                                                |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| v5   | 核心包 / CLI / 项目级 Skill 三层交付；job.json 作为唯一契约                                                                                                                         |
-| v5.1 | **行列限定拆成「语义值」与「绝对号」**：不指定考场时只能用 `first` / `last` / `door` / `window`，由每个考场按自身行列数解析；指定考场后才允许绝对号                                 |
-| v5.2 | **job.json v2 + 选科与多场次**：选科解析（`combination` / `subjects`）、时段推导、分组分房与 `planAll`；限定新增班级 / 组合 / 科目选择器；考场新增 `location` / `dedicatedSubjects` |
-| v5.3 | **文档与实现对齐**：API / CLI / `plan.json` / 编号签名 / 诊断码 / 技术选型全部按代码校正；虚拟滚动等未实现项显式标注                                                                |
-| v5.4 | 实施进度表按代码逐条核对（S1–S8），发现 skill 未覆盖 v2 并登记议题                                                                                                                  |
-| v6   | **合并版**：`design.md` + `design-selection.md` 合并重写为本文档（单一事实来源），原 `design-selection.md` 删除；新增「实现状态一览」，全篇按当前代码核对一遍                       |
+| 版本 | 变更                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v5   | 核心包 / CLI / 项目级 Skill 三层交付；job.json 作为唯一契约                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| v5.1 | **行列限定拆成「语义值」与「绝对号」**：不指定考场时只能用 `first` / `last` / `door` / `window`，由每个考场按自身行列数解析；指定考场后才允许绝对号                                                                                                                                                                                                                                                                                                                                                                                                       |
+| v5.2 | **job.json v2 + 选科与多场次**：选科解析（`combination` / `subjects`）、时段推导、分组分房与 `planAll`；限定新增班级 / 组合 / 科目选择器；考场新增 `location` / `dedicatedSubjects`                                                                                                                                                                                                                                                                                                                                                                       |
+| v5.3 | **文档与实现对齐**：API / CLI / `plan.json` / 编号签名 / 诊断码 / 技术选型全部按代码校正；虚拟滚动等未实现项显式标注                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| v5.4 | 实施进度表按代码逐条核对（S1–S8），发现 skill 未覆盖 v2 并登记议题                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| v6   | **合并版**：`design.md` + `design-selection.md` 合并重写为本文档（单一事实来源），原 `design-selection.md` 删除；新增「实现状态一览」，全篇按当前代码核对一遍                                                                                                                                                                                                                                                                                                                                                                                             |
+| v7   | **S5–S8 落地 + 硬规则立起来**：① 明确「一个考场、一个时段、只能考一科」为不可降级的硬规则，共用考场必须逐时段不冲突且合并成一套座位；② `options.groupPreference`（`sameCombination` 默认 / `fillRooms`）真正被 core 读取，default 下考场不足直接报错、不再偷偷混排；③ 新增 `ROOM_SUBJECT_CLASH`（error）与 `CONSTRAINTS_IGNORED_MULTI`（warning，多场次限定不再被静默忽略）；④ Web 第 ⑤⑥ 步支持多场次编排与两份工作簿导出；⑤ 表格虚拟滚动；⑥ 导出自动剔除空置考场 + 网页一键移除；⑦ skill 补齐 v2 / 多场次（议题 1/2/3 关闭，新增议题 4：多场次支持限定） |
