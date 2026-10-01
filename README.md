@@ -44,7 +44,9 @@ node packages/cli/bin/exam-seat.mjs numbering --rows 7 --cols 5 --extra 2,4
 
 ```
 out/按班级考场安排.xlsx      # 总表（全班 706 人）+ 每个班一张 sheet
-out/考场监考表.xlsx          # 每个考场一张 sheet，含座位号 / 班级 / 姓名 / 准考证号 / 备注
+out/考场监考表.xlsx          # 每个考场一张 sheet：座位号 / 班级 / 姓名 / 准考证号 / 备注
+                             # 备注只写两种：「不考：生物」（他的主考场在这里、但这场他不考）
+                             #            「只考：生物」（他只是来这间单科借考）；其余留空
 out/按班级考场安排/2501.xlsx …   # 每个班一个单独文件（发给班主任）
 out/考场监考表/第一考场（语数外物化生）.xlsx …  # 每个考场一个单独文件（发给监考老师）
 out/plan.json  out/job.json
@@ -60,7 +62,7 @@ out/plan.json  out/job.json
 pnpm --filter @exam-seat/web dev
 ```
 
-六个步骤：导入名单 → 排除缺考 → 配置考场 → 设置限定 → 排考场 → 导出名单。网页可以导出/导入 `job.json`，和命令行完全互通。
+六个步骤：导入名单 → 排除缺考 → 配置考场 → 设置限定 → **考场排布** → 导出名单。网页里这份配置叫**「排布状态」**（文件 `排布状态.json`），就是命令行用的 `job.json`，两边完全互通；网页也可以导入命令行导出的 `job.json`。
 
 ### 让 AI 来排
 
@@ -162,9 +164,11 @@ vendor/                           SheetJS tarball
   ],
   "rooms": [
     // 只放宽这一个考场的「同班相邻」（true = 完全放开；数字 = 该考场同班人数上限）：
-    { "id": "R17", "name": "第十七考场", "rows": 7, "cols": 5, "relaxSameClass": true },
+    { "id": "R16", "name": "第十六考场", "rows": 7, "cols": 6, "relaxSameClass": true },
     // 讲台一侧加座：5 列 × 7 排 + 第 2、4 列各加 1 张桌 = 37 座：
     { "id": "R1", "name": "第一考场", "rows": 7, "cols": 5, "extraFrontSeats": [2, 4] },
+    // 专属组合考场：这间只收「政史地」的整批学生（写法「史地政」等价；人数多可以给多间都写上）：
+    { "id": "R17", "name": "第十七考场", "rows": 7, "cols": 5, "combination": "政史地" },
   ],
 }
 ```
@@ -181,7 +185,7 @@ pnpm lint:check    # 只检查，不改文件（CI 用这个）
 pnpm typecheck     # 类型检查（core/io/cli 用 tsc，web 用 vue-tsc）
 pnpm test          # 单元测试
 pnpm build         # 全部构建
-pnpm acceptance     # 一键验收：19 项硬指标（990 人端到端 + 独立暴力复核）
+pnpm acceptance     # 一键验收：140 项硬指标（990 人端到端 + 独立暴力复核 + 专属组合/放宽/借考/加座）
 node examples/smoke.mjs      # 990 人 / 33 考场 冒烟测试
 node examples/make-roster.mjs /tmp/roster.xlsx 18 55   # 造一份假名单
 ```

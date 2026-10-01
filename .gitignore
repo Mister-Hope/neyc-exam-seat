@@ -23,3 +23,7 @@ docs/需求-*.原件.md
 # 这三个目录由 `skills` CLI 为 Claude/Continue 等生成，属于本机副本）
 .claude/
 .continue/
+
+# 本机工具缓存（Electron/electron-builder 下载缓存放在工作区内、node 编译缓存）
+.cache/
+.tmp/

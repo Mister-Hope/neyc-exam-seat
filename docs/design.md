@@ -3,8 +3,8 @@
 > **本文档是唯一的设计说明**：由原 `design.md`（v5.3）与 `design-selection.md`（选科与多场次，v3 草案）合并重写。
 > 后续所有设计变更都改在这里；原来的 `design-selection.md` 已并入本文 §5，不再单独维护。
 >
-> **实现状态**：`pnpm test` 全绿 —— **548 项单测**（node 353 ｜ web 195）+ **130 项验收**。
-> 单测分布：core 163 ｜ io 150 ｜ cli 40 ｜ web 195。验收场景：990 名考生 / 38 个考场，蛇形编号逐座核对，
+> **实现状态**：`pnpm test` 全绿 —— **617 项单测**（node 406 ｜ web 211）+ **140 项验收**。
+> 单测分布：core 191 ｜ io 174 ｜ cli 41 ｜ web 211。验收场景：990 名考生 / 38 个考场，蛇形编号逐座核对，
 > 独立暴力复核相邻关系零违规；多场次逐「考场 × 时段」复核零违规；考场级放宽 / 按科目借考 /
 > 37 座加座 / 显式时段 / 分房游标回卷 / 可打印导出（列名与地点列、姓名条件截断、正文居中）逐条断言；
 > 一个考场一个时段只能考一科、导出闸门、空置考场剔除、skill 覆盖全部逐条断言。
@@ -43,6 +43,7 @@
 | 非矩形加座考场 `RoomSpec.extraFrontSeats`（37 座）       | ✅ 已完成 | `core/src/numbering.ts`（`columnSeatCounts` / `seatNoToRCIn` / 真实座位图 `maxSameClass`）、`core/src/model.ts`（`extraSeat` / `extraCols`）；`core/test/nonrect.test.ts`（§4.5 / §5.8.4） |
 | 分房游标回卷（`allocateDemands`）                        | ✅ 已完成 | `core/src/plan-all.ts`；`core/test/borrow-relax.test.ts`（§5.8.5）                                                                                                                         |
 | 交付物标注（座位表加座行 / 监考表备注与放宽标注）        | ✅ 已完成 | `io/src/index.ts`、`cli/src/render.ts`；`io/test/*`、`cli/test/plan-out-dir.test.ts`（§5.8.6）                                                                                             |
+| 专属组合考场 `RoomSpec.combination`                      | ✅ 已完成 | `core/src/plan-all.ts` / `core/src/validate-combination.ts` / `core/src/util.ts`；`core/test/room-combination.test.ts`（§5.5.1）                                                           |
 
 > 本轮能力已全部落地。仍留两个**明确不做**的小口子（登记在 `docs/issues.md`）：
 > 加座暂时不能被 `constraints` 精确点名（没有 `seatRef`，加座只由求解器自然填充），
@@ -62,22 +63,22 @@
 
 ### 1.2 需求确认
 
-| #   | 需求         | 说明                                                                               |
-| --- | ------------ | ---------------------------------------------------------------------------------- |
-| 1   | Web 应用     | 导入 `.xlsx`，查询排除缺考，可视化配置，导出名单                                   |
-| 2   | 核心包       | 算法封装为独立 JS 包，浏览器 / Node 通用，零运行时依赖                             |
-| 3   | CLI          | agent 可通过命令行或 import 调用，传选项拿明确结果                                 |
-| 4   | Skill        | 项目级 skill，说明这个包能做什么、每个接口什么含义                                 |
-| 5   | AI 填参      | 用户口述需求 → AI 理解 → AI 填写参数 → 调包 → 返回结果                             |
-| 6   | 限定规则     | **考场限定（单选）** + **行** + **列** + v2 的**班级 / 组合 / 科目选择器**         |
-| 7   | 考场配置     | 手动设总数；每个考场「大（6×7=42）/ 小（5×6=30）/ 自定义 行×列」，含地点与专用科目 |
-| 8   | 编号规则     | 蛇形；门在右上角，1 号 = 右上角，逐列向左                                          |
-| 9   | 列 / 行编号  | 列**从靠门侧起算**（第 1 列 = 靠门列 = 小号列，第 C 列 = 靠窗列）；行从讲台起算    |
-| 10  | 硬约束       | 每人单桌，相邻（默认 8 邻域）不得同班                                              |
-| 11  | 班级数 < 9   | 自动退化到「前后左右 4 邻域」，明确提示已降级                                      |
-| 12  | 无解反馈     | 必须说清为什么排不出来 + 怎么放宽（建议可一键应用）                                |
-| 13  | 输出         | **不是座位图，是一份名单**；单场一张名单，多场次按班级 / 按考场两种表              |
-| 14  | 选科与多场次 | 名单带选科时自动推导时段、分组分房，常规组合不换考场、非常规组合换一次             |
+| #   | 需求         | 说明                                                                                         |
+| --- | ------------ | -------------------------------------------------------------------------------------------- |
+| 1   | Web 应用     | 导入 `.xlsx`，查询排除缺考，可视化配置，导出名单                                             |
+| 2   | 核心包       | 算法封装为独立 JS 包，浏览器 / Node 通用，零运行时依赖                                       |
+| 3   | CLI          | agent 可通过命令行或 import 调用，传选项拿明确结果                                           |
+| 4   | Skill        | 项目级 skill，说明这个包能做什么、每个接口什么含义                                           |
+| 5   | AI 填参      | 用户口述需求 → AI 理解 → AI 填写参数 → 调包 → 返回结果                                       |
+| 6   | 限定规则     | **考场限定（单选）** + **行** + **列** + v2 的**班级 / 组合 / 科目选择器**                   |
+| 7   | 考场配置     | 手动设总数；每个考场「大（6×7=42）/ 小（5×7=35）/ 自定义 行×列」，含地点、专用科目与专属组合 |
+| 8   | 编号规则     | 蛇形；门在右上角，1 号 = 右上角，逐列向左                                                    |
+| 9   | 列 / 行编号  | 列**从靠门侧起算**（第 1 列 = 靠门列 = 小号列，第 C 列 = 靠窗列）；行从讲台起算              |
+| 10  | 硬约束       | 每人单桌，相邻（默认 8 邻域）不得同班                                                        |
+| 11  | 班级数 < 9   | 自动退化到「前后左右 4 邻域」，明确提示已降级                                                |
+| 12  | 无解反馈     | 必须说清为什么排不出来 + 怎么放宽（建议可一键应用）                                          |
+| 13  | 输出         | **不是座位图，是一份名单**；单场一张名单，多场次按班级 / 按考场两种表                        |
+| 14  | 选科与多场次 | 名单带选科时自动推导时段、分组分房，常规组合不换考场、非常规组合换一次                       |
 
 ### 1.3 明确不做（本期）
 
@@ -243,6 +244,7 @@ AI 也可以生成 job.json 让老师在网页里打开复核、微调。任何�
 | 同校多规则                       | 同一学生被多条规则命中时**取交集**，为空则报错                                                                                                            |
 | `combination` / `subjects`       | v2 选科：原文 + 规范化科目 id；名单里有选科即进入多场次模式                                                                                               |
 | `location` / `dedicatedSubjects` | v2 考场：地点（出现在监考表与座位表表头）与专用科目标记                                                                                                   |
+| `combination`                    | 专属组合考场：只接收该组合的整批学生（整批进、全程不换考场）；与「限定钉考场」等价，连座位号一致（§5.5.1）                                                |
 | `included: false`                | 本次不参加考试，容量校验按「实际参考」算                                                                                                                  |
 | `groupPreference`                | 分房倾向：`"sameCombination"`（默认，一个考场只放同一组合）/ `"fillRooms"`（先填满当前考场）；两者都必须满足 §5.1 的硬规则                                |
 | `relaxSameClass`                 | 考场级放宽（§5.8.1）：`true` 本考场同班相邻不算冲突、人数上限 = 座位数；数字 n = 本考场同班上限 n；**只影响本考场**，留 `ROOM_SAME_CLASS_RELAXED` warning |
@@ -251,7 +253,7 @@ AI 也可以生成 job.json 让老师在网页里打开复核、微调。任何�
 | `options.slots`                  | 显式时段表（§5.8.3）：`[{ id?, name?, subjects: [...] }, …]`，给了就**不再自动推导**；时段 id / name 缺省按顺序补齐                                       |
 | `options.forbiddenSameSlot`      | 只补「必须分开考」的科目对，例如 `[["chemistry","biology"]]`；其余仍自动着色；与 `slots` 同时给以 `slots` 为准                                            |
 
-> ⚠️ 为什么 `last` / `window` 必须用语义值而不是数字：考场有 5×6 和 6×7 两种，
+> ⚠️ 为什么 `last` / `window` 必须用语义值而不是数字：考场有 5×7 和 6×7 两种（自定义尺寸也允许），
 > **同一个数字在不同考场指向不同位置**。详见 §4.2。
 
 ### 3.3 输出 `plan.json`（单场，`PlanResult`）
@@ -431,7 +433,7 @@ function seatNoToRC(seatNo: number, rows: number, cols: number): { row: number; 
 function toPhysicalCol(col: number, cols: number, doorSide: DoorSide = "right"): number;
 ```
 
-**小考场（5 列 × 6 排 = 30）**
+**示例：5 列 × 6 排 = 30 座**（⚠️ 这是**编号规则示意**，不是当前网页预设——网页「小考场」预设已改为 5 列×7 排 = 35 座，见 §5.5/§10.2）
 
 ```
             讲台 / 黑板
@@ -463,9 +465,9 @@ function toPhysicalCol(col: number, cols: number, doorSide: DoorSide = "right"):
 
 ### 4.2 为什么行列必须分「语义值」和「绝对号」
 
-考场有大小之分（5 列 × 6 排 = 30 与 6 列 × 7 排 = 42），**同一个数字在不同考场指向不同位置**：
+考场有大小之分（6 排与 7 排、5 列与 6 列，都可能有），**同一个数字在不同考场指向不同位置**：
 
-| 限定               | 在 5×6 考场（30 人）     | 在 6×7 考场（42 人）    |
+| 限定               | 在 5×6 考场（示意）      | 在 6×7 考场（42 人）    |
 | ------------------ | ------------------------ | ----------------------- |
 | `rows: ["first"]`  | 第 1 排（5 个座）        | 第 1 排（6 个座）       |
 | `rows: ["last"]`   | 第 6 排                  | 第 7 排                 |
@@ -782,6 +784,7 @@ interface RoomSpec {
   doorSide?: "left" | "right";
   note?: string; // 监考老师
   dedicatedSubjects?: string[]; // 专用科目，例如 ["politics", "geography"]
+  combination?: string; // 专属组合考场：只接收这个组合的整批学生（本轮新增）
 }
 ```
 
@@ -849,7 +852,7 @@ interface RoomSpec {
 - 表内大标题与 sheet 名同文案；第二行小字：`地点：<location> ｜ 考场人数：N`，
   该考场放宽了同班相邻时再补 ` ｜ 本考场已放宽同班相邻`；**不再有「监考：…」**；
 - 正文表头 `座位号 | 班级 | 姓名 | 准考证号 | 备注`，按座位号排序；**正文格水平 + 垂直居中**；
-  借考行备注见 §5.8.2（如「借考（第6时段 生物）」），其余为空；
+  备注只有两种、**不带时段 / 不带「借考」字样 / 不带括号**（见下方 v3 规则），其余留空；
 - 同一考场**不同时段考不同科目**时拆成多张 sheet，各自把科目写进标题：
   「第十九考场（政治）」「第十九考场（地理）」。
 
@@ -858,12 +861,40 @@ interface RoomSpec {
 地点：高二一班 ｜ 考场人数：42 ｜ 本考场已放宽同班相邻
 座位号 | 班级        | 姓名   | 准考证号 | 备注
   1    | 高三(1)班   | 张伟   | 20240101 |
-  2    | 高三(5)班   | 李娜   | 20240202 | 借考（第6时段 生物）
+  2    | 高三(5)班   | 李娜   | 20240202 |
+  3    | 高三(1)班   | 张伟   | 20240101 | 不考：生物
+  4    | 高三(7)班   | 王强   | 20240303 | 只考：生物
 ```
 
 > 样式档位（`XlsxStyleName`）：`title`（16pt 加粗居中）/ `subtitle`（12pt 加粗）/ `meta`（9pt 灰字**左对齐**）/
 > `header`（11pt 加粗居中 + 浅灰底 + 细边框）/ `body`（11pt **居中** + 细边框）/ `note`（9pt 灰字）。
 > 正文**只有 `body` 一档**（全部居中），不再保留左对齐 / 居中两套，避免同一张表混用两种对齐。
+
+#### 备注列规则（v3，老师三轮反馈后定稿）
+
+考场表列的是**用过这间考场的人**，但每个时段真正应到的只是其中一部分——不标的话监考老师会把不考的学生当成缺考。
+所以备注只有两种，且**一律不带时段、不带「借考」字样、不带括号**：
+
+| 情形                                                         | 备注           | 例                                    |
+| ------------------------------------------------------------ | -------------- | ------------------------------------- |
+| 本考场是**主考场**，但该生缺其中某科                         | `不考：<科目>` | `不考：生物`                          |
+| 本考场**不是**主考场（外来单科借考），且没考满全场           | `只考：<科目>` | `只考：生物`；多科 `只考：生物、地理` |
+| 外来但**考满该考场全部科目**（如政治单科房间里的物化政学生） | **不写**       | 没有信息量，不加噪音                  |
+| 正常全考（主考场里该考的都在这里考）                         | **不写**       | —                                     |
+
+- **主考场 = 该生考「语数外」的那间考场**（老师：「毕竟语数外算是一个学生的主考场」）；
+  取不到语数外信息时（单场 / 数据缺失）退回「座位时段最多的那间」。
+  **班级表的「主考场」列与这里的判定共用同一个函数**（`studentMainRoomId`），所以两处口径永远一致。
+- 多科目用「、」连接，顺序按 core 的科目固定顺序（`SUBJECT_DISPLAY_ORDER`）。
+- **判定是数据驱动的**：用 `byStudent[].slots[].roomId` 反推「他在这间考场实际考了哪几科」，
+  **绝不能拿 `students[].subjects` 相减**——那份只有 3 门选科，不含语数外。
+- ⚠️ **只有监考表的备注去掉了时段**；CLI 摘要与网页的「借考明细」**仍然保留时段**
+  （如「某生 T6 生物 → 第十八考场」），那是给人看走位的，不是给监考老师看的。
+  见 §5.8.2 与 `docs/issues.md` 议题 18。
+- **真实数据实测**（706 人 / 20 张 sheet）：**只有 2 张**有备注——
+  第十八考场（语数外物化生）34 行 = 22 行 `不考：生物` + 1 行 `只考：生物`；
+  第十七考场（语数外政史地）29 行 = 1 行 `不考：地理`（该生组合史生政，地理在任何考场都没考——**这是正确行为，不是 bug**）；
+  第十九考场（政治 / 地理）与 R1–R16 全干净。备注列宽 11.65cm / 10.54cm，都 ≤ 27.8cm。
 
 > **分组规则**：同一考场 × 同一批考生的时段合并成一张表；常规考场各 1 张，
 > 专用考场按科目拆（政治 / 地理各 1 张）。万一某考场混了批次（只在 `fillRooms` 且两批逐时段不冲突时，
@@ -873,9 +904,44 @@ interface RoomSpec {
 **输出 C：本期不做**（每人对照卡 / 校验报告）。`planAll` 已经返回 `byStudent` 与校验结论，
 以后想加只差一个导出函数。
 
-### 5.7 实施进度（S1–S12）
+### 5.5.1 专属组合考场：`RoomSpec.combination`
 
-> 核对时间：2026-09-30（本轮收口后实测）。基线：`pnpm test` 全绿（**548 项单测**：node 353 / web 195；**130 项验收**）。
+> 老师原话：「**指定一个专属的老文科考场，让考政史地的整批学生集中在这个考场**。」
+
+```jsonc
+{ "id": "R9", "name": "第九考场", "rows": 7, "cols": 6, "combination": "史地政" }
+```
+
+- **语义**：这个考场只接收 `students[].combination` 等于该值的**常规组合批次**（整批进、全程不换考场），
+  其余学生不会被分进来；仍然遵守「一室一时段一卷」（§5.1 硬规则不可破）。
+- **写法任意**：`史地政` / `政史地` 等价，内部走 `normalizeCombination` 归一（`util.ts` 的 `roomCombination`）。
+- **允许多间钉同一组合**：人数超过单室容量时，按 `rooms` 顺序依次吃下；
+  仍然装不下就走既有缺路 `CAPACITY_INSUFFICIENT`（**绝不混排**）。
+- **与专用科目互斥**：同时写了 `combination` 与 `dedicatedSubjects` 时**组合优先**，
+  该考场不再进专用科目池，并报 `ROOM_COMBINATION_IGNORED_DEDICATED`（warning）。
+- **与「限定」的关系**：这是**等价入口**——「限定里把该组合 `roomId` 钉到某考场」和「考场写 `combination`」
+  排出来的结果一致，**连座位号都相同**（`core/test/room-combination.test.ts` 把这条等价性钉死）。
+  老师面向前者更直观，AI 两种都能用；但显式 `roomId` 限定**优先**于专属组合
+  （被 `roomId` 钉走的学生不受专属组合约束）。
+- **诊断**：`ROOM_COMBINATION_APPLIED`（info，留痕哪个考场吃下了哪个组合）、
+  `ROOM_COMBINATION_UNKNOWN`（warning，名单里没有该组合 → 该考场空置但结果仍 `ok`）。
+- **单场模式下的行为**：专属组合是**多场次概念**（单场所有人考同一份卷子，没有「按组合分流」可言），
+  所以单场 `plan`（`--single` / 名单没有选科）会**忽略该字段但绝不静默**：
+  逐考场报 `ROOM_COMBINATION_IGNORED_SINGLE`（warning），消息形如
+  「单场模式下所有考生考同一份卷子，**第一考场**的专属组合「政史地」不生效（按普通考场处理）」。
+  此时结果仍然 `ok`、退出码 `0`（不再报误导性的 `SEARCH_FAILED`），CLI 成功时也会把这条 warning 打到终端；
+  单场 `validate` 也不会因为该字段报 `MISMATCH` / `UNMET`（多场次行为不变）。
+
+**独立校验**（`validate` / `validateAll` 重算，与求解器分开实现）：
+
+| issue 码                    | 级别  | 触发                                                                         |
+| --------------------------- | ----- | ---------------------------------------------------------------------------- |
+| `ROOM_COMBINATION_MISMATCH` | error | 专属考场里坐了**别的组合**的学生                                             |
+| `ROOM_COMBINATION_UNMET`    | error | 该组合的学生主考场**不在**钉住的专属考场里（被显式 `roomId` 钉走的学生放行） |
+
+### 5.7 实施进度（S1–S14）
+
+> 核对时间：2026-09-30（本轮收口后实测）。基线：`pnpm test` 全绿（**617 项单测**：node 406 / web 211；**140 项验收**）。
 > 「依据」一列是可以直接去核对的代码与测试文件。
 
 | 阶段 | 内容                                                        | 状态      | 依据（代码 / 测试）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -895,7 +961,11 @@ interface RoomSpec {
 
 | S12 | 班级表列名与地点列 / 姓名条件截断 / 正文居中（老师第三轮反馈） | ✅ 已完成 | `io/src/schedule-export.ts`（`roomColumnHeaders` 考场列 + 紧跟地点列、`roomLocation`、`displayStudentName` / `fitNamesToA4`、`buildClassScheduleRows.truncatedNames`）、`io/src/xlsx.ts`（`body` = 居中、`columnsWidthCm` / `exceedsA4Landscape`）；`io/test/name-fit.test.ts`（§5.6、§7 议题 11） |
 
-> S8 之后遗留的两项已在本轮关闭：多场次限定真正生效（S5/S6 同批）与本轮 S9/S10；S11 是用户反馈「Excel 不像正式表」后的导出层重做，S12 是随后的第三轮细化（列名/地点列、姓名条件截断、正文居中）。
+| S13 | 专属组合考场 `RoomSpec.combination` + 小考场 35 座 + 网页文案口径 | ✅ 已完成 | `core/src/types.ts`（`combination`）、`core/src/util.ts`（`roomCombination`）、`core/src/plan-all.ts`（`ROOM_COMBINATION_*`）、`core/src/validate-combination.ts`（`ROOM_COMBINATION_MISMATCH` / `_UNMET`）、`core/src/precheck.ts`（**动态**「改成大考场」建议）；`core/test/room-combination.test.ts`；`web/src/lib/seat-grid.ts`（`ROOM_PRESETS.small` = 5 列×7 排）、`core/src/plan.ts`（`ROOM_COMBINATION_IGNORED_SINGLE`）、`cli/src/cli.ts`（`small` = 7×5）、`web/src/**` 文案口径（§5.5.1、§9、§10.2、§10.6） |
+
+| S14 | 监考表备注 v3（`不考：X` / `只考：X`，不带时段）+ 主考场改用「考语数外那间」 | ✅ 已完成 | `io/src/schedule-export.ts`（`seatingRemark` / `seatingAttendance` / `studentMainRoomId`，数据驱动）；班级表「主考场」列与监考表备注共用同一判定；`io/test/*`（§5.6 备注列规则） |
+
+> S8 之后遗留的两项已在本轮关闭：多场次限定真正生效（S5/S6 同批）与本轮 S9/S10；S11 是用户反馈「Excel 不像正式表」后的导出层重做，S12 是随后的第三轮细化（列名/地点列、姓名条件截断、正文居中），S13 是专属组合考场与新一轮文案口径，S14 是监考表备注定稿 v3。
 > 仍未做的只有两个小口子，见 §0 末尾与 `docs/issues.md`。
 
 ---
@@ -934,6 +1004,8 @@ interface RoomSpec {
 - 语义：**这个学生的这门科目到指定考场考试**，该时段占用目标考场的一个空位；其余科目仍在自己的主考场。
 - 硬规则照旧按「考场 × 时段」判定：目标考场该时段**只能**开考这一科（空着也算可以开考这一科）；若该时段另有别的科目 → `SUBJECT_ROOM_CLASH`（error，不导出）。
 - 目标考场必须已有座位方案（否则 `SUBJECT_ROOM_NO_SEAT`，error）；借考学生在该座位方案里用 `SeatingPlan.borrowedSubjects[studentId]` 登记「只考这些科目」，避免占用他其它时段的座位。
+- ⚠️ **监考表备注不带时段**（v3，§5.6）：只写 `不考：X` / `只考：X`；而**这里的「借考明细」保留时段**
+  （`borrowings` 与 CLI 摘要仍是「某生 T6 生物 → 第十八考场」）。两边用途不同，别以为是同一个口径。
 - 借考生**会被并入目标座位方案的 `studentIds`**（他的座位就在这套方案里），所以看「某考场几个人」时要连借考生一起数；
   区分方式是 `SeatingPlan.borrowedSubjects` / `PlanAllResult.borrowings`，不是 `studentIds` 里有没有他（§5.8.6 实测 R18 = 34）。
 - `byStudent[student].slots[slotId]` 指向目标考场 + 座位号，`distinctRooms` 计入 `maxRoomsPerStudent`。
@@ -1009,7 +1081,7 @@ interface RoomSpec {
 ```
 
 **可行性守卫**：容量合计 ≥ 参考人数；单考场单班上限按**该考场真实座位图的最大独立集**算（`numbering.ts` 的 `maxSameClass`：
-30 人场 king ≤ 9、42 人场 king ≤ 12、37 座加座场 king ≤ 12 / orth ≤ 20，见 §4.5.3）；
+35 座（5×7）king ≤ 12 / orth ≤ 18、42 人场（6×7）king ≤ 12 / orth ≤ 21、37 座加座场 king ≤ 12 / orth ≤ 20，见 §4.5.3 与 `core/test/nonrect.test.ts`）；
 标了 `relaxSameClass` 的考场改用该考场自己的上限（`true` = 座位数，数字 = 该数字）且不计入相邻同班；每条限定可用座位数 ≥ 该组人数；交集非空。
 
 > 数学背景：座位图是国王图，色数 4；退化到 4 邻域后是二分棋盘图，色数仅 2，**≤8 个班几乎必然可解**。
@@ -1033,42 +1105,46 @@ interface RoomSpec {
 
 全部取值以 `packages/core/src/types.ts` 的 `DiagnosticCode` 为准；单场与多场次共用一个码表。
 
-| 代码                                | 级别    | 触发条件                                                                                     | 给老师的说法 / 建议动作                                               |
-| ----------------------------------- | ------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `STUDENT_DUPLICATE_ID`              | error   | 名单里有重复学号                                                                             | 列出前几个重复学号，请先修名单                                        |
-| `STUDENT_MISSING_CLASS`             | error   | 学生没有班级                                                                                 | 班级是相邻约束的基础，必须补                                          |
-| `STUDENT_MISSING_NAME`              | warning | 学生没有姓名                                                                                 | 名单里会显示为空                                                      |
-| `STUDENT_MISSING_SUBJECTS`          | warning | 多场次模式下有学生没有选科信息                                                               | 这些学生不会进入任何时段                                              |
-| `UNKNOWN_ROOM_ID`                   | error   | 限定引用了不存在的考场                                                                       | 改为「不限考场」或选一个真实考场                                      |
-| `UNKNOWN_STUDENT_ID`                | warning | 限定点名了名单里不存在的学生                                                                 | 修正 `studentIds` 或改用选择器                                        |
-| `INVALID_ROOM_SIZE`                 | error   | 考场行列数不是 ≥1 的整数                                                                     | 修正考场尺寸                                                          |
-| `NO_ROOMS` / `NO_STUDENTS`          | error   | 没配考场 / 参考人数为 0                                                                      | 加考场 / 取消排除                                                     |
-| `CAPACITY_INSUFFICIENT`             | error   | 参考人数 > 总座位                                                                            | 还缺 N 个座位：小场改大场(+12) / 加考场 / 多排除 N 人                 |
-| `CONSTRAINT_EMPTY_DOMAIN`           | error   | 可用座位集合为空                                                                             | 「第 3 考场是 6×4，没有第 5 排」→ 改考场 / 改行 / 改列                |
-| `CONSTRAINT_INDEX_OUT_OF_RANGE`     | error   | 绝对号在所有候选考场都越界                                                                   | 改用「靠窗列」语义值 / 指定一个 6 列考场                              |
-| `ABSOLUTE_ROWCOL_WITHOUT_ROOM`      | warning | 没指定考场却写了绝对号                                                                       | 将在各类考场分别解析，建议改用语义值（不阻塞）                        |
-| `CONSTRAINT_NO_SELECTOR`            | error   | 一条限定没写任何选择器                                                                       | 这条限定不会生效，补一个选择器或删掉                                  |
-| `CONSTRAINT_OVERSATURATED`          | error   | 限定可用座位数 < 该组人数（含座位唯一性匹配失败）                                            | 多出的人改考场 / 放宽行或列                                           |
-| `RULE_INTERSECT_EMPTY`              | error   | 同一学生多条规则交集为空                                                                     | 「同时指定了第 3 和第 5 考场」→ 删其中一条                            |
-| `SEAT_CONFLICT`                     | error   | 两人被指定到同一个座位                                                                       | 改其一                                                                |
-| `CLASS_LIMIT_EXCEEDED`              | error   | 某班超出可用考场容量上限                                                                     | 「高三2班还差 N 个位置」→ 加考场                                      |
-| `ROOMS_OVERPROVISIONED`             | info    | 座位明显多于参考人数                                                                         | 「第 26–30 考场将空置」→ 可少配考场                                   |
-| `ROOMS_SHARED`                      | warning | 多场次：`groupPreference: "fillRooms"` 下多个批次共用考场                                    | 该考场的学生合并成一套座位；标题为考场名（科目并集）                  |
-| `ROOM_SUBJECT_CLASH`                | error   | 同一考场同一时段出现两门科目（违反 §5.1 硬规则）                                             | 调整分房或加考场；该结果不得导出                                      |
-| `CONSTRAINTS_IGNORED_MULTI`         | warning | **历史码**：多场次曾忽略限定。现已支持限定（§5.4），正常路径不再产生；保留枚举只为兼容旧数据 | —                                                                     |
-| `CONSTRAINT_EMPTY_DOMAIN`（多场次） | error   | `roomId` 把学生钉到他们根本不会去的考场（既非主考场也非专用考场）                            | 改 `roomId` 或去掉该限定                                              |
-| `TOO_FEW_CLASSES`                   | warning | 班级数 ≤ 8                                                                                   | **非错误**：已自动退化为 4 邻域，`level` 会变成 `orthogonal`          |
-| `ROOM_SAME_CLASS_RELAXED`           | warning | 考场标了 `relaxSameClass`（§5.8.1）                                                          | 「第17考场已放宽同班相邻（上限 N 人）」；结果可交付，监考表表头会标注 |
-| `SUBJECT_ROOM_APPLIED`              | info    | 借考落位成功（§5.8.2）                                                                       | 逐条留痕「某生 生物 → 第十八考场 1 号」；**不产生第二张卷子**         |
-| `SUBJECT_ROOM_UNKNOWN_ROOM`         | error   | `subjectRoom` 指向不存在的考场                                                               | 修正考场 id（该条借考被丢弃）                                         |
-| `SUBJECT_ROOM_UNKNOWN_SUBJECT`      | error   | `subjectRoom` 里的科目不在这名学生的 `subjects` 里                                           | 改成他真考的科目，或删掉该条                                          |
-| `SUBJECT_ROOM_NO_SLOT`              | error   | `subjectRoom` 的科目不在任何时段（选科 / 显式时段表里没有它）                                | 核对时段表与该生选科                                                  |
-| `SUBJECT_ROOM_CLASH`                | error   | 目标考场该时段还开着别的科目，借考会变成「两张卷子」                                         | 换目标考场或调整分房；该结果**不得导出**                              |
-| `SUBJECT_ROOM_NO_SEAT`              | error   | 目标考场没有座位方案，或该座位方案已没有空位                                                 | 给目标考场加座位 / 换一个有空位的考场                                 |
-| `SLOTS_PROVIDED`                    | info    | 用了 `options.slots` 显式时段表（§5.8.3）                                                    | 记一笔便于事后核对；此时**不再自动推导**时段                          |
-| `SLOTS_CONFLICT`                    | error   | 显式时段表导致同一学生在同一时段被排两科                                                     | 时段表与名单对不上，调整时段表                                        |
-| `SEARCH_FAILED`                     | error   | 预检通过但退火后仍有冲突 / 未满足限定                                                        | 见 §7.2，带 evidence 与可一键应用的 suggestions                       |
-| `OK`                                | info    | 预检通过                                                                                     | 「预检通过：N 名考生、M 个班、K 个考场」                              |
+| 代码                                 | 级别    | 触发条件                                                                                     | 给老师的说法 / 建议动作                                                           |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `STUDENT_DUPLICATE_ID`               | error   | 名单里有重复学号                                                                             | 列出前几个重复学号，请先修名单                                                    |
+| `STUDENT_MISSING_CLASS`              | error   | 学生没有班级                                                                                 | 班级是相邻约束的基础，必须补                                                      |
+| `STUDENT_MISSING_NAME`               | warning | 学生没有姓名                                                                                 | 名单里会显示为空                                                                  |
+| `STUDENT_MISSING_SUBJECTS`           | warning | 多场次模式下有学生没有选科信息                                                               | 这些学生不会进入任何时段                                                          |
+| `UNKNOWN_ROOM_ID`                    | error   | 限定引用了不存在的考场                                                                       | 改为「不限考场」或选一个真实考场                                                  |
+| `UNKNOWN_STUDENT_ID`                 | warning | 限定点名了名单里不存在的学生                                                                 | 修正 `studentIds` 或改用选择器                                                    |
+| `INVALID_ROOM_SIZE`                  | error   | 考场行列数不是 ≥1 的整数                                                                     | 修正考场尺寸                                                                      |
+| `NO_ROOMS` / `NO_STUDENTS`           | error   | 没配考场 / 参考人数为 0                                                                      | 加考场 / 取消排除                                                                 |
+| `CAPACITY_INSUFFICIENT`              | error   | 参考人数 > 总座位                                                                            | 还缺 N 个座位：小场改大场(+12) / 加考场 / 多排除 N 人                             |
+| `CONSTRAINT_EMPTY_DOMAIN`            | error   | 可用座位集合为空                                                                             | 「第 3 考场是 6×4，没有第 5 排」→ 改考场 / 改行 / 改列                            |
+| `CONSTRAINT_INDEX_OUT_OF_RANGE`      | error   | 绝对号在所有候选考场都越界                                                                   | 改用「靠窗列」语义值 / 指定一个 6 列考场                                          |
+| `ABSOLUTE_ROWCOL_WITHOUT_ROOM`       | warning | 没指定考场却写了绝对号                                                                       | 将在各类考场分别解析，建议改用语义值（不阻塞）                                    |
+| `CONSTRAINT_NO_SELECTOR`             | error   | 一条限定没写任何选择器                                                                       | 这条限定不会生效，补一个选择器或删掉                                              |
+| `CONSTRAINT_OVERSATURATED`           | error   | 限定可用座位数 < 该组人数（含座位唯一性匹配失败）                                            | 多出的人改考场 / 放宽行或列                                                       |
+| `RULE_INTERSECT_EMPTY`               | error   | 同一学生多条规则交集为空                                                                     | 「同时指定了第 3 和第 5 考场」→ 删其中一条                                        |
+| `SEAT_CONFLICT`                      | error   | 两人被指定到同一个座位                                                                       | 改其一                                                                            |
+| `CLASS_LIMIT_EXCEEDED`               | error   | 某班超出可用考场容量上限                                                                     | 「高三2班还差 N 个位置」→ 加考场                                                  |
+| `ROOMS_OVERPROVISIONED`              | info    | 座位明显多于参考人数                                                                         | 「第 26–30 考场将空置」→ 可少配考场                                               |
+| `ROOMS_SHARED`                       | warning | 多场次：`groupPreference: "fillRooms"` 下多个批次共用考场                                    | 该考场的学生合并成一套座位；标题为考场名（科目并集）                              |
+| `ROOM_SUBJECT_CLASH`                 | error   | 同一考场同一时段出现两门科目（违反 §5.1 硬规则）                                             | 调整分房或加考场；该结果不得导出                                                  |
+| `CONSTRAINTS_IGNORED_MULTI`          | warning | **历史码**：多场次曾忽略限定。现已支持限定（§5.4），正常路径不再产生；保留枚举只为兼容旧数据 | —                                                                                 |
+| `CONSTRAINT_EMPTY_DOMAIN`（多场次）  | error   | `roomId` 把学生钉到他们根本不会去的考场（既非主考场也非专用考场）                            | 改 `roomId` 或去掉该限定                                                          |
+| `TOO_FEW_CLASSES`                    | warning | 班级数 ≤ 8                                                                                   | **非错误**：已自动退化为 4 邻域，`level` 会变成 `orthogonal`                      |
+| `ROOM_SAME_CLASS_RELAXED`            | warning | 考场标了 `relaxSameClass`（§5.8.1）                                                          | 「第17考场已放宽同班相邻（上限 N 人）」；结果可交付，监考表表头会标注             |
+| `SUBJECT_ROOM_APPLIED`               | info    | 借考落位成功（§5.8.2）                                                                       | 逐条留痕「某生 生物 → 第十八考场 1 号」；**不产生第二张卷子**                     |
+| `SUBJECT_ROOM_UNKNOWN_ROOM`          | error   | `subjectRoom` 指向不存在的考场                                                               | 修正考场 id（该条借考被丢弃）                                                     |
+| `SUBJECT_ROOM_UNKNOWN_SUBJECT`       | error   | `subjectRoom` 里的科目不在这名学生的 `subjects` 里                                           | 改成他真考的科目，或删掉该条                                                      |
+| `SUBJECT_ROOM_NO_SLOT`               | error   | `subjectRoom` 的科目不在任何时段（选科 / 显式时段表里没有它）                                | 核对时段表与该生选科                                                              |
+| `SUBJECT_ROOM_CLASH`                 | error   | 目标考场该时段还开着别的科目，借考会变成「两张卷子」                                         | 换目标考场或调整分房；该结果**不得导出**                                          |
+| `SUBJECT_ROOM_NO_SEAT`               | error   | 目标考场没有座位方案，或该座位方案已没有空位                                                 | 给目标考场加座位 / 换一个有空位的考场                                             |
+| `SLOTS_PROVIDED`                     | info    | 用了 `options.slots` 显式时段表（§5.8.3）                                                    | 记一笔便于事后核对；此时**不再自动推导**时段                                      |
+| `SLOTS_CONFLICT`                     | error   | 显式时段表导致同一学生在同一时段被排两科                                                     | 时段表与名单对不上，调整时段表                                                    |
+| `ROOM_COMBINATION_APPLIED`           | info    | 专属组合考场吃下了对应组合的整批学生（§5.5.1）                                               | 「第九考场：史地政 42 人」；整批进、全程不换考场                                  |
+| `ROOM_COMBINATION_UNKNOWN`           | warning | `rooms[].combination` 写的组合名单里一个学生都没有                                           | 该考场会空置（结果仍 `ok`）；核对组合写法或删掉这个考场                           |
+| `ROOM_COMBINATION_IGNORED_DEDICATED` | warning | 同一考场同时写了 `combination` 与 `dedicatedSubjects`                                        | **组合优先**，专用科目被忽略：删掉其中一个                                        |
+| `ROOM_COMBINATION_IGNORED_SINGLE`    | warning | 单场模式（`--single` / 名单无选科）下用了 `combination`，该字段被忽略                        | 「第一考场的专属组合「政史地」不生效（按普通考场处理）」；结果仍 `ok`、退出码 `0` |
+| `SEARCH_FAILED`                      | error   | 预检通过但退火后仍有冲突 / 未满足限定                                                        | 见 §7.2，带 evidence 与可一键应用的 suggestions                                   |
+| `OK`                                 | info    | 预检通过                                                                                     | 「预检通过：N 名考生、M 个班、K 个考场」                                          |
 
 每条 `Diagnostic` 都带 `code` / `severity` / `message`（中文人话）/ `evidence` / `suggestions[]`，
 其中每条 `Suggestion` 带**可机器应用的 `patch`**（JSON Patch：add / remove / replace）——
@@ -1102,6 +1178,9 @@ L2/L3 **只把「限定太紧」降级为惩罚**；结构性错误（座位不�
 独立校验器与求解器**分开实现**，它的码不在 `DiagnosticCode` 里：
 
 - `ADJACENCY_CONFLICT`、`CONSTRAINT_UNMET`
+- `ROOM_COMBINATION_MISMATCH`（专属考场里坐了别组合的人）、
+  `ROOM_COMBINATION_UNMET`（该组合的学生主考场不在钉住的专属考场里；被显式 `roomId` 钉走的学生放行）——都是 error（§5.5.1）。
+  两者都**只在多场次**判定；单场因为该字段被忽略（见 `ROOM_COMBINATION_IGNORED_SINGLE`），不报这两条
 - `ADJACENCY_RELAXED`（warning）：该考场标了 `relaxSameClass`，校验器**跳过**了它的相邻同班判定；
   不计入 `ok=false`，但必须在结果里留痕（§5.8.1）
 - `ENTRY_*`：`ENTRY_DUPLICATE_SEAT`、`ENTRY_DUPLICATE_STUDENT`、`ENTRY_MISSING_STUDENT`、
@@ -1204,7 +1283,21 @@ exam-seat validate  --job job.json --plan plan.json
 
 退出码让 agent 能直接分支：拿到 `3` 就去读 `diagnostics[].suggestions`，拿到 `2` 就把 `level` 明确告诉用户。
 
-`--spec` 语法刻意做得紧凑，方便 AI 拼：`1-20:small`（5×6=30）、`21-25:large`（6×7=42）、`26:6x4`（自定义）。
+`--spec` 语法刻意做得紧凑，方便 AI 拼：`1-20:small`、`21-25:large`、`26:6x4`（自定义）。
+
+**尺寸口径已统一**（网页预设与 CLI / `template` 三处一致）：
+
+| 写法               | 尺寸            | 容量    | 同班上限（king / orth） |
+| ------------------ | --------------- | ------- | ----------------------- |
+| `small`（或 `小`） | **5 列 × 7 排** | **35**  | 12 / 18                 |
+| `large`（或 `大`） | 6 列 × 7 排     | 42      | 12 / 21                 |
+| `NxM`              | N 排 × M 列     | `N × M` | 见 §4.5.3               |
+
+`--help` 与错误文案都会写明尺寸（`small = 5 列 × 7 排 = 35 座，large = 6 列 × 7 排 = 42 座`）。
+
+> ⚠️ **行为变更（2026-10）**：CLI 的 `small` **从 6×5=30 座改成了 7×5=35 座**（与网页一致）。
+> **既有脚本/ job 里写 `small` 的，容量会凭空多 5 座**——如果想保持原来的 30 座，请显式写 `6x5`。
+> 议题 13 已解决。
 
 ---
 
@@ -1238,10 +1331,14 @@ exam-seat validate  --job job.json --plan plan.json
 排除状态就是 `Student.included = false`。
 
 **③ 配置考场**
-每行一个考场：名称、类型（大 6×7=42 / 小 5×6=30 / 自定义 行×列）、门的位置（默认靠右）、
-备注（监考老师）、**地点**、**专用科目**（v2，可兼多科）。支持批量新建、上下移、重排考场号。
-容量不足红字告警「还缺 N 个座位」并给「补 N 个大考场」按钮；容量过剩提示哪些考场会整场空置，
-给「删掉会空置的考场」按钮。每个考场配**座位编号缩略图**（按物理列序画、门在右侧，所见即所得）。
+每行一个考场：名称、类型（大 6×7=42 / 小 5×7=35 / 自定义 行×列）、门的位置（默认靠右）、
+**专用科目**、**专属组合**、**备注**（列序按老师习惯：专用科目在前、备注在后，备注不再标「（监考老师）」）。
+「专用科目」空值 placeholder 是 **「常规考场」**；设了专属组合的考场会提示「不再走专用科目」（§5.5.1）。
+「放宽同班相邻」在这里表达为**勾选框「放宽本考场」+「同班学生数上限」**：勾上后该考场内同班相邻不算冲突，
+上限留空 = 不限（等价 `relaxSameClass: true`），填数字 = 该考场同班人数上限（§5.8.1）。
+支持批量新建、上下移、重排考场号。容量不足红字告警「还缺 N 个座位」并给「补 N 个大考场」按钮；
+容量过剩提示哪些考场会整场空置，给「删掉会空置的考场」按钮。
+每个考场配**座位编号缩略图**（按物理列序画、门在右侧，所见即所得）。
 
 **④ 设置限定**
 筛选学生（复用同一套搜索）→ 勾选 → 添加限定。弹窗里：
@@ -1310,6 +1407,21 @@ exam-seat validate  --job job.json --plan plan.json
 
 > 迁移的**判定标准不变**：虚拟化只影响渲染，`rows` 永远是「当前筛选结果的全量」，
 > 所以「全选当前结果」不会退化成「只选已渲染的那几行」（单测仍在守这条）。
+
+### 10.6 网页对外文案口径（老师面，不露内部术语）
+
+网页是给老师用的，**不出现内部术语与原始数据**：
+
+| 项                | 口径                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 品牌 / 页面标题   | **「考场排布」**（`web/index.html` 的 `<title>` 与顶栏）                                                                                                                              |
+| `job.json` 的称呼 | 网页里叫 **「排布状态」**，下载名 **`排布状态.json`**（**仍是同一份 job.json**，导入按内容解析、兼容旧文件名）                                                                        |
+| `plan.json`       | **网页不再导出**（CLI 仍写），结果只留在会话里                                                                                                                                        |
+| 诊断展示          | 只显示 core 的中文 `message` + 中文级别（`error`→错误、`warning`→警告）；**不显示** `code`、原始 JSON `evidence`                                                                      |
+| 降级级别          | 只显示中文说法（如「已降级：只要求前后左右不同班」「已放宽：本考场内同班相邻不算冲突」）；`softConstraints` / `minConflicts` 这类**只作为内部取值**（下拉选项的 value），标签一律中文 |
+| 时间上限          | 界面用**秒**（默认 10 秒），内部仍存毫秒（`timeLimitMs`）                                                                                                                             |
+| 放宽同班相邻      | 勾选框「**放宽本考场**」+「**同班学生数上限**」（见 §10.2 第 ③ 步与 §5.8.1）                                                                                                          |
+| 专用科目          | 空值 placeholder = 「**常规考场**」；备注列去掉了「（监考老师）」并挪到专用科目之后                                                                                                   |
 
 - **场次编排界面**（议题 2）：已实现。第 ⑤ 步默认走多场次 `planAll`（可切回单场），第 ⑥ 步展示「时段 → 考场 + 座位」、
   座位方案概览与校验摘要，并导出 `按班级考场安排.xlsx` / `考场监考表.xlsx`；空置考场按求解结果一键移除。
@@ -1452,7 +1564,7 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 
 工程化细节：
 
-- `examples/acceptance.mjs`（**130 项**）是**端到端验收**：真的调 CLI、读 Excel、跑多场次、核对相邻关系、比对导出文件；
+- `examples/acceptance.mjs`（**140 项**）是**端到端验收**：真的调 CLI、读 Excel、跑多场次、核对相邻关系、比对导出文件；
 - husky 钩子：`pre-commit` 跑 `nano-staged`（oxfmt + oxlint --fix），`commit-msg` 跑 `scripts/verifyCommit.ts`
   校验提交信息格式（`<type>(<scope>): <subject>`，type 见脚本，scope 必须是包名或 deps / release，标题 ≤ 50 字符）；
 - GitHub Actions：`ci.yml`（lint / typecheck / build / test / acceptance）与 `codeql.yml`；Renovate 管依赖。
@@ -1503,6 +1615,9 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 | v5.4 | 实施进度表按代码逐条核对（S1–S8），发现 skill 未覆盖 v2 并登记议题                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | v6   | **合并版**：`design.md` + `design-selection.md` 合并重写为本文档（单一事实来源），原 `design-selection.md` 删除；新增「实现状态一览」，全篇按当前代码核对一遍                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | v6.1 | **考场级「加限制 / 放宽限制」**（来源 `docs/需求-考场级限制与放宽.md`）：`RoomSpec.relaxSameClass`（考场级放宽同班相邻）、`Student.subjectRoom`（按科目借考 + 主考场本来就开考该科就留下的自动优待）、`options.slots` / `options.forbiddenSameSlot`（显式时段）、`RoomSpec.extraFrontSeats`（非矩形加座考场，37 座）与 `allocateDemands` 游标回卷修复；新增诊断码 `ROOM_SAME_CLASS_RELAXED` / `SUBJECT_ROOM_*` / `SLOTS_PROVIDED` / `SLOTS_CONFLICT`，`PlanLevel` 新增 `roomRelaxed`，校验器新增 `ADJACENCY_RELAXED`；**订正** §4.5 的 37 座 4 邻域最大独立集为 **20**（原写 19） |
+| v8.3 | **监考表备注定稿 v3**：备注改为 `不考：X`（主考场缺科）/ `只考：X`（外来单科），**不带时段、不带「借考」字样、不带括号**；外来但考满该考场全部科目、以及正常全考都不写。**主考场判定改为「该生考语数外的那间考场」**（取不到退回座位最多的那间），班级表「主考场」列与备注共用同一函数；判定数据驱动（`slots[].roomId` 反推，不用 `students[].subjects` 相减）。⚠️ CLI / 网页的「借考明细」**仍保留时段**——见 §5.6 与议题 18                                                                                                                                                      |
+| v8.2 | **收口两个真问题**：① CLI `small` 从 6×5=30 统一为 **7×5=35**（与网页预设、`template` 一致，`--help` 写明尺寸；⚠️ 既有脚本的 `small` 容量 +5 座，要 30 座写 `6x5`）；② 单场 `--single` 下的 `RoomSpec.combination` 改为**忽略 + `ROOM_COMBINATION_IGNORED_SINGLE`（warning）**，结果仍 `ok`、退出码 `0`，不再报误导性 `SEARCH_FAILED`，单场 validate 也不因该字段报 `MISMATCH`/`UNMET`——见 §5.5.1、§9                                                                                                                                                                             |
+| v8.1 | **专属组合考场 + 小考场 35 座 + 网页文案口径**：`RoomSpec.combination`（整批组合集中到一个考场，与「限定钉考场」等价、连座位号一致；新增 `ROOM_COMBINATION_APPLIED`/`_UNKNOWN`/`_IGNORED_DEDICATED` 与校验码 `ROOM_COMBINATION_MISMATCH`/`_UNMET`）；网页「小考场」预设 5 列×6 排=30 → **5 列×7 排=35**；`precheck` 的「改成大考场」建议改为**动态**（以本 job 最大考场为基准，gain = 最大 − 该考场）；网页对外文案口径（品牌「考场排布」、`job.json` 叫「排布状态」、不再导出 plan.json、不露内部术语、时间上限用秒）——见 §5.5.1、§10.6                                          |
 | v8.0 | **Web 组件库迁移 shadcn-vue**：Element Plus 全量移除，改 Tailwind v4 + reka-ui + shadcn-vue（组件在 `web/src/components/ui/`，主题变量在 `web/src/styles.css`）；虚拟表格改为**自研 `VirtualTable.vue`**（可视区 + `OVERSCAN = 4`）；缺件自研 / 换写法：多选下拉自研 `MultiSelect`、数字输入用 `Input type="number"`、第 ① 步列映射用 `NativeSelect` 规避 reka-ui `SelectValue` 首屏不出 label；构建体积（迁移前约值 2.4M / 480K / 1.9M → 迁移后实测 **dist 1,282,728 B ≈1.22 MiB ｜ CSS 98,157 B ≈96 KiB ｜ JS 1,184,009 B ≈1.13 MiB**）——见 §10.5                               |
 | v7   | **S5–S8 落地 + 硬规则立起来**：① 明确「一个考场、一个时段、只能考一科」为不可降级的硬规则，共用考场必须逐时段不冲突且合并成一套座位；② `options.groupPreference`（`sameCombination` 默认 / `fillRooms`）真正被 core 读取，default 下考场不足直接报错、不再偷偷混排；③ 新增 `ROOM_SUBJECT_CLASH`（error）与 `CONSTRAINTS_IGNORED_MULTI`（warning，多场次限定不再被静默忽略）；④ Web 第 ⑤⑥ 步支持多场次编排与两份工作簿导出；⑤ 表格虚拟滚动；⑥ 导出自动剔除空置考场 + 网页一键移除；⑦ skill 补齐 v2 / 多场次（议题 1/2/3 关闭，新增议题 4：多场次支持限定）                         |
 | v8   | **多场次限定与独立校验闭环 + 名单输入契约**：① `planAll` 不再忽略 `constraints`；每套座位下发适用限定，`roomId` 参与分房，`first/last/door/window` 与绝对号都生效，满足不了报 error 且不导出（议题 4 关闭）；② 新增 `validateAll()` 与多场次 `exam-seat validate`，逐 seating 重建子 job + 独立复核硬规则与限定满足情况（议题 5 关闭）；③ 名单输入契约：宽泛表头识别（`考证号` / 带空格表头 / `班主任` 不误命中）、缺考列智能判定、`roster --absent` 缺考名单（准考证号优先，否则 姓名+班级，未匹配必报）；④ 网页列映射智能预填 + 导入缺考名单；⑤ 验收 71 → 93 项                 |
