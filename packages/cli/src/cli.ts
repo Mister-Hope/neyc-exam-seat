@@ -20,6 +20,7 @@ import type {
   RelaxMode,
   RoomSpec,
 } from "@exam-seat/core";
+import { describeDuplicateRoomIds } from "@exam-seat/io";
 import { readRosterFile, writeMultiPlanFiles, writePlanFiles } from "@exam-seat/io/node";
 
 import {
@@ -93,9 +94,12 @@ function log(message = ""): void {
  *
  * `small` = 5 列 × 7 排 = 35 座，与网页预设 `ROOM_PRESETS.small` 完全一致（同一本考务表两端必须同义）； `large` = 6 列 × 7 排 =
  * 42 座。
+ *
+ * 严格校验：区间**不允许重叠**（否则会生成重复的 `R15` 这类 id），`NxM` 的 N、M 必须是 ≥ 1 的整数； 生成后再自查一次 id 唯一，宁可报错也不产出会被下游并表的配置。
  */
 export function parseRoomSpec(spec: string): RoomSpec[] {
   const rooms: RoomSpec[] = [];
+  const ranges: { from: number; to: number }[] = [];
   const segments = spec
     .split(",")
     .map((s) => s.trim())
@@ -118,6 +122,19 @@ export function parseRoomSpec(spec: string): RoomSpec[] {
     if (!Number.isInteger(from) || !Number.isInteger(to) || from < 1 || to < from) {
       throw new Error(`看不懂的考场范围「${rangePart}」`);
     }
+    // 区间重叠会生成重复 id（例如 1-20 与 15-25 → R15–R20 各两份），必须在这里挡住
+    for (const prev of ranges) {
+      const overlapFrom = Math.max(from, prev.from);
+      const overlapTo = Math.min(to, prev.to);
+      if (overlapFrom <= overlapTo) {
+        const label =
+          overlapFrom === overlapTo ? `R${overlapFrom}` : `R${overlapFrom}–R${overlapTo}`;
+        throw new Error(
+          `考场范围重叠：${label} 在两个区间里重复（${prev.from}-${prev.to} 与 ${from}-${to}），请改成不重叠的区间`,
+        );
+      }
+    }
+    ranges.push({ from, to });
 
     let cols: number, rows: number;
     const kind = kindPart.toLowerCase();
@@ -135,11 +152,23 @@ export function parseRoomSpec(spec: string): RoomSpec[] {
         );
       rows = Number(m.groups?.rows);
       cols = Number(m.groups?.cols);
+      if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1) {
+        throw new Error(
+          `考场类型「${kindPart}」的行列数必须是 ≥ 1 的整数，例如 6x4（6 排 × 4 列）`,
+        );
+      }
     }
 
     for (let n = from; n <= to; n += 1) {
       rooms.push({ id: `R${n}`, name: `第${n}考场`, rows, cols, doorSide: "right" });
     }
+  }
+
+  // 防御性自查：正常路径到不了这里，但绝不允许把重复 id 放出去
+  const ids = rooms.map((room) => room.id);
+  if (new Set(ids).size !== ids.length) {
+    const duplicated = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+    throw new Error(`生成了重复的考场 id：${duplicated.join("、")}，请检查 --spec 的区间`);
   }
   return rooms;
 }
@@ -272,13 +301,19 @@ export async function main(argv: string[]): Promise<number> {
                   matchedCount: absent.matched.length,
                   unmatchedCount: absent.unmatched.length,
                   unmatched: absent.unmatched,
+                  ambiguousCount: absent.ambiguous.length,
+                  ambiguous: absent.ambiguous,
                 },
               }),
         };
+        const ambiguousSuffix =
+          absent !== undefined && absent.ambiguous.length > 0
+            ? ` / 歧义 ${absent.ambiguous.length} 行`
+            : "";
         const absentSummary =
           absent === undefined
             ? null
-            : `缺考名单命中 ${absent.matched.length} 人 / 未匹配 ${absent.unmatched.length} 行`;
+            : `缺考名单命中 ${absent.matched.length} 人 / 未匹配 ${absent.unmatched.length} 行${ambiguousSuffix}`;
 
         if (options.out) {
           const { writeFile } = await import("node:fs/promises");
@@ -454,6 +489,16 @@ export async function main(argv: string[]): Promise<number> {
         single?: boolean;
       }) => {
         const job = await loadJob(options.job);
+        // 导出层只能按 roomId 归并：重复 id 会把两间考场并成一张表并丢人，这里直接挡住、不写任何文件
+        if (options.outDir) {
+          const duplicated = describeDuplicateRoomIds(job.rooms);
+          if (duplicated) {
+            log(`exam-seat: ${duplicated}`);
+            log("exam-seat: 已取消导出，未写出任何文件。");
+            exitCode = EXIT_USAGE;
+            return;
+          }
+        }
         const overrides: PlanOptions = {};
         if (options.seed !== undefined) {
           const seed = Number(options.seed);
@@ -495,9 +540,14 @@ export async function main(argv: string[]): Promise<number> {
               rooms: job.rooms,
               job,
               writeWorkbooks: !blocked,
+              tool: `exam-seat ${VERSION}`,
             });
             if (blocked) {
               log("结果未通过校验，已只导出 plan.json / job.json，未导出名单与监考表。");
+              log(
+                "⚠️ 已清掉本工具上一次生成的名单；本目录里若仍有同名文件，那是别处复制进来的，请勿当作本次结果。",
+              );
+              log(`本次运行信息见 ${nodePath.resolve(options.outDir)}/run.json`);
               for (const d of multiResult.diagnostics) {
                 if (d.severity === "error") log(`  [error] ${d.code}: ${d.message}`);
               }
@@ -550,9 +600,14 @@ export async function main(argv: string[]): Promise<number> {
             writeJson: true,
             job,
             writeWorkbooks: !blocked,
+            tool: `exam-seat ${VERSION}`,
           });
           if (blocked) {
             log("结果未通过校验，已只导出 plan.json / job.json，未导出名单与监考表。");
+            log(
+              "⚠️ 已清掉本工具上一次生成的名单；本目录里若仍有同名文件，那是别处复制进来的，请勿当作本次结果。",
+            );
+            log(`本次运行信息见 ${nodePath.resolve(options.outDir)}/run.json`);
             for (const d of result.diagnostics) {
               if (d.severity === "error") log(`  [error] ${d.code}: ${d.message}`);
             }

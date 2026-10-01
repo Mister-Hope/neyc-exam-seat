@@ -45,6 +45,19 @@ describe("考场规格解析", () => {
     expect(() => parseRoomSpec("1:5x")).toThrow(/看不懂/);
   });
 
+  it("重叠区间直接报错（否则会生成重复的 R15–R20）", () => {
+    expect(() => parseRoomSpec("1-20:small,15-25:large")).toThrow(/重叠/);
+    expect(() => parseRoomSpec("1-20:small,15-25:large")).toThrow(/R15–R20/);
+    expect(() => parseRoomSpec("1-3:small,2-4:large")).toThrow(/重叠/);
+    expect(() => parseRoomSpec("26:6x4,26:small")).toThrow(/重叠/);
+  });
+
+  it("行列数必须 ≥ 1（NxM）", () => {
+    expect(() => parseRoomSpec("26:0x4")).toThrow(/≥ 1/);
+    expect(() => parseRoomSpec("26:5x0")).toThrow(/≥ 1/);
+    expect(() => parseRoomSpec("26:0x0")).toThrow(/≥ 1/);
+  });
+
   it("混合规格的总容量算得对", () => {
     const rooms = parseRoomSpec("1-20:small,21-25:large,26:6x4");
     const total = rooms.reduce((sum, r) => sum + r.rows * r.cols, 0);

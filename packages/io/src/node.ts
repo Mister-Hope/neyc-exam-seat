@@ -1,7 +1,16 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import nodePath from "node:path";
 
-import type { Job, PlanAllResult, PlanResult, RoomSpec } from "@exam-seat/core";
+import { planDelivery } from "@exam-seat/core";
+import type { Job, PlanAllResult, PlanDelivery, PlanResult, RoomSpec } from "@exam-seat/core";
 
 import {
   applyAbsentKeys,
@@ -12,6 +21,7 @@ import {
   buildPlanWorkbook,
   buildRoomSheets,
   buildXlsx,
+  describeDuplicateRoomIds,
   pruneEmptyRooms,
   readAbsentKeys,
   readRoster,
@@ -54,7 +64,7 @@ export function readRosterFile(path: string, options: ReadRosterOptions = {}): R
   if (issues.some((issue) => issue.level === "error")) {
     return {
       ...result,
-      absent: { file: absentPath, keys, matched: [], unmatched: keys, issues },
+      absent: { file: absentPath, keys, matched: [], unmatched: keys, ambiguous: [], issues },
     };
   }
 
@@ -67,6 +77,7 @@ export function readRosterFile(path: string, options: ReadRosterOptions = {}): R
       keys,
       matched: applied.matched,
       unmatched: applied.unmatched,
+      ambiguous: applied.ambiguous,
       issues: [...issues, ...applied.issues],
     },
   };
@@ -100,6 +111,24 @@ export interface WriteFilesResult {
   directories: WriteDirectories;
 }
 
+/**
+ * 本次运行的元数据（`run.json`）：让老师一眼看出「这份目录是哪次跑的、名单是不是本次的」。
+ *
+ * 与 `plan.json` 并列写在同一目录；`artifacts` 是相对 `--out-dir` 的路径清单。
+ */
+export interface RunInfo {
+  /** 本次落盘时间（ISO） */
+  generatedAt: string;
+  /** 工具名 + 版本（CLI 传 `exam-seat 0.0.2` 这类字符串） */
+  tool: string;
+  /** 交付状态，与 core 的 `PlanDelivery` 同义 */
+  delivery: PlanDelivery;
+  /** 本次是否真的写出了名单 / 监考表（失败路径为 false） */
+  exportedWorkbooks: boolean;
+  /** 本次实际写出的文件（相对 `--out-dir`，含 `run.json` 自己） */
+  artifacts: string[];
+}
+
 export interface WritePlanOptions {
   outDir: string;
   /** 主文件名，默认「考场安排名单.xlsx」 */
@@ -115,6 +144,10 @@ export interface WritePlanOptions {
    * job.json 作证
    */
   writeWorkbooks?: boolean;
+  /** `run.json` 里的工具名 + 版本，缺省 `exam-seat` */
+  tool?: string;
+  /** 是否写 `run.json`，默认 true */
+  writeRunInfo?: boolean;
 }
 
 /** 考场对外展示名：有名字用名字（去空白），否则退回 id。与 core 的 roomName 口径一致。 */
@@ -123,10 +156,97 @@ function roomLabel(room: RoomSpec): string {
   return name === undefined || name === "" ? room.id : name;
 }
 
+/** 导出层按 roomId 归并；重复 id 会并表丢人，宁可直接报错。 */
+function assertUniqueRoomIds(rooms: readonly RoomSpec[] | undefined): void {
+  const message = describeDuplicateRoomIds(rooms ?? []);
+  if (message) throw new Error(message);
+}
+
+/**
+ * 写 `run.json`：本次运行的时间、工具、交付状态、是否导出名单、产物清单。
+ *
+ * **在所有产物都写完之后**调用，这样 `artifacts` 就是本目录里真实的本次产物清单（含 `run.json` 自己）。
+ */
+function writeRunInfo(
+  outDir: string,
+  written: readonly string[],
+  info: { tool: string; delivery: PlanDelivery; exportedWorkbooks: boolean },
+): string {
+  const runPath = nodePath.join(outDir, "run.json");
+  const payload: RunInfo = {
+    generatedAt: new Date().toISOString(),
+    tool: info.tool,
+    delivery: info.delivery,
+    exportedWorkbooks: info.exportedWorkbooks,
+    artifacts: [...written.map((file) => nodePath.relative(outDir, file)), "run.json"],
+  };
+  writeFileSync(runPath, JSON.stringify(payload, null, 2));
+  return runPath;
+}
+
+/**
+ * 本工具在 `--out-dir` 下**拥有**的名单产物（清单清理只动这些，绝不清空整个目录）。
+ *
+ * `plan.json` / `job.json` 是留证据用的，不在这里 —— 每次运行都会覆盖它们，不需要「清理」。
+ */
+export const OWNED_ARTIFACT_FILES = [
+  "考场安排名单.xlsx",
+  "考场座位表.xlsx",
+  "按班级考场安排.xlsx",
+  "考场监考表.xlsx",
+  "run.json",
+] as const;
+
+/** 本工具拥有的「分份目录」（每班 / 每考场一个文件）。 */
+export const OWNED_ARTIFACT_DIRS = ["按班级考场安排", "考场监考表"] as const;
+
+/**
+ * 清掉上一次运行留下的名单产物（复用 `--out-dir` 时必须先做，否则会把旧名单当成本次结果发出去）。
+ *
+ * 只删**清单里列出的文件**与两个分份目录里的 `*.xlsx`； 目录里若有别的东西（老师自己放的笔记 / 表格），原样保留；分份目录只有在**空了**之后才删除。
+ */
+export function cleanOwnedArtifacts(
+  outDir: string,
+  extraFileNames: readonly string[] = [],
+): string[] {
+  const removed: string[] = [];
+
+  for (const name of [...OWNED_ARTIFACT_FILES, ...extraFileNames]) {
+    const filePath = nodePath.join(outDir, name);
+    if (existsSync(filePath) && statSync(filePath).isFile()) {
+      rmSync(filePath, { force: true });
+      removed.push(filePath);
+    }
+  }
+
+  for (const name of OWNED_ARTIFACT_DIRS) {
+    const dirPath = nodePath.join(outDir, name);
+    if (!existsSync(dirPath) || !statSync(dirPath).isDirectory()) continue;
+    for (const entry of readdirSync(dirPath)) {
+      if (!entry.endsWith(".xlsx")) continue; // 用户放进去的别的东西不动
+      const entryPath = nodePath.join(dirPath, entry);
+      if (statSync(entryPath).isFile()) {
+        rmSync(entryPath, { force: true });
+        removed.push(entryPath);
+      }
+    }
+    if (readdirSync(dirPath).length === 0) {
+      rmSync(dirPath, { recursive: true, force: true });
+      removed.push(dirPath);
+    }
+  }
+
+  return removed;
+}
+
 /** 把结果落盘，返回写出的文件与被剔除的空置考场。 */
 export function writePlanFiles(result: PlanResult, options: WritePlanOptions): WriteFilesResult {
+  // 先校验再建目录：重复 id 的 job 一个文件都不写
+  if (options.writeWorkbooks ?? true) assertUniqueRoomIds(options.rooms);
   const outDir = nodePath.resolve(options.outDir);
   mkdirSync(outDir, { recursive: true });
+  // 复用同一个 --out-dir 时，先按清单清掉上一次的名单产物（用户自己的文件不动）
+  cleanOwnedArtifacts(outDir, options.fileName === undefined ? [] : [options.fileName]);
   const written: string[] = [];
   let removedRooms: string[] = [];
 
@@ -170,6 +290,16 @@ export function writePlanFiles(result: PlanResult, options: WritePlanOptions): W
     const jobPath = nodePath.join(outDir, "job.json");
     writeFileSync(jobPath, JSON.stringify(pruned?.job ?? options.job, null, 2));
     written.push(jobPath);
+  }
+
+  if (options.writeRunInfo ?? true) {
+    written.push(
+      writeRunInfo(outDir, written, {
+        tool: options.tool ?? "exam-seat",
+        delivery: result.delivery ?? planDelivery(result.diagnostics),
+        exportedWorkbooks: written.some((file) => file.endsWith(".xlsx")),
+      }),
+    );
   }
 
   return { files: written, removedRooms, directories: { classFiles: 0, roomFiles: 0 } };
@@ -226,10 +356,18 @@ export function writeMultiPlanFiles(
     job: Job;
     /** 是否写两份名单工作簿，默认 true；结果为 error（未通过校验）时调用方传 false，只留 plan.json / job.json 作证 */
     writeWorkbooks?: boolean;
+    /** `run.json` 里的工具名 + 版本，缺省 `exam-seat` */
+    tool?: string;
+    /** 是否写 `run.json`，默认 true */
+    writeRunInfo?: boolean;
   },
 ): WriteFilesResult {
+  // 先校验再建目录：重复 id 的 job 一个文件都不写
+  if (options.writeWorkbooks ?? true) assertUniqueRoomIds(options.rooms);
   const outDir = nodePath.resolve(options.outDir);
   mkdirSync(outDir, { recursive: true });
+  // 复用同一个 --out-dir 时，先按清单清掉上一次的名单产物（含班级变少后留下的旧班级文件）
+  cleanOwnedArtifacts(outDir);
   const written: string[] = [];
   const rooms = options.rooms ?? [];
   const title = options.job.meta?.title;
@@ -293,6 +431,16 @@ export function writeMultiPlanFiles(
   const jobPath = nodePath.join(outDir, "job.json");
   writeFileSync(jobPath, JSON.stringify(pruned?.job ?? options.job, null, 2));
   written.push(jobPath);
+
+  if (options.writeRunInfo ?? true) {
+    written.push(
+      writeRunInfo(outDir, written, {
+        tool: options.tool ?? "exam-seat",
+        delivery: result.delivery ?? planDelivery(result.diagnostics),
+        exportedWorkbooks: written.some((file) => file.endsWith(".xlsx")),
+      }),
+    );
+  }
 
   return {
     files: written,

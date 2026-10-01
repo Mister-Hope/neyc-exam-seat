@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Job, RoomSpec } from "@exam-seat/core";
 
-import { EXIT_DEGRADED, EXIT_INFEASIBLE, EXIT_OK, main } from "../src/cli";
+import { EXIT_DEGRADED, EXIT_INFEASIBLE, EXIT_OK, EXIT_USAGE, main } from "../src/cli";
 
 // 测试夹具：显式 6 排 × 5 列 = 30 座，与 CLI `small` 预设（5 列 × 7 排 = 35 座）无关
 const ROOM_6X5: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
@@ -559,6 +559,95 @@ describe("plan --out-dir 导出", () => {
       expect(validateCode).toBe(EXIT_OK);
       const report = JSON.parse(captured.stdout().slice(beforeValidate)) as { ok: boolean };
       expect(report.ok).toBe(true);
+    });
+  });
+
+  it("两个同 id 考场：拒绝导出、一个文件都不写，并给出可操作提示", async () => {
+    await withTempDir(async (dir) => {
+      const jobPath = nodePath.join(dir, "job.json");
+      const outDir = nodePath.join(dir, "out");
+      const job: Job = {
+        jobVersion: 2,
+        students: Array.from({ length: 60 }, (_, i) => ({
+          id: `SYN${String(i + 1).padStart(3, "0")}`,
+          name: `学生${i + 1}`,
+          className: `合成${(i % 6) + 1}班`,
+        })),
+        // 两个考场同 id、不同名：core 按数组下标当两间房（能排下 60 人），
+        // 导出层按 roomId 归并 → 修好之前这里会并成一张表、60 人只剩 35 人
+        rooms: [
+          { id: "R1", name: "第1考场", rows: 7, cols: 5 },
+          { id: "R1", name: "第2考场", rows: 7, cols: 5 },
+        ],
+      };
+      writeFileSync(jobPath, JSON.stringify(job));
+
+      const captured = captureOutput();
+      const code = await main(["node", "exam-seat", "plan", "--job", jobPath, "--out-dir", outDir]);
+
+      expect(code).toBe(EXIT_USAGE);
+      expect(existsSync(outDir)).toBe(false); // 连目录都没建，绝不留下旧文件
+      expect(captured.stderr()).toContain("考场 id 重复");
+      expect(captured.stderr()).toContain("R1");
+      expect(captured.stderr()).toContain("已取消导出");
+    });
+  });
+
+  it("复用 --out-dir：成功 → 失败后不残留旧名单，且用户文件还在", async () => {
+    await withTempDir(async (dir) => {
+      const okJobPath = nodePath.join(dir, "ok.json");
+      const failJobPath = nodePath.join(dir, "fail.json");
+      const outDir = nodePath.join(dir, "out");
+      writeFileSync(okJobPath, JSON.stringify(singleJob()));
+      writeFileSync(failJobPath, JSON.stringify(tightSingleJob()));
+
+      const first = captureOutput();
+      await expect(
+        main(["node", "exam-seat", "plan", "--job", okJobPath, "--out-dir", outDir]),
+      ).resolves.toBe(EXIT_OK);
+      expect(first.stderr()).toContain("已导出");
+      expect(existsSync(nodePath.join(outDir, "考场安排名单.xlsx"))).toBe(true);
+
+      // run.json：本次运行信息，成功时 exportedWorkbooks=true
+      const firstRun = JSON.parse(readFileSync(nodePath.join(outDir, "run.json"), "utf8")) as {
+        tool: string;
+        delivery: string;
+        exportedWorkbooks: boolean;
+        artifacts: string[];
+      };
+      expect(firstRun.tool).toMatch(/^exam-seat \d/);
+      expect(firstRun.exportedWorkbooks).toBe(true);
+      expect(firstRun.artifacts).toContain("run.json");
+
+      // 用户自己的文件必须活下来
+      writeFileSync(nodePath.join(outDir, "我的笔记.txt"), "别删我");
+
+      const second = captureOutput();
+      const code = await main([
+        "node",
+        "exam-seat",
+        "plan",
+        "--job",
+        failJobPath,
+        "--out-dir",
+        outDir,
+      ]);
+      expect(code).toBe(EXIT_INFEASIBLE);
+      expect(existsSync(nodePath.join(outDir, "考场安排名单.xlsx"))).toBe(false);
+      expect(existsSync(nodePath.join(outDir, "考场座位表.xlsx"))).toBe(false);
+      expect(existsSync(nodePath.join(outDir, "plan.json"))).toBe(true);
+      expect(existsSync(nodePath.join(outDir, "我的笔记.txt"))).toBe(true);
+      expect(second.stderr()).toContain("已清掉本工具上一次生成的名单");
+      expect(second.stderr()).toContain("请勿当作本次结果");
+      expect(second.stderr()).toContain("本次运行信息见");
+
+      const secondRun = JSON.parse(readFileSync(nodePath.join(outDir, "run.json"), "utf8")) as {
+        delivery: string;
+        exportedWorkbooks: boolean;
+        artifacts: string[];
+      };
+      expect(secondRun.delivery).toBe("blocked");
+      expect(secondRun.exportedWorkbooks).toBe(false);
     });
   });
 });

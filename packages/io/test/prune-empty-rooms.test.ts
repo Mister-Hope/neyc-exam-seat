@@ -263,7 +263,7 @@ describe("多场次导出剔除空置考场", () => {
       expect(written.files).toContain(nodePath.join(dir, "按班级考场安排", classFiles[0]!));
       expect(written.files).toContain(nodePath.join(dir, "考场监考表", roomFiles[0]!));
       expect(written.files).toHaveLength(
-        2 + classFiles.length + roomFiles.length + 2, // 两份合并表 + 分表 + plan.json + job.json
+        2 + classFiles.length + roomFiles.length + 3, // 两份合并表 + 分表 + plan.json + job.json + run.json
       );
     });
   });

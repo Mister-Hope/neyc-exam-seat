@@ -71,6 +71,16 @@ export function absentKeyLabel(key: AbsentKey): string {
   return `第 ${key.row} 行「${who === "" ? "（空）" : who}」`;
 }
 
+/** 一条「缺考名单匹配到多人」的歧义记录（自动应用被跳过，等老师补学号）。 */
+export interface AbsentAmbiguity {
+  /** 缺考名单里的 1 基行号 */
+  row: number;
+  name?: string;
+  className?: string;
+  /** 命中的候选学生 id（按主名单顺序） */
+  candidates: string[];
+}
+
 /** 一份缺考名单文件作用到主名单后的结果。 */
 export interface AbsentApplication {
   /** 缺考名单文件的绝对路径（Node 侧） */
@@ -81,7 +91,9 @@ export interface AbsentApplication {
   matched: string[];
   /** 没能在主名单里找到的缺考行 */
   unmatched: AbsentKey[];
-  /** 解析与匹配过程中的问题（列缺失是 error，未匹配是 warning） */
+  /** 匹配到多名学生、**没有**自动应用的缺考行（歧义） */
+  ambiguous: AbsentAmbiguity[];
+  /** 解析与匹配过程中的问题（列缺失是 error，未匹配 / 歧义是 warning） */
   issues: RosterIssue[];
 }
 
@@ -189,6 +201,13 @@ function normalizeHeader(header: string): string {
 /** 归一化单元格值（缺考判定 / 键匹配用）：去全部空白、全角转半角、字母数字转小写。 */
 function normalizeValue(value: string): string {
   return toHalfWidth(value).replaceAll(/\s/g, "").toLowerCase();
+}
+
+/** 往多值索引里追加一个下标（保持主名单出现顺序）。 */
+function pushIndex(map: Map<string, number[]>, key: string, index: number): void {
+  const list = map.get(key);
+  if (list) list.push(index);
+  else map.set(key, [index]);
 }
 
 /** 「缺考」列里表示**不缺席**的取值（已归一化）；其余任何非空内容都视为缺席。 */
@@ -465,35 +484,43 @@ export function readAbsentKeys(
  * 把缺考键作用到主名单上。
  *
  * - 匹配键归一化：去全部空白、全角转半角、字母数字转小写；id 走 id 精确匹配，(班级, 姓名) 走成对精确匹配；
- * - 命中者 `included: false`（与「缺考」列的结果取并集）；
- * - 未命中者进 `unmatched` 并生成 warning issue（写明第几行与键值）；
+ * - **恰好命中 1 人**才 `included: false`（与「缺考」列的结果取并集）；
+ * - **命中 0 人**进 `unmatched`、**命中 ≥2 人**进 `ambiguous`（歧义），两者都只留 warning、都不改学生；
  * - **不修改原数组**：返回新数组，命中/未命中的元素都是浅拷贝。
  */
 export function applyAbsentKeys(
   students: Student[],
   keys: AbsentKey[],
-): { students: Student[]; matched: string[]; unmatched: AbsentKey[]; issues: RosterIssue[] } {
-  const byId = new Map<string, number>();
-  const byNameClass = new Map<string, number>();
+): {
+  students: Student[];
+  matched: string[];
+  unmatched: AbsentKey[];
+  ambiguous: AbsentAmbiguity[];
+  issues: RosterIssue[];
+} {
+  // 多值索引：同一个键可能命中多名学生（重名、学号归一化碰撞），保留主名单出现顺序
+  const byId = new Map<string, number[]>();
+  const byNameClass = new Map<string, number[]>();
   students.forEach((student, index) => {
     const idKey = normalizeValue(student.id);
-    if (idKey !== "" && !byId.has(idKey)) byId.set(idKey, index);
+    if (idKey !== "") pushIndex(byId, idKey, index);
     const pairKey = `${normalizeValue(student.className)}\u0000${normalizeValue(student.name)}`;
-    if (!byNameClass.has(pairKey)) byNameClass.set(pairKey, index);
+    pushIndex(byNameClass, pairKey, index);
   });
 
   const next = students.map((student) => ({ ...student }));
   const matched: string[] = [];
   const unmatched: AbsentKey[] = [];
+  const ambiguous: AbsentAmbiguity[] = [];
   const issues: RosterIssue[] = [];
   const hitIndexes = new Set<number>();
 
   for (const key of keys) {
     const idKey = key.id === undefined ? "" : normalizeValue(key.id);
     const pairKey = `${normalizeValue(key.className ?? "")}\u0000${normalizeValue(key.name ?? "")}`;
-    const index = idKey === "" ? (byNameClass.get(pairKey) ?? -1) : (byId.get(idKey) ?? -1);
+    const candidates = idKey === "" ? (byNameClass.get(pairKey) ?? []) : (byId.get(idKey) ?? []);
 
-    if (index < 0) {
+    if (candidates.length === 0) {
       unmatched.push(key);
       issues.push({
         level: "warning",
@@ -502,6 +529,20 @@ export function applyAbsentKeys(
       });
       continue;
     }
+
+    // 歧义：命中多人时**不猜**，一个都不排除，等老师补学号
+    if (candidates.length > 1) {
+      const ids = candidates.map((index) => next[index]!.id);
+      ambiguous.push({ row: key.row, name: key.name, className: key.className, candidates: ids });
+      issues.push({
+        level: "warning",
+        row: key.row,
+        message: `缺考名单${absentKeyLabel(key)}在主名单里匹配到 ${ids.length} 名学生（学号：${ids.join("、")}），有歧义，这一行未应用；请在缺考名单里补「准考证号 / 学号」列指定具体学生`,
+      });
+      continue;
+    }
+
+    const index = candidates[0]!;
     if (hitIndexes.has(index)) continue; // 同一学生被多行命中只置一次
     hitIndexes.add(index);
     const updated: Student = { ...next[index]!, included: false };
@@ -509,7 +550,7 @@ export function applyAbsentKeys(
     matched.push(updated.id);
   }
 
-  return { students: next, matched, unmatched, issues };
+  return { students: next, matched, unmatched, ambiguous, issues };
 }
 
 /* ------------------------------------------------------------------ */
@@ -693,9 +734,41 @@ export interface PrunedJob<T> {
 }
 
 /**
+ * 找出 `rooms` 里**重复的考场 id**（按首次出现顺序），返回 id 与它出现的下标。
+ *
+ * Core 求解按 `job.rooms` 的**数组下标**区分房间，而导出层（座位表分组、`usedRoomIds` 等）只能看到 `roomId`； 同 id 的房间一旦被按 id
+ * 归并，就会把两间房的座位图叠在一起、静默丢人（task-44 实测 60 人丢 25 人）。 所有写文件的入口都要先用它挡一道。
+ */
+export function findDuplicateRoomIds(
+  rooms: readonly RoomSpec[],
+): { id: string; indices: number[] }[] {
+  const seen = new Map<string, number[]>();
+  rooms.forEach((room, index) => {
+    const indices = seen.get(room.id);
+    if (indices) indices.push(index);
+    else seen.set(room.id, [index]);
+  });
+  return [...seen.entries()]
+    .filter(([, indices]) => indices.length > 1)
+    .map(([id, indices]) => ({ id, indices }));
+}
+
+/** 重复考场 id 的人话说明；没有重复时返回 `undefined`。 */
+export function describeDuplicateRoomIds(rooms: readonly RoomSpec[]): string | undefined {
+  const duplicated = findDuplicateRoomIds(rooms);
+  if (duplicated.length === 0) return undefined;
+  const detail = duplicated
+    .map(({ id, indices }) => `${id}（第 ${indices.map((index) => index + 1).join("、")} 个考场）`)
+    .join("；");
+  return `考场 id 重复：${detail}。导出层只能按 id 归并，会把这两间考场并成一张表并丢人；请先把 job.rooms 的 id 改成唯一（或删掉重复的考场）再导出。`;
+}
+
+/**
  * 从求解结果推导真正用到了座位的考场 id（按首次出现顺序去重）。
  *
  * 单场看 `entries`；多场次看 `seatings`。与 core 判定 `emptyRooms` 的口径一致： 只要这个考场里坐过至少一个人，就不算空置。
+ *
+ * ⚠️ 只在**考场 id 唯一**时有意义；重复 id 的 job 在导出前会被 {@link describeDuplicateRoomIds} 挡下。
  */
 export function usedRoomIds(result: PlanResult | PlanAllResult): string[] {
   const roomIds =
