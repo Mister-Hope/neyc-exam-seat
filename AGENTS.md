@@ -4,15 +4,15 @@
 
 ## 技术栈版本约定
 
-| 项         | 版本                                                                 | 说明                                                                            |
-| ---------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Node       | ≥ 22.12                                                              | 本机 v24                                                                        |
-| pnpm       | 12.x                                                                 | 本机 12.7.0                                                                     |
-| TypeScript | **6.0.x**                                                            | **不要升到 7**，Vue 工具链目前只支持到 6                                        |
-| 构建       | tsdown                                                               | **不要用 tsup**                                                                 |
-| 测试       | Vitest 5                                                             |                                                                                 |
-| Web        | Vue 3.5 + Vite 8 + Pinia 4 + **shadcn-vue**（Tailwind v4 + reka-ui） | 组件在 `packages/web/src/components/ui/`；skill 见 `.agents/skills/shadcn-vue/` |
-| Excel      | SheetJS 0.20.3（vendored）                                           | **不要用 npm 上的 `xlsx`**，那个停在 0.18.5 且有漏洞                            |
+| 项         | 版本                                                                 | 说明                                                                                                                        |
+| ---------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Node       | **≥ 22.18**（`package.json` 的 `engines`）                           | 本机 v24。下限是 22.18：husky 用 `node scripts/verifyCommit.ts` **直接跑 TS**，依赖 type stripping，该能力 22.18 才默认开启 |
+| pnpm       | 12.x                                                                 | 本机 12.7.0                                                                                                                 |
+| TypeScript | **6.0.x**                                                            | **不要升到 7**，Vue 工具链目前只支持到 6                                                                                    |
+| 构建       | tsdown                                                               | **不要用 tsup**                                                                                                             |
+| 测试       | Vitest 5                                                             |                                                                                                                             |
+| Web        | Vue 3.5 + Vite 8 + Pinia 4 + **shadcn-vue**（Tailwind v4 + reka-ui） | 组件在 `packages/web/src/components/ui/`；skill 见 `.agents/skills/shadcn-vue/`                                             |
+| Excel      | SheetJS 0.20.3（vendored）                                           | **不要用 npm 上的 `xlsx`**，那个停在 0.18.5 且有漏洞                                                                        |
 
 ## SheetJS 特别说明
 
@@ -59,7 +59,8 @@ vendor/                           SheetJS tarball
 
 **commit message 格式**：`<type>(<scope>): <subject>`
 `type` ∈ feat/fix/docs/style/refactor/perf/test/workflow/build/ci/chore/types/release；
-`scope` 可选，给了必须是 `core`/`io`/`cli`/`web`/`deps`/`release`；subject 1–50 字。
+`scope` 可选，给了必须是 `core`/`io`/`cli`/`web`/`desktop`/`deps`/`release`；subject 1–50 字。
+（`desktop` 是私有包、不会被自动推导，所以在 `scripts/verifyCommit.ts` 的 `extraScopes` 里显式列出。）
 
 ### 关于 oxlint 配置的两条经验（别踩回去）
 
@@ -75,8 +76,15 @@ vendor/                           SheetJS tarball
 2. 求解结果**同输入同 seed 必须完全一致**，这是可复现性的底线。
 3. 求解器只用 `PlanResult.diagnostics` 表达业务失败，**不用抛异常**。
 4. 导出前必须跑 `validate()`——校验器与求解器分开实现，不许自证。
+   ⚠️ **当前实现还没把校验结论用于导出决策**（自校验失败被包装成 `SEARCH_FAILED`，而导出闸门不拦该码，
+   已知缺陷 **R-1**，见 `docs/design.md` §18）——修好之前别默认这条已经成立。
 5. **新增 `@exam-seat/*` 的子路径导出时（例如 `@exam-seat/io/node`），必须同时改三处**：
    根 `tsconfig.json` 的 `paths`、`vitest.config.ts` 的 alias、以及该包的 `package.json#exports`。
    漏掉前两处的话，**干净检出（还没 build）时 `pnpm typecheck` 会因为找不到 `dist/*.d.ts` 而失败**——
    CI 的顺序是 typecheck 早于 build，这条一定会炸。
    改完请用 `rm -rf packages/*/dist && pnpm verify` 验证。
+
+## 已知缺陷登记
+
+外部 review 的独立复核结论登记在 `docs/design.md` **§18 已知缺陷登记**（R-1 导出门禁 / R-2 输出目录残留 /
+R-3 缺考重名 / R-4 JSON Patch 原型污染 / R-5 桌面版下载·CSP·导航）。动手修之前先读那一节；改完把条目移入 §16 变更记录。
