@@ -139,6 +139,30 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
     },
   },
   {
+    // Vue 单文件组件会把模板里用到的每个子组件都算成一次 import，15 个的上限对
+    // 「页面型」组件太紧（App.vue 23、StepExclude 18）；放宽到 40，
+    // 仍能挡住真正失控的巨型组件。类型检查由 vue-tsc 负责，这里只是风格提示。
+    files: ["packages/web/src/**"],
+    rules: {
+      "import/max-dependencies": ["warn", { max: 40 }],
+    },
+  },
+  {
+    // `packages/web/src/components/ui/**` 是 `shadcn-vue add` 生成的组件结构：
+    // 组件 .vue 从同目录 index.ts 取 variants，天然形成 import 环（38 条）；
+    // 其余几条也都是生成代码的固定写法。这部分是上游产物，不按本仓风格重写，
+    // 只关掉这几条风格规则，error 级规则照常生效。
+    files: ["packages/web/src/components/ui/**"],
+    rules: {
+      "import/no-cycle": "off",
+      "unicorn/no-negated-condition": "off",
+      "no-negated-condition": "off",
+      "typescript/array-type": "off",
+      "no-implicit-coercion": "off",
+      "no-else-return": "off",
+    },
+  },
+  {
     // oxlint 认不出 `.vue` 的导出（见文件开头「两条经验」第 1 条），
     // 于是 main.ts 里的 App 在 oxlint 眼里是 error type，no-unsafe-argument 纯属误报；
     // web 的类型检查交给 vue-tsc

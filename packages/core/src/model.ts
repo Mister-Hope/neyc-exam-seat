@@ -12,8 +12,22 @@ export interface CompiledRoom {
   firstSeat: number;
   seatCount: number;
   maxSameClass: number;
-  /** (row-1)*cols + (col-1) → 全局座位下标 */
+  /** (row-1)*cols + (col-1) → 全局座位下标；**只含第 1..rows 排**，加座见 `extraSeat` */
   grid: Int32Array;
+  /**
+   * 下标 col-1 → 该列讲台侧加座的全局座位下标；该列没有加座时为 -1。
+   *
+   * 加座不算第 0 排（`seatRow` 记为 0 只是内部坐标），行 / 列限定点不到它。
+   */
+  extraSeat: Int32Array;
+  /** 有加座的业务列（升序去重），等价于 `extraSeat` 中非 -1 的下标 + 1 */
+  extraCols: number[];
+  /**
+   * 本考场放宽了「同班相邻」（`spec.relaxSameClass` 非 undefined 且非 false）。
+   *
+   * `true` = 完全放开；数字 = 该考场同班学生数上限（数字语义由 solver / validate 解释）。
+   */
+  relaxedSameClass: boolean;
 }
 
 export interface CompiledModel {
@@ -28,7 +42,7 @@ export interface CompiledModel {
   seatRoom: Int32Array;
   /** 座位 → 座位号 */
   seatNo: Int32Array;
-  /** 座位 → 排（从讲台起算） */
+  /** 座位 → 排（从讲台起算）；加座为 0 */
   seatRow: Int32Array;
   /** 座位 → 业务列（从靠门侧起算） */
   seatCol: Int32Array;
@@ -71,6 +85,19 @@ const NEIGHBOR_OFFSETS_ORTHOGONAL: readonly (readonly [number, number])[] = [
   [0, 1],
   [1, 0],
 ];
+
+/**
+ * 取 `(row, col)` 处的全局座位下标；该位置没有座位（越界，或第 0 排该列没有加座）返回 -1。
+ *
+ * 第 0 排 = 讲台侧加座，只有 `extraSeat` 里非 -1 的列才有座位。
+ */
+function seatIndexAt(room: CompiledRoom, row: number, col: number): number {
+  if (!Number.isInteger(row) || !Number.isInteger(col)) return -1;
+  if (col < 1 || col > room.spec.cols) return -1;
+  if (row === 0) return room.extraSeat[col - 1]!;
+  if (row < 1 || row > room.spec.rows) return -1;
+  return room.grid[(row - 1) * room.spec.cols + (col - 1)]!;
+}
 
 /** 把 Job 编译成求解器使用的扁平结构。纯函数，不做任何校验。 */
 export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledModel {
@@ -148,10 +175,21 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
   for (let r = 0; r < job.rooms.length; r += 1) {
     const spec = job.rooms[r]!;
     const capacity = roomCapacity(spec);
+    // grid 语义不变：只放第 1..rows 排；加座单独放 extraSeat
     const grid = new Int32Array(spec.rows * spec.cols).fill(-1);
+    const extraSeat = new Int32Array(spec.cols).fill(-1);
     for (let seatNo = 1; seatNo <= capacity; seatNo += 1) {
-      const { row, col } = seatNoToRC(seatNo, spec.rows, spec.cols);
-      grid[(row - 1) * spec.cols + (col - 1)] = seatCount + seatNo - 1;
+      const { row, col } = seatNoToRC(seatNo, spec.rows, spec.cols, spec.extraFrontSeats);
+      if (row === 0) {
+        extraSeat[col - 1] = seatCount + seatNo - 1;
+      } else if (row >= 1 && row <= spec.rows) {
+        grid[(row - 1) * spec.cols + (col - 1)] = seatCount + seatNo - 1;
+      }
+      // 其余情况是非法 extraFrontSeats 造成的越界号，直接忽略（不覆盖已有座位）
+    }
+    const extraCols: number[] = [];
+    for (let col = 1; col <= spec.cols; col += 1) {
+      if (extraSeat[col - 1]! >= 0) extraCols.push(col);
     }
     rooms.push({
       index: r,
@@ -162,6 +200,9 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
       seatCount: capacity,
       maxSameClass: maxSameClass(spec, adjacency),
       grid,
+      extraSeat,
+      extraCols,
+      relaxedSameClass: spec.relaxSameClass !== undefined && spec.relaxSameClass !== false,
     });
     seatCount += capacity;
   }
@@ -173,7 +214,7 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
   for (const room of rooms) {
     for (let n = 1; n <= room.seatCount; n += 1) {
       const s = room.firstSeat + n - 1;
-      const rc = seatNoToRC(n, room.spec.rows, room.spec.cols);
+      const rc = seatNoToRC(n, room.spec.rows, room.spec.cols, room.spec.extraFrontSeats);
       seatRoom[s] = room.index;
       seatNo[s] = n;
       seatRow[s] = rc.row;
@@ -181,43 +222,22 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
     }
   }
 
-  // 邻接表
+  // 邻接表：按座位下标顺序逐座位生成，邻居偏移顺序固定（纯矩形时与旧实现逐元素一致）。
+  // 加座（第 0 排）与同列 / 相邻列的第 1 排相邻；两个加座之间是否相邻由几何决定（相隔 1 列才算相邻）。
   const offsets = adjacency === "orthogonal" ? NEIGHBOR_OFFSETS_ORTHOGONAL : NEIGHBOR_OFFSETS_KING;
   const neighborStart = new Int32Array(seatCount + 1);
-  const lists: number[] = [];
-  for (const room of rooms) {
-    for (let row = 1; row <= room.spec.rows; row += 1) {
-      for (let col = 1; col <= room.spec.cols; col += 1) {
-        const self = room.grid[(row - 1) * room.spec.cols + (col - 1)]!;
-        neighborStart[self + 1] = 0; // 占位，稍后累加
-        for (const [dr, dc] of offsets) {
-          const nr = row + dr;
-          const nc = col + dc;
-          if (nr < 1 || nr > room.spec.rows || nc < 1 || nc > room.spec.cols) continue;
-          const target = room.grid[(nr - 1) * room.spec.cols + (nc - 1)]!;
-          lists.push(target);
-        }
-      }
-    }
-  }
-  // 重新按座位顺序构建，保证 neighborStart 单调
   const ordered: number[] = [];
-  const start = new Int32Array(seatCount + 1);
   for (let s = 0; s < seatCount; s += 1) {
-    start[s] = ordered.length;
+    neighborStart[s] = ordered.length;
     const room = rooms[seatRoom[s]!]!;
     const row = seatRow[s]!;
     const col = seatCol[s]!;
     for (const [dr, dc] of offsets) {
-      const nr = row + dr;
-      const nc = col + dc;
-      if (nr < 1 || nr > room.spec.rows || nc < 1 || nc > room.spec.cols) continue;
-      ordered.push(room.grid[(nr - 1) * room.spec.cols + (nc - 1)]!);
+      const target = seatIndexAt(room, row + dr, col + dc);
+      if (target >= 0) ordered.push(target);
     }
   }
-  start[seatCount] = ordered.length;
-  void neighborStart;
-  void lists;
+  neighborStart[seatCount] = ordered.length;
   const neighborList = Int32Array.from(ordered);
 
   return {
@@ -230,7 +250,7 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
     seatNo,
     seatRow,
     seatCol,
-    neighborStart: start,
+    neighborStart,
     neighborList,
     classOfStudent,
     classNames,

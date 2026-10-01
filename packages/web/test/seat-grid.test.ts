@@ -5,13 +5,17 @@ import {
   buildSeatGrid,
   businessColOf,
   capacityWarning,
+  columnSeatCounts,
   flattenSeatGrid,
   inferRoomKind,
+  normalizeExtraFrontSeats,
   physicalColOf,
   planCapacity,
+  rcToSeatNoIn,
   roomKindLabel,
+  seatRCIn,
 } from "@/lib/seat-grid";
-import { rcToSeatNo, roomCapacity, seatNoToRC } from "@exam-seat/core";
+import { rcToSeatNo, roomCapacity, seatNoToRC, seatNoToRCIn } from "@exam-seat/core";
 import type { RoomSpec } from "@exam-seat/core";
 
 const small: RoomSpec = { id: "R2", name: "第2考场", rows: 6, cols: 5, doorSide: "right" };
@@ -74,6 +78,88 @@ describe("座位网格推导", () => {
     expect(businessColOf(2, 5, "left")).toBe(2);
     expect(physicalColOf(1, 6, "right")).toBe(6);
     expect(physicalColOf(3, 6, "left")).toBe(3);
+  });
+});
+
+describe("非矩形考场：讲台侧加座（docs/design.md §4.5）", () => {
+  /** 5 列 × 7 排 + 第 2、4 列各 1 个加座 = 37 座 */
+  const extra: RoomSpec = {
+    id: "R1",
+    name: "第一考场",
+    rows: 7,
+    cols: 5,
+    doorSide: "right",
+    extraFrontSeats: [2, 4],
+  };
+
+  it("容量 = 排 × 列 + 加座数，逐列座位数 = rows + 该列是否加座", () => {
+    expect(roomCapacity(extra)).toBe(37);
+    expect(columnSeatCounts(extra)).toEqual([7, 8, 7, 8, 7]);
+    expect(columnSeatCounts(small)).toEqual([6, 6, 6, 6, 6]);
+  });
+
+  it("座位号与文档示例表逐号一致（15 / 30 是加座，行号 0）", () => {
+    expect(seatRCIn(extra, 1)).toEqual({ row: 1, col: 1 });
+    expect(seatRCIn(extra, 7)).toEqual({ row: 7, col: 1 });
+    expect(seatRCIn(extra, 8)).toEqual({ row: 7, col: 2 });
+    expect(seatRCIn(extra, 14)).toEqual({ row: 1, col: 2 });
+    expect(seatRCIn(extra, 15)).toEqual({ row: 0, col: 2 });
+    expect(seatRCIn(extra, 16)).toEqual({ row: 1, col: 3 });
+    expect(seatRCIn(extra, 22)).toEqual({ row: 7, col: 3 });
+    expect(seatRCIn(extra, 23)).toEqual({ row: 7, col: 4 });
+    expect(seatRCIn(extra, 29)).toEqual({ row: 1, col: 4 });
+    expect(seatRCIn(extra, 30)).toEqual({ row: 0, col: 4 });
+    expect(seatRCIn(extra, 31)).toEqual({ row: 1, col: 5 });
+    expect(seatRCIn(extra, 37)).toEqual({ row: 7, col: 5 });
+    // 越界（37 座）返回 null，不会画出第 38 号
+    expect(seatRCIn(extra, 38)).toBeNull();
+    expect(seatRCIn(extra, 0)).toBeNull();
+  });
+
+  it("座位图在网格上方多画一行加座，只有加座列有格子", () => {
+    const grid = buildSeatGrid(extra);
+    expect(grid.hasExtra).toBe(true);
+    // 门在右：物理列 2 = 业务列 4（30 号加座），物理列 4 = 业务列 2（15 号加座）
+    expect(grid.frontCells.map((cell) => cell?.seatNo ?? null)).toEqual([null, 30, null, 15, null]);
+    expect(flattenSeatGrid(grid)).toHaveLength(37);
+    expect(new Set(flattenSeatGrid(grid).map((cell) => cell.seatNo)).size).toBe(37);
+    // 每个座位号都与 core 的 seatNoToRCIn 对上，且行列可逆
+    for (const cell of flattenSeatGrid(grid)) {
+      expect(seatNoToRCIn(extra, cell.seatNo)).toEqual({ row: cell.row, col: cell.col });
+      expect(rcToSeatNoIn(extra, cell.row, cell.col)).toBe(cell.seatNo);
+    }
+  });
+
+  it("纯矩形考场的座位图不变，且没有加座行", () => {
+    const grid = buildSeatGrid(large);
+    expect(grid.hasExtra).toBe(false);
+    expect(grid.frontCells).toEqual([null, null, null, null, null, null]);
+    expect(flattenSeatGrid(grid)).toHaveLength(42);
+  });
+
+  it("门在左侧时加座行与网格一起左右镜像", () => {
+    const grid = buildSeatGrid({ ...extra, doorSide: "left" });
+    // 门在左：物理列号 = 业务列号，加座落在物理第 2、4 列
+    expect(grid.frontCells.map((cell) => cell?.seatNo ?? null)).toEqual([null, 15, null, 30, null]);
+    expect(grid.cells[0]!.map((cell) => cell.seatNo)).toEqual([1, 14, 16, 29, 31]);
+  });
+
+  it("加座列越界 / 重复 / 非整数一律收口", () => {
+    expect(normalizeExtraFrontSeats({ cols: 5, extraFrontSeats: [4, 2, 4, 9, 0, -1] })).toEqual([
+      2, 4,
+    ]);
+    expect(normalizeExtraFrontSeats({ cols: 5, extraFrontSeats: [] })).toEqual([]);
+    expect(normalizeExtraFrontSeats({ cols: 5 })).toEqual([]);
+    // 归一化后与 core 的容量口径一致
+    const dirty: RoomSpec = { id: "R9", rows: 7, cols: 5, extraFrontSeats: [2, 2, 9] };
+    expect(columnSeatCounts(dirty)).toEqual([7, 8, 7, 7, 7]);
+    expect(roomCapacity(dirty)).toBe(36);
+  });
+
+  it("容量核算把加座算进去", () => {
+    const plan = planCapacity([extra, { id: "R2", rows: 7, cols: 5, extraFrontSeats: [2, 4] }], 74);
+    expect(plan.totalSeats).toBe(74);
+    expect(plan.deficit).toBe(0);
   });
 });
 

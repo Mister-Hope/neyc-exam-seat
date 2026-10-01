@@ -1,4 +1,3 @@
-import ElementPlus from "element-plus";
 import { createPinia, setActivePinia } from "pinia";
 import type { Pinia } from "pinia";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -184,6 +183,8 @@ function allFixture(): PlanAllResult {
     ],
     emptyRooms: ["第5考场"],
     overRoomLimit: [],
+    relaxedRooms: [],
+    borrowings: [],
     diagnostics: [],
     unmetConstraints: [],
   } satisfies PlanAllResult;
@@ -345,7 +346,6 @@ async function mountSolve(
   const app = createApp({ render: () => h(StepSolve) });
   app.use(pinia);
   app.use(router);
-  app.use(ElementPlus);
   await router.push("/");
   await router.isReady();
   app.mount(container);
@@ -461,11 +461,11 @@ describe("第 ⑤ 步：带选科默认多场次（场次编排）", () => {
     const pinia = setupStore(withSubjects(), multiRooms());
     const { app, container } = await mountSolve(pinia);
 
-    const singleInput = [
-      ...container.querySelectorAll<HTMLInputElement>('[data-testid="solve-mode"] input'),
-    ].at(1);
-    expect(singleInput).toBeDefined();
-    singleInput!.click();
+    const singleToggle = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-testid="solve-mode"] button'),
+    ].find((el) => el.textContent?.includes("单场"));
+    expect(singleToggle).toBeDefined();
+    singleToggle!.click();
     await flush();
 
     click(container, "solve");
@@ -477,6 +477,58 @@ describe("第 ⑤ 步：带选科默认多场次（场次编排）", () => {
     expect(store.result).not.toBeNull();
     expect(store.hasMultiResult).toBe(false);
     expect(container.querySelector('[data-testid="multi-slots"]')).toBeNull();
+
+    app.unmount();
+  });
+
+  it("多场次摘要带上放宽考场与借考人次", async () => {
+    const relaxed = allFixture();
+    relaxed.relaxedRooms = ["R4"];
+    relaxed.borrowings = [
+      {
+        studentId: "S3",
+        name: "王三",
+        className: "高三(2)班",
+        subject: "biology",
+        subjectLabel: "生物",
+        roomId: "R4",
+        roomName: "第4考场",
+        seatNo: 2,
+      },
+    ];
+    coreMocks.planAll.mockReturnValue(relaxed);
+    const pinia = setupStore(withSubjects(), multiRooms());
+    const { app, container } = await mountSolve(pinia);
+
+    click(container, "solve");
+    await flush();
+
+    const summary =
+      container.querySelector('[data-testid="multi-relax-borrow"]')?.textContent ?? "";
+    expect(summary).toContain("第4考场");
+    expect(summary).toContain("借考");
+    expect(summary).toContain("1 人次");
+    // 主动放宽不是降级：多场次依旧走「编排完成」成功提示
+    expect(container.textContent).toContain("场次编排完成");
+
+    app.unmount();
+  });
+
+  it("单场 level = roomRelaxed：显示「已按考场放宽」而不是「已降级」", async () => {
+    coreMocks.plan.mockReturnValue({ ...singleFixture(), level: "roomRelaxed" as const });
+    const pinia = setupStore(withoutSubjects(), multiRooms());
+    const { app, container } = await mountSolve(pinia);
+
+    click(container, "solve");
+    await flush();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("已按考场放宽");
+    expect(text).toContain("roomRelaxed（本考场已放宽同班相邻，其余考场规则不变）");
+    expect(text).not.toContain("已降级");
+    // 主动放宽不是降级：结果仍按正常结果展示
+    expect(useResultStore().isRoomRelaxed).toBe(true);
+    expect(useResultStore().isDegraded).toBe(false);
 
     app.unmount();
   });

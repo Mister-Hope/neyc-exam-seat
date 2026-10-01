@@ -1,11 +1,36 @@
 <script setup lang="ts">
-import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
+import { toast } from "vue-sonner";
 
 import ConstraintDialog from "@/components/ConstraintDialog.vue";
+import MultiSelect from "@/components/MultiSelect.vue";
+import { Alert, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableEmpty,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import VirtualTable from "@/components/VirtualTable.vue";
 import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
+import { confirmAction } from "@/composables/useConfirm";
 import {
   indexDiagnosticsByConstraint,
   useConstraintResolver,
@@ -32,6 +57,7 @@ import {
   describeRows,
 } from "@exam-seat/core";
 import type { Constraint, Diagnostic, Student, Suggestion } from "@exam-seat/core";
+import { CircleAlertIcon, InboxIcon } from "@lucide/vue";
 
 /** 第 ④ 步：设置限定。左边筛学生、勾学生，右边是规则列表； 规则列表用 `precheckJob` 做实时冲突检测，冲突项红字标出原因，并能一键应用 core 给的 patch。 */
 const roster = useRosterStore();
@@ -146,6 +172,15 @@ const fatalCount = computed(
   () => precheck.value.diagnostics.filter((d) => d.severity === "error").length,
 );
 
+/** 数量类标签的配色：有值走中性 outline，空值走 destructive（对应原来信息色 / 危险色两种标签）。 */
+function countVariant(ok: boolean): "outline" | "destructive" {
+  return ok ? "outline" : "destructive";
+}
+
+function errorVariant(hasError: boolean): "secondary" | "destructive" {
+  return hasError ? "destructive" : "secondary";
+}
+
 function selectAllFiltered(): void {
   selectedKeys.value = rows.value.map((student) => student.id);
 }
@@ -154,9 +189,14 @@ function clearSelection(): void {
   selectedKeys.value = [];
 }
 
+function resetQuery(): void {
+  query.value = "";
+  classFilter.value = [];
+}
+
 function openCreate(): void {
   if (selectedKeys.value.length === 0) {
-    ElMessage.warning("先在左边的表里勾选学生（可以先按班级筛选再「全选当前结果」）");
+    toast.warning("先在左边的表里勾选学生（可以先按班级筛选再「全选当前结果」）");
     return;
   }
   editing.value = null;
@@ -176,225 +216,252 @@ function openEdit(constraint: Constraint): void {
 function submitConstraint(payload: Omit<Constraint, "id">, id?: string): void {
   if (id) {
     constraintsStore.updateConstraint(id, payload);
-    ElMessage.success("限定已更新");
+    toast.success("限定已更新");
   } else {
     constraintsStore.addConstraint(payload);
-    ElMessage.success("限定已添加");
+    toast.success("限定已添加");
   }
   clearSelection();
 }
 
 async function removeConstraint(constraint: Constraint): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      `确定删除这条限定？${constraint.note ? `（${constraint.note}）` : ""}`,
-      "删除限定",
-      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
-    );
-    constraintsStore.removeConstraint(constraint.id);
-  } catch {
-    // 取消
-  }
+  const confirmed = await confirmAction({
+    title: "删除限定",
+    description: `确定删除这条限定？${constraint.note ? `（${constraint.note}）` : ""}`,
+    confirmText: "删除",
+    danger: true,
+  });
+  if (!confirmed) return;
+  constraintsStore.removeConstraint(constraint.id);
 }
-
-/** El-table 的作用域插槽把 row 推断成 DefaultRow，这里统一收窄回真实类型。 */
-const asRuleRow = (row: unknown): RuleRow => row as RuleRow;
 
 function applyFix(row: RuleRow): void {
   if (!row.suggestion) return;
   const outcome = applySuggestion(row.suggestion);
-  if (outcome.ok) ElMessage.success(`已应用：${row.suggestion.label}`);
-  else ElMessage.error(outcome.error ?? "应用失败");
+  if (outcome.ok) toast.success(`已应用：${row.suggestion.label}`);
+  else toast.error(outcome.error ?? "应用失败");
 }
 </script>
 
 <template>
-  <div class="step-page">
-    <el-alert
-      v-if="fatalCount > 0"
-      class="mb"
-      type="error"
-      :closable="false"
-      show-icon
-      :title="`预检发现 ${fatalCount} 个致命问题，先按下面的红字提示改掉，再去排考场`"
-    />
+  <div class="mx-auto max-w-[1360px] pb-10">
+    <Alert v-if="fatalCount > 0" variant="destructive" class="mb-3">
+      <CircleAlertIcon />
+      <AlertTitle>
+        预检发现 {{ fatalCount }} 个致命问题，先按下面的红字提示改掉，再去排考场
+      </AlertTitle>
+    </Alert>
 
-    <el-card shadow="never">
-      <template #header>
-        <strong>选择学生</strong>
-        <span class="muted">｜按班级筛选 → 全选当前结果 → 添加限定</span>
-      </template>
+    <Card>
+      <CardHeader>
+        <CardTitle>选择学生</CardTitle>
+        <CardDescription>按班级筛选 → 全选当前结果 → 添加限定</CardDescription>
+      </CardHeader>
+      <CardContent class="flex flex-col gap-3">
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="flex flex-col gap-1.5">
+            <Label for="constraint-query">查询</Label>
+            <Input
+              id="constraint-query"
+              v-model="query"
+              class="w-[22rem] max-w-full"
+              placeholder="学号 / 姓名 / 班级，空格分隔多个条件"
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label>班级</Label>
+            <MultiSelect
+              v-model="classFilter"
+              :options="roster.classNames"
+              placeholder="全部班级"
+              trigger-class="w-80"
+            />
+          </div>
+          <Button variant="outline" size="sm" @click="resetQuery">重置</Button>
+        </div>
 
-      <el-form inline>
-        <el-form-item label="查询">
-          <el-input
-            v-model="query"
-            placeholder="学号 / 姓名 / 班级，空格分隔多个条件"
-            clearable
-            style="width: 360px"
-          />
-        </el-form-item>
-        <el-form-item label="班级">
-          <el-select
-            v-model="classFilter"
-            multiple
-            collapse-tags
-            collapse-tags-tooltip
-            clearable
-            placeholder="全部班级"
-            style="width: 300px"
-          >
-            <el-option v-for="name in roster.classNames" :key="name" :value="name" :label="name" />
-          </el-select>
-        </el-form-item>
-      </el-form>
+        <div class="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" @click="selectAllFiltered">
+            全选当前结果（{{ rows.length }} 人）
+          </Button>
+          <Button variant="ghost" size="sm" @click="clearSelection">清空勾选</Button>
+          <Button size="sm" :disabled="selectedKeys.length === 0" @click="openCreate">
+            添加限定（已选 {{ selectedKeys.length }} 人）
+          </Button>
+        </div>
 
-      <el-space wrap class="mb">
-        <el-button @click="selectAllFiltered">全选当前结果（{{ rows.length }} 人）</el-button>
-        <el-button @click="clearSelection">清空勾选</el-button>
-        <el-button type="primary" :disabled="selectedKeys.length === 0" @click="openCreate">
-          添加限定（已选 {{ selectedKeys.length }} 人）
-        </el-button>
-      </el-space>
-
-      <VirtualTable
-        :rows="rows"
-        :row-key="studentKey"
-        :columns="studentColumns"
-        :height="360"
-        selectable
-        :selected-keys="selectedKeys"
-        @update:selected-keys="selectedKeys = $event"
-      >
-        <template #cell-conditions="{ row }">
-          <template v-if="constraintsStore.constraintsOfStudent(asStudent(row).id).length > 0">
-            <el-tag
-              v-for="c in constraintsStore.constraintsOfStudent(asStudent(row).id)"
-              :key="c.id"
-              size="small"
-              class="mr"
-              :type="
-                byConstraint.get(c.id)?.some((d) => d.severity === 'error') ? 'danger' : 'info'
-              "
+        <VirtualTable
+          :rows="rows"
+          :row-key="studentKey"
+          :columns="studentColumns"
+          :height="360"
+          selectable
+          :selected-keys="selectedKeys"
+          @update:selected-keys="selectedKeys = $event"
+        >
+          <template #cell-conditions="{ row }">
+            <div
+              v-if="constraintsStore.constraintsOfStudent(asStudent(row).id).length > 0"
+              class="flex flex-wrap items-center gap-1"
             >
-              {{ c.note?.trim() || c.id }}
-            </el-tag>
-          </template>
-          <span v-else class="muted">—</span>
-        </template>
-        <template #empty>
-          <el-empty description="没有匹配的应考学生" :image-size="60" />
-        </template>
-      </VirtualTable>
-    </el-card>
-
-    <el-card class="mt" shadow="never">
-      <template #header>
-        <strong>限定规则（{{ ruleRows.length }} 条）</strong>
-        <span class="muted">
-          ｜同一学生被多条命中时取交集；考场限定是单选；可用座位数用 core 的 compileConstraintSeats
-          实时算
-        </span>
-      </template>
-
-      <el-table :data="ruleRows" size="small" border>
-        <el-table-column label="备注" min-width="140">
-          <template #default="{ row }">
-            <strong>{{ row.constraint.note?.trim() || row.constraint.id }}</strong>
-            <div class="muted">{{ row.constraint.id }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="考场" min-width="130">
-          <template #default="{ row }">{{ row.roomText }}</template>
-        </el-table-column>
-        <el-table-column label="排" min-width="120">
-          <template #default="{ row }">
-            <el-tooltip v-if="row.rowHints.length" placement="top">
-              <template #content>
-                <div v-for="(hint, i) in row.rowHints" :key="i">{{ hint }}</div>
-              </template>
-              <span>{{ row.rowsText }}</span>
-            </el-tooltip>
-            <span v-else>{{ row.rowsText }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="列" min-width="120">
-          <template #default="{ row }">
-            <el-tooltip v-if="row.colHints.length" placement="top">
-              <template #content>
-                <div v-for="(hint, i) in row.colHints" :key="i">{{ hint }}</div>
-              </template>
-              <span>{{ row.colsText }}</span>
-            </el-tooltip>
-            <span v-else>{{ row.colsText }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="命中学生" min-width="180">
-          <template #default="{ row }">
-            <el-tooltip placement="top" :content="row.studentsText">
-              <el-tag :type="row.studentCount > 0 ? 'success' : 'danger'" size="small">
-                {{ row.studentCount }} 人
-              </el-tag>
-            </el-tooltip>
-            <div class="muted">{{ row.studentsText }}</div>
-            <div v-if="row.selectorTags.length > 0" class="selector-tags">
-              <el-tag v-for="tag in row.selectorTags" :key="tag" size="small" type="info">
-                {{ tag }}
-              </el-tag>
+              <Badge
+                v-for="c in constraintsStore.constraintsOfStudent(asStudent(row).id)"
+                :key="c.id"
+                :variant="
+                  errorVariant(byConstraint.get(c.id)?.some((d) => d.severity === 'error') === true)
+                "
+              >
+                {{ c.note?.trim() || c.id }}
+              </Badge>
             </div>
+            <span v-else class="text-muted-foreground">—</span>
           </template>
-        </el-table-column>
-        <el-table-column label="可用座位" width="180">
-          <template #default="{ row }">
-            <el-tooltip placement="top">
-              <template #content>
-                <div v-for="item in row.view.perRoom" :key="item.roomId">
-                  {{ item.roomName }}：{{ item.seats }}/{{ item.capacity }}
-                </div>
-                <div v-if="row.view.droppedRooms.length">
-                  被排除的考场：{{ row.view.droppedRooms.join("、") }}
-                </div>
-              </template>
-              <el-tag :type="row.view.total > 0 ? 'success' : 'danger'"
-                >{{ row.view.total }} 个</el-tag
-              >
-            </el-tooltip>
+          <template #empty>
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><InboxIcon /></EmptyMedia>
+                <EmptyTitle>没有匹配的应考学生</EmptyTitle>
+                <EmptyDescription>换个关键词，或清空班级筛选</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           </template>
-        </el-table-column>
-        <el-table-column label="状态" min-width="220">
-          <template #default="{ row }">
-            <template v-if="row.reason">
-              <div class="error-text">{{ row.reason }}</div>
-              <el-button
-                v-if="row.suggestion"
-                size="small"
-                link
-                type="primary"
-                @click="applyFix(asRuleRow(row))"
-              >
-                应用建议：{{ row.suggestion.label }}
-              </el-button>
-            </template>
-            <el-tag v-else type="success" size="small">可行</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120">
-          <template #default="{ row }">
-            <el-button size="small" link @click="openEdit(row.constraint)">编辑</el-button>
-            <el-button size="small" link type="danger" @click="removeConstraint(row.constraint)">
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <el-empty description="还没有限定规则，全部学生都能坐任意考场" :image-size="60" />
-        </template>
-      </el-table>
-    </el-card>
+        </VirtualTable>
+      </CardContent>
+    </Card>
 
-    <div class="step-actions">
-      <el-button @click="router.push('/rooms')">上一步</el-button>
-      <el-button type="primary" @click="router.push('/solve')">下一步：排考场</el-button>
+    <Card class="mt-4">
+      <CardHeader>
+        <CardTitle>限定规则（{{ ruleRows.length }} 条）</CardTitle>
+        <CardDescription>
+          同一学生被多条命中时取交集；考场限定是单选；可用座位数用 core 的 compileConstraintSeats
+          实时算
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <TooltipProvider>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>备注</TableHead>
+                <TableHead>考场</TableHead>
+                <TableHead>排</TableHead>
+                <TableHead>列</TableHead>
+                <TableHead>命中学生</TableHead>
+                <TableHead>可用座位</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead class="text-right">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableEmpty v-if="ruleRows.length === 0" :colspan="8">
+                <Empty>
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon"><InboxIcon /></EmptyMedia>
+                    <EmptyTitle>还没有限定规则，全部学生都能坐任意考场</EmptyTitle>
+                  </EmptyHeader>
+                </Empty>
+              </TableEmpty>
+              <TableRow v-for="row in ruleRows" :key="row.constraint.id">
+                <TableCell>
+                  <div class="font-medium">
+                    {{ row.constraint.note?.trim() || row.constraint.id }}
+                  </div>
+                  <div class="text-muted-foreground text-xs">{{ row.constraint.id }}</div>
+                </TableCell>
+                <TableCell>{{ row.roomText }}</TableCell>
+                <TableCell>
+                  <Tooltip v-if="row.rowHints.length">
+                    <TooltipTrigger as-child>
+                      <span>{{ row.rowsText }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div v-for="(hint, i) in row.rowHints" :key="i">{{ hint }}</div>
+                    </TooltipContent>
+                  </Tooltip>
+                  <span v-else>{{ row.rowsText }}</span>
+                </TableCell>
+                <TableCell>
+                  <Tooltip v-if="row.colHints.length">
+                    <TooltipTrigger as-child>
+                      <span>{{ row.colsText }}</span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div v-for="(hint, i) in row.colHints" :key="i">{{ hint }}</div>
+                    </TooltipContent>
+                  </Tooltip>
+                  <span v-else>{{ row.colsText }}</span>
+                </TableCell>
+                <TableCell class="max-w-[16rem]">
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Badge :variant="countVariant(row.studentCount > 0)">
+                        {{ row.studentCount }} 人
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent>{{ row.studentsText }}</TooltipContent>
+                  </Tooltip>
+                  <div class="text-muted-foreground truncate text-xs">{{ row.studentsText }}</div>
+                  <div v-if="row.selectorTags.length > 0" class="mt-0.5 flex flex-wrap gap-1">
+                    <Badge v-for="tag in row.selectorTags" :key="tag" variant="secondary">
+                      {{ tag }}
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Badge :variant="countVariant(row.view.total > 0)">
+                        {{ row.view.total }} 个
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div v-for="item in row.view.perRoom" :key="item.roomId">
+                        {{ item.roomName }}：{{ item.seats }}/{{ item.capacity }}
+                      </div>
+                      <div v-if="row.view.droppedRooms.length">
+                        被排除的考场：{{ row.view.droppedRooms.join("、") }}
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                </TableCell>
+                <TableCell class="max-w-[18rem] whitespace-normal">
+                  <template v-if="row.reason">
+                    <div class="text-destructive text-xs leading-relaxed">{{ row.reason }}</div>
+                    <Button
+                      v-if="row.suggestion"
+                      variant="link"
+                      size="xs"
+                      class="h-auto px-0"
+                      @click="applyFix(row)"
+                    >
+                      应用建议：{{ row.suggestion.label }}
+                    </Button>
+                  </template>
+                  <Badge v-else variant="default">可行</Badge>
+                </TableCell>
+                <TableCell class="text-right">
+                  <div class="flex justify-end gap-1">
+                    <Button variant="link" size="xs" @click="openEdit(row.constraint)">编辑</Button>
+                    <Button
+                      variant="link"
+                      size="xs"
+                      class="text-destructive"
+                      @click="removeConstraint(row.constraint)"
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </TooltipProvider>
+      </CardContent>
+    </Card>
+
+    <div class="mt-4 flex justify-between">
+      <Button variant="outline" @click="router.push('/rooms')">上一步</Button>
+      <Button @click="router.push('/solve')">下一步：排考场</Button>
     </div>
 
     <ConstraintDialog
@@ -410,35 +477,3 @@ function applyFix(row: RuleRow): void {
     />
   </div>
 </template>
-
-<style scoped>
-.mb {
-  margin-bottom: 10px;
-}
-.mt {
-  margin-top: 12px;
-}
-.mr {
-  margin-right: 4px;
-}
-.muted {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.selector-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 2px;
-}
-.error-text {
-  color: var(--el-color-danger);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.step-actions {
-  margin-top: 16px;
-  display: flex;
-  justify-content: space-between;
-}
-</style>

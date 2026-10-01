@@ -1,16 +1,44 @@
 <script setup lang="ts">
-import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
+import { toast } from "vue-sonner";
 
 import DiagnosticsPanel from "@/components/DiagnosticsPanel.vue";
+import MultiSelect from "@/components/MultiSelect.vue";
 import SeatGridPreview from "@/components/SeatGridPreview.vue";
+import { Alert, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import VirtualTable from "@/components/VirtualTable.vue";
+import { confirmAction } from "@/composables/useConfirm";
 import { useExamJob } from "@/composables/useExamJob";
-import { XLSX_MIME, downloadBytes, downloadText } from "@/lib/download";
+import { XLSX_MIME, ZIP_MIME, downloadBytes, downloadText } from "@/lib/download";
 import { filterStudents } from "@/lib/search";
 import type { SeatOccupant } from "@/lib/seat-grid";
 import {
+  buildBorrowingRows,
+  buildClassFilesZip,
+  buildInvigilatorFilesZip,
   buildScheduleTable,
   buildSeatingChecks,
   buildSeatingOverview,
@@ -20,7 +48,8 @@ import {
   collectSeatingUnmet,
   countChangedStudents,
   filterScheduleRows,
-  makeRoomLookup,
+  makeRoomLayout,
+  relaxedRoomLabels,
 } from "@/lib/session-export";
 import type { ScheduleColumn } from "@/lib/session-export";
 import { useResultStore } from "@/stores/result";
@@ -30,14 +59,22 @@ import {
   buildClassScheduleWorkbook,
   buildInvigilatorWorkbook,
   buildPlanWorkbook,
+  buildRoomSheets,
 } from "@exam-seat/io";
+import {
+  CalendarSearchIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  TriangleAlertIcon,
+} from "@lucide/vue";
 
 /**
  * 第 ⑥ 步：结果名单。
  *
  * 单场：主输出就是这张表（考场 / 座位号 / 学号 / 姓名 / 班级），按「考场号 → 座位号」升序； 座位网格只作页面预览；导出前先看独立校验器 `validate()` 的报告。
  *
- * 多场次（名单带选科）：主输出是「每人：时段 → 考场 + 座位」，另出座位方案概览、校验摘要、 空置考场，并导出「按班级考场安排.xlsx」与「考场监考表.xlsx」（io 的两个多场次函数）。
+ * 多场次（名单带选科）：主输出是「每人：时段 → 考场 + 座位」，另出座位方案概览、校验摘要、 空置考场，并导出「按班级考场安排.xlsx」与「考场监考表.xlsx」（io 的两个多场次函数）；
+ * 另可整包下载「分班文件.zip」「分考场文件.zip」——用同一批 sheet 逐张写成单表工作簿再压缩，方便分别发人。
  */
 const resultStore = useResultStore();
 const { job } = useExamJob();
@@ -151,10 +188,24 @@ const reportWarnings = computed(() =>
   (report.value?.issues ?? []).filter((i) => i.severity === "warning"),
 );
 
+const singleRelaxedRoomNames = computed(() =>
+  (resultStore.job?.rooms ?? [])
+    .filter((room) => room.relaxSameClass != null && room.relaxSameClass !== false)
+    .map((room) => room.name ?? room.id),
+);
+
 const degradedBanner = computed(() => {
   const { result } = resultStore;
   if (!result) return null;
   if (!result.ok) return { type: "error" as const, title: "这份结果没有排满，请先看下面的诊断" };
+  if (result.level === "roomRelaxed") {
+    return {
+      type: "warning" as const,
+      title: `已按考场放宽同班相邻：${
+        singleRelaxedRoomNames.value.join("、") || "（见第 ③ 步的考场配置）"
+      }；其余考场仍是严格规则，监考表会标注`,
+    };
+  }
   if (result.level !== "strict") {
     return {
       type: "warning" as const,
@@ -193,6 +244,17 @@ const changedClasses = computed(() => changedByClass(resultStore.scheduleByStude
 const overRoomLimit = computed(() => planAll.value?.overRoomLimit ?? []);
 const emptyRoomNames = computed(() => resultStore.emptyRoomNames);
 const slotCount = computed(() => resultStore.slots.length);
+/** 借考明细（借考人 + 时段 + 科目 + 目标考场 / 座位）。 */
+const borrowingRows = computed(() => buildBorrowingRows(planAll.value));
+/** 放宽了同班相邻的考场（`PlanAllResult.relaxedRooms`）。 */
+const relaxedRooms = computed(() => relaxedRoomLabels(planAll.value, roomNameById.value));
+/** 放宽考场提示（拼在 script 里，保证文案是连续字符串）。 */
+const relaxedRoomsTitle = computed(
+  () =>
+    `${relaxedRooms.value.length} 个考场已放宽同班相邻：${relaxedRooms.value
+      .map((room) => room.roomName)
+      .join("、")}（监考表表头会标注）`,
+);
 
 const multiBanner = computed(() => {
   const result = planAll.value;
@@ -204,9 +266,15 @@ const multiBanner = computed(() => {
       title: `多场次结果没有排满：${conflicts} 条冲突、${seatingUnmet.value.length} 条未满足限定，请先看下面的校验摘要`,
     };
   }
+  const extras: string[] = [];
+  if (relaxedRooms.value.length > 0)
+    extras.push(`${relaxedRooms.value.length} 个考场已放宽同班相邻`);
+  if (borrowingRows.value.length > 0) extras.push(`${borrowingRows.value.length} 人次借考`);
   return {
     type: "success" as const,
-    title: `多场次编排完成：${slotCount.value} 个时段 · ${result.seatings.length} 套座位方案 · ${changedCount.value} 人需要换考场`,
+    title: `多场次编排完成：${slotCount.value} 个时段 · ${result.seatings.length} 套座位方案 · ${changedCount.value} 人需要换考场${
+      extras.length > 0 ? ` · ${extras.join(" · ")}` : ""
+    }`,
   };
 });
 
@@ -224,17 +292,14 @@ function scheduleCellText(row: unknown, slotId: string): string {
 /* ------------------------------------------------------------------ */
 
 /** 校验不过时的二次确认，返回 true = 用户坚持导出。 */
-async function confirmRiskyExport(message: string): Promise<boolean> {
-  try {
-    await ElMessageBox.confirm(message, "校验未通过", {
-      type: "warning",
-      confirmButtonText: "仍然导出",
-      cancelButtonText: "先修问题",
-    });
-    return true;
-  } catch {
-    return false;
-  }
+function confirmRiskyExport(message: string): Promise<boolean> {
+  return confirmAction({
+    title: "校验未通过",
+    description: message,
+    confirmText: "仍然导出",
+    cancelText: "先修问题",
+    danger: true,
+  });
 }
 
 async function exportWorkbook(): Promise<void> {
@@ -252,7 +317,7 @@ async function exportWorkbook(): Promise<void> {
   const title = resultStore.job?.meta?.title ?? "考场安排";
   const bytes = buildPlanWorkbook(result, title);
   downloadBytes(bytes, `${title}-考场安排名单.xlsx`, XLSX_MIME);
-  ElMessage.success("已导出：考场安排名单.xlsx（名单 / 按班级 / 校验报告）");
+  toast.success("已导出：考场安排名单.xlsx（名单 / 按班级 / 校验报告）");
 }
 
 /** 多场次结果的冲突 / 未排满检查（导出前拦一道）。 */
@@ -260,6 +325,9 @@ function multiRisky(): boolean {
   const result = planAll.value;
   return result != null && (!result.ok || seatingConflicts.value.length > 0);
 }
+
+/** 当前 job 的考场配置：io 的导出函数按考场数组取「地点 / 监考」。 */
+const jobRooms = computed(() => job.value?.rooms ?? []);
 
 async function exportClassSchedule(): Promise<void> {
   const result = planAll.value;
@@ -272,8 +340,12 @@ async function exportClassSchedule(): Promise<void> {
   ) {
     return;
   }
-  downloadBytes(buildClassScheduleWorkbook(result), "按班级考场安排.xlsx", XLSX_MIME);
-  ElMessage.success("已导出：按班级考场安排.xlsx（按班级 + 各班换考场人数）");
+  downloadBytes(
+    buildClassScheduleWorkbook(result, jobRooms.value),
+    "按班级考场安排.xlsx",
+    XLSX_MIME,
+  );
+  toast.success("已导出：按班级考场安排.xlsx（按班级 + 各班换考场人数）");
 }
 
 async function exportInvigilator(): Promise<void> {
@@ -287,9 +359,58 @@ async function exportInvigilator(): Promise<void> {
   ) {
     return;
   }
-  const roomLookup = makeRoomLookup(job.value?.rooms ?? []);
-  downloadBytes(buildInvigilatorWorkbook(result, roomLookup), "考场监考表.xlsx", XLSX_MIME);
-  ElMessage.success("已导出：考场监考表.xlsx（每个考场一套座位一张表）");
+  downloadBytes(buildInvigilatorWorkbook(result, jobRooms.value), "考场监考表.xlsx", XLSX_MIME);
+  toast.success("已导出：考场监考表.xlsx（每个考场一套座位一张表）");
+}
+
+/** 分班文件整包：总表 + 每班各一个 `.xlsx`，打成一个 ZIP。 */
+async function exportClassFilesZip(): Promise<void> {
+  const result = planAll.value;
+  if (!result) return;
+  if (
+    multiRisky() &&
+    !(await confirmRiskyExport(
+      `这份多场次结果有 ${seatingConflicts.value.length} 条冲突、${seatingUnmet.value.length} 条未满足限定，确实要下载「分班文件.zip」吗？`,
+    ))
+  ) {
+    return;
+  }
+  downloadBytes(buildClassFilesZip(result, jobRooms.value), "分班文件.zip", ZIP_MIME);
+  toast.success("已下载：分班文件.zip（总表 + 每个班一个 .xlsx）");
+}
+
+/** 分考场文件整包：每个考场（每套座位）各一个 `.xlsx`，打成一个 ZIP。 */
+async function exportInvigilatorFilesZip(): Promise<void> {
+  const result = planAll.value;
+  if (!result) return;
+  if (
+    multiRisky() &&
+    !(await confirmRiskyExport(
+      `这份多场次结果有 ${seatingConflicts.value.length} 条冲突、${seatingUnmet.value.length} 条未满足限定，确实要下载「分考场文件.zip」吗？`,
+    ))
+  ) {
+    return;
+  }
+  downloadBytes(buildInvigilatorFilesZip(result, jobRooms.value), "分考场文件.zip", ZIP_MIME);
+  toast.success("已下载：分考场文件.zip（每个考场一套座位一个 .xlsx）");
+}
+
+/** 单场：逐考场座位表。有讲台侧加座的考场由 io 在网格最上面多画一行「加座」。 */
+async function exportRoomSheets(): Promise<void> {
+  const { result } = resultStore;
+  if (!result) return;
+  if (
+    report.value &&
+    !report.value.ok &&
+    !(await confirmRiskyExport(
+      `独立校验器报了 ${reportErrors.value.length} 个错误，座位表是照这份结果画的。确实要导出吗？`,
+    ))
+  ) {
+    return;
+  }
+  const layout = makeRoomLayout(job.value?.rooms ?? []);
+  downloadBytes(buildRoomSheets(result, layout), "考场座位表.xlsx", XLSX_MIME);
+  toast.success("已导出：考场座位表.xlsx（逐考场网格，含讲台侧加座）");
 }
 
 function exportPlanJson(): void {
@@ -302,552 +423,765 @@ function exportPlanJson(): void {
 async function removeEmptyRooms(): Promise<void> {
   const names = emptyRoomNames.value;
   if (names.length === 0) return;
-  try {
-    await ElMessageBox.confirm(
-      `有 ${names.length} 个考场一个学生都没安排：${names.join("、")}。移除后这份结果就作废了，需要回「排考场」重跑，确认移除？`,
-      "移除空置考场",
-      { type: "warning", confirmButtonText: "移除", cancelButtonText: "保留" },
-    );
-  } catch {
-    return;
-  }
+  const confirmed = await confirmAction({
+    title: "移除空置考场",
+    description: `有 ${names.length} 个考场一个学生都没安排：${names.join("、")}。移除后这份结果就作废了，需要回「排考场」重跑，确认移除？`,
+    confirmText: "移除",
+    cancelText: "保留",
+    danger: true,
+  });
+  if (!confirmed) return;
   const { removed } = resultStore.removeEmptyRooms();
   if (removed.length > 0) {
-    ElMessage.success(`已移除空置考场：${removed.join("、")}；配置已变，请回「排考场」重跑`);
+    toast.success(`已移除空置考场：${removed.join("、")}；配置已变，请回「排考场」重跑`);
   } else {
-    ElMessage.info("没有需要移除的考场");
+    toast.info("没有需要移除的考场");
   }
+}
+
+/**
+ * 座位网格预览的单选：空串表示没选。
+ *
+ * 传 `null` 而不是 `undefined`：reka-ui 的 Select 在初始 `modelValue === undefined` 时会走 passive 模式、不再跟随外部
+ * props， 这里要保持「清空」按钮能把选择清掉，所以用 `null`（同样是空值，placeholder 正常显示）。
+ */
+function previewRoomModel(): string | null {
+  return previewRoomId.value === "" ? null : previewRoomId.value;
+}
+
+function updatePreviewRoom(value: unknown): void {
+  previewRoomId.value = value == null ? "" : String(value);
 }
 </script>
 
 <template>
-  <div class="step-page">
-    <el-empty v-if="!hasAnything" description="还没有求解结果，先去「排考场」">
-      <el-button type="primary" @click="router.push('/solve')">去排考场</el-button>
-    </el-empty>
+  <div class="mx-auto flex max-w-[1360px] flex-col gap-4 pb-10">
+    <Empty v-if="!hasAnything">
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><CalendarSearchIcon /></EmptyMedia>
+        <EmptyTitle>还没有求解结果，先去「排考场」</EmptyTitle>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button @click="router.push('/solve')">去排考场</Button>
+      </EmptyContent>
+    </Empty>
 
     <template v-else>
       <!-- ============================ 多场次结果 ============================ -->
       <template v-if="isMulti">
-        <el-alert
-          v-if="multiBanner"
-          class="mb"
-          :type="multiBanner.type"
-          :closable="false"
-          show-icon
-          :title="multiBanner.title"
-        />
+        <Alert v-if="multiBanner?.type === 'error'" variant="destructive">
+          <CircleAlertIcon />
+          <AlertTitle>{{ multiBanner.title }}</AlertTitle>
+        </Alert>
+        <Alert v-else-if="multiBanner">
+          <TriangleAlertIcon />
+          <AlertTitle>{{ multiBanner.title }}</AlertTitle>
+        </Alert>
 
-        <el-card shadow="never">
-          <template #header>
-            <strong>多场次总览</strong>
-            <span class="muted"
-              >｜{{ slotCount }} 个时段 · {{ seatingOverview.length }} 套座位方案 · 需要换考场
-              {{ changedCount }} 人</span
-            >
-          </template>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              多场次总览
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜{{ slotCount }} 个时段 · {{ seatingOverview.length }} 套座位方案 · 需要换考场
+                {{ changedCount }} 人
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <dl class="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">时段数</dt>
+                <dd>{{ slotCount }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">座位方案</dt>
+                <dd>{{ seatingOverview.length }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">考生</dt>
+                <dd>{{ resultStore.scheduleByStudent.length }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">需要换考场</dt>
+                <dd>{{ changedCount }} 人</dd>
+              </div>
+            </dl>
 
-          <el-descriptions :column="4" border>
-            <el-descriptions-item label="时段数">{{ slotCount }}</el-descriptions-item>
-            <el-descriptions-item label="座位方案">{{
-              seatingOverview.length
-            }}</el-descriptions-item>
-            <el-descriptions-item label="考生">{{
-              resultStore.scheduleByStudent.length
-            }}</el-descriptions-item>
-            <el-descriptions-item label="需要换考场">{{ changedCount }} 人</el-descriptions-item>
-          </el-descriptions>
+            <div class="flex flex-wrap gap-1.5">
+              <Badge v-for="slot in resultStore.slots" :key="slot.id" variant="secondary">
+                {{ slot.name }}
+              </Badge>
+            </div>
 
-          <div class="mt slot-tags">
-            <el-tag v-for="slot in resultStore.slots" :key="slot.id" type="info" size="small">
-              {{ slot.name }}
-            </el-tag>
-          </div>
+            <template v-if="changedClasses.length > 0">
+              <strong class="text-sm">需要换考场的人（按班）</strong>
+              <div class="max-h-60 overflow-auto rounded-lg border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>班级</TableHead>
+                      <TableHead class="w-40">需要换考场人数</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow v-for="item in changedClasses" :key="item.className">
+                      <TableCell>{{ item.className }}</TableCell>
+                      <TableCell>{{ item.count }}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+            </template>
+          </CardContent>
+        </Card>
 
-          <div v-if="changedClasses.length > 0" class="mt">
-            <strong>需要换考场的人（按班）</strong>
-          </div>
-          <el-table
-            v-if="changedClasses.length > 0"
-            class="mt"
-            :data="changedClasses"
-            size="small"
-            border
-            max-height="240"
-          >
-            <el-table-column prop="className" label="班级" />
-            <el-table-column prop="count" label="需要换考场人数" width="160" />
-          </el-table>
-        </el-card>
-
-        <el-card class="mt" shadow="never">
-          <template #header>
-            <strong>时段 → 考场 + 座位</strong>
-            <span class="muted"
-              >｜共 {{ multiRows.length }} /
-              {{ scheduleTable.rows.length }} 人，可按班级筛选或搜「某人坐哪」</span
-            >
-          </template>
-
-          <el-form inline>
-            <el-form-item label="搜人 / 搜位">
-              <el-input
-                v-model="multiQuery"
-                placeholder="学号 / 姓名 / 班级 / 考场，空格分隔多个条件"
-                clearable
-                style="width: 320px"
-              />
-            </el-form-item>
-            <el-form-item label="班级">
-              <el-select
-                v-model="multiClassFilter"
-                multiple
-                collapse-tags
-                collapse-tags-tooltip
-                clearable
-                placeholder="全部班级"
-                style="width: 260px"
-              >
-                <el-option
-                  v-for="name in multiClassNames"
-                  :key="name"
-                  :value="name"
-                  :label="name"
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              时段 → 考场 + 座位
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜共 {{ multiRows.length }} /
+                {{ scheduleTable.rows.length }} 人，可按班级筛选或搜「某人坐哪」
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <div class="flex flex-wrap items-end gap-3">
+              <div class="flex flex-col gap-1.5">
+                <Label for="multi-query">搜人 / 搜位</Label>
+                <Input
+                  id="multi-query"
+                  v-model="multiQuery"
+                  placeholder="学号 / 姓名 / 班级 / 考场，空格分隔多个条件"
+                  class="h-8 w-80 max-w-full"
                 />
-              </el-select>
-            </el-form-item>
-          </el-form>
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <Label>班级</Label>
+                <MultiSelect
+                  v-model="multiClassFilter"
+                  :options="multiClassNames"
+                  placeholder="全部班级"
+                  trigger-class="w-64"
+                />
+              </div>
+            </div>
 
-          <VirtualTable
-            :rows="multiRows"
-            :row-key="scheduleRowKey"
-            :columns="scheduleTable.columns"
-            :height="480"
-            :row-height="40"
-          >
-            <template #cell-className="{ row }">{{ cellText(row, "className") }}</template>
-            <template #cell-name="{ row }">{{ cellText(row, "name") }}</template>
-            <template #cell-studentId="{ row }">{{ cellText(row, "studentId") }}</template>
-            <template #cell-combination="{ row }">{{ cellText(row, "combinationLabel") }}</template>
-            <template
-              v-for="slot in resultStore.slots"
-              :key="slot.id"
-              #[`cell-${slot.id}`]="{ row }"
+            <VirtualTable
+              :rows="multiRows"
+              :row-key="scheduleRowKey"
+              :columns="scheduleTable.columns"
+              :height="480"
+              :row-height="40"
             >
-              {{ scheduleCellText(row, slot.id) }}
-            </template>
-            <template #empty>
-              <div class="hint">没有匹配的考生。</div>
-            </template>
-          </VirtualTable>
-        </el-card>
-
-        <el-card class="mt" shadow="never">
-          <template #header>
-            <strong>座位方案概览</strong>
-            <span class="muted">｜考场 × 科目 × 人数（一套座位 = 一个考场里一批固定学生）</span>
-          </template>
-          <el-table :data="seatingOverview" size="small" border max-height="320">
-            <el-table-column prop="roomName" label="考场" width="160" />
-            <el-table-column prop="subjectsLabel" label="科目" width="160" />
-            <el-table-column prop="studentCount" label="人数" width="90" />
-            <el-table-column prop="location" label="地点" width="160" />
-            <el-table-column prop="note" label="监考" />
-          </el-table>
-        </el-card>
-
-        <el-card class="mt" shadow="never">
-          <template #header>
-            <strong>校验摘要</strong>
-            <span class="muted">｜各套 result 的冲突汇总、未满足限定、考场数超限与诊断</span>
-          </template>
-
-          <el-alert
-            v-if="
-              seatingConflicts.length === 0 &&
-              seatingUnmet.length === 0 &&
-              overRoomLimit.length === 0
-            "
-            type="success"
-            :closable="false"
-            show-icon
-            title="校验通过：各套座位方案零冲突、限定全满足、无人超过 3 个考场"
-          />
-          <el-alert
-            v-else
-            type="error"
-            :closable="false"
-            show-icon
-            :title="`冲突 ${seatingConflicts.length} 条 · 未满足限定 ${seatingUnmet.length} 条 · 超考场限制 ${overRoomLimit.length} 人`"
-          />
-
-          <el-table class="mt" :data="seatingChecks" size="small" border max-height="240">
-            <el-table-column prop="roomName" label="考场" width="160" />
-            <el-table-column prop="subjectsLabel" label="科目" width="150" />
-            <el-table-column prop="studentCount" label="人数" width="80" />
-            <el-table-column label="状态" width="110">
-              <template #default="{ row }">
-                <el-tag :type="row.ok ? 'success' : 'danger'" size="small">
-                  {{ row.ok ? "零冲突" : row.level }}
-                </el-tag>
+              <template #cell-className="{ row }">{{ cellText(row, "className") }}</template>
+              <template #cell-name="{ row }">{{ cellText(row, "name") }}</template>
+              <template #cell-studentId="{ row }">{{ cellText(row, "studentId") }}</template>
+              <template #cell-combination="{ row }">{{
+                cellText(row, "combinationLabel")
+              }}</template>
+              <template
+                v-for="slot in resultStore.slots"
+                :key="slot.id"
+                #[`cell-${slot.id}`]="{ row }"
+              >
+                {{ scheduleCellText(row, slot.id) }}
               </template>
-            </el-table-column>
-            <el-table-column prop="conflicts" label="冲突" width="80" />
-            <el-table-column prop="unmetConstraints" label="未满足限定" width="110" />
-            <el-table-column prop="diagnostics" label="诊断" width="80" />
-          </el-table>
+              <template #empty>
+                <div class="text-muted-foreground text-xs">没有匹配的考生。</div>
+              </template>
+            </VirtualTable>
+          </CardContent>
+        </Card>
 
-          <el-table
-            v-if="seatingConflicts.length > 0"
-            class="mt"
-            :data="seatingConflicts"
-            size="small"
-            border
-            max-height="240"
-          >
-            <el-table-column prop="roomName" label="考场" width="150" />
-            <el-table-column prop="subjectsLabel" label="科目" width="130" />
-            <el-table-column prop="seatA" label="座位A" width="80" />
-            <el-table-column prop="seatB" label="座位B" width="80" />
-            <el-table-column prop="studentA" label="学生A" width="130" />
-            <el-table-column prop="studentB" label="学生B" width="130" />
-            <el-table-column prop="className" label="班级" />
-          </el-table>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              座位方案概览
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜考场 × 科目 × 人数（一套座位 = 一个考场里一批固定学生）
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div class="max-h-80 overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-40">考场</TableHead>
+                    <TableHead class="w-40">科目</TableHead>
+                    <TableHead class="w-24">人数</TableHead>
+                    <TableHead class="w-40">地点</TableHead>
+                    <TableHead class="w-32">放宽同班相邻</TableHead>
+                    <TableHead class="w-24">借考</TableHead>
+                    <TableHead>监考</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in seatingOverview" :key="row.key">
+                    <TableCell>{{ row.roomName }}</TableCell>
+                    <TableCell>{{ row.subjectsLabel }}</TableCell>
+                    <TableCell>{{ row.studentCount }}</TableCell>
+                    <TableCell>{{ row.location }}</TableCell>
+                    <TableCell>
+                      <Badge v-if="row.relaxed" variant="outline">已放宽</Badge>
+                      <span v-else class="text-muted-foreground text-xs">否</span>
+                    </TableCell>
+                    <TableCell>
+                      <span v-if="row.borrowedCount > 0">{{ row.borrowedCount }} 人</span>
+                      <span v-else class="text-muted-foreground text-xs">—</span>
+                    </TableCell>
+                    <TableCell>{{ row.note }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
 
-          <el-table
-            v-if="seatingUnmet.length > 0"
-            class="mt"
-            :data="seatingUnmet"
-            size="small"
-            border
-            max-height="240"
-          >
-            <el-table-column prop="roomName" label="考场" width="150" />
-            <el-table-column prop="constraintId" label="限定 ID" width="120" />
-            <el-table-column prop="studentCount" label="涉及学生" width="100" />
-            <el-table-column prop="reason" label="原因" />
-          </el-table>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              借考与放宽
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜考场级放宽「同班相邻」与按科目借考的落位明细
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <Alert v-if="relaxedRooms.length === 0 && borrowingRows.length === 0">
+              <CircleCheckIcon />
+              <AlertTitle>本场没有考场放宽同班相邻，也没有借考学生</AlertTitle>
+            </Alert>
+            <Alert v-else-if="relaxedRooms.length > 0">
+              <TriangleAlertIcon />
+              <AlertTitle>{{ relaxedRoomsTitle }}</AlertTitle>
+            </Alert>
 
-          <el-table
-            v-if="overRoomLimit.length > 0"
-            class="mt"
-            :data="overRoomLimit"
-            size="small"
-            border
-            max-height="240"
-          >
-            <el-table-column prop="studentId" label="学号" width="140" />
-            <el-table-column prop="name" label="姓名" width="120" />
-            <el-table-column prop="count" label="用到考场数" width="120" />
-          </el-table>
+            <div v-if="borrowingRows.length > 0" class="max-h-60 overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-32">时段</TableHead>
+                    <TableHead class="w-36">学号</TableHead>
+                    <TableHead class="w-24">姓名</TableHead>
+                    <TableHead class="w-32">班级</TableHead>
+                    <TableHead class="w-24">科目</TableHead>
+                    <TableHead class="w-36">借考考场</TableHead>
+                    <TableHead class="w-24">座位</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in borrowingRows" :key="row.key">
+                    <TableCell>{{ row.slotName }}</TableCell>
+                    <TableCell>{{ row.studentId }}</TableCell>
+                    <TableCell>{{ row.name }}</TableCell>
+                    <TableCell>{{ row.className }}</TableCell>
+                    <TableCell>{{ row.subjectLabel }}</TableCell>
+                    <TableCell>{{ row.roomName }}</TableCell>
+                    <TableCell>{{ row.seatNo }} 号</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+            <div v-else-if="relaxedRooms.length > 0" class="text-muted-foreground text-xs">
+              没有借考学生。
+            </div>
+          </CardContent>
+        </Card>
 
-          <div v-if="multiDiagnostics.length > 0" class="mt">
-            <DiagnosticsPanel :diagnostics="multiDiagnostics" show-evidence />
-          </div>
-        </el-card>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              校验摘要
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜各套 result 的冲突汇总、未满足限定、考场数超限与诊断
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <Alert
+              v-if="
+                seatingConflicts.length === 0 &&
+                seatingUnmet.length === 0 &&
+                overRoomLimit.length === 0
+              "
+            >
+              <CircleCheckIcon />
+              <AlertTitle>校验通过：各套座位方案零冲突、限定全满足、无人超过 3 个考场</AlertTitle>
+            </Alert>
+            <Alert v-else variant="destructive">
+              <CircleAlertIcon />
+              <AlertTitle>
+                冲突 {{ seatingConflicts.length }} 条 · 未满足限定 {{ seatingUnmet.length }} 条 ·
+                超考场限制 {{ overRoomLimit.length }} 人
+              </AlertTitle>
+            </Alert>
 
-        <el-card class="mt" shadow="never">
-          <template #header>
-            <strong>空置考场</strong>
-            <span class="muted">｜排完之后一个学生都没安排的考场</span>
-          </template>
-          <template v-if="emptyRoomNames.length > 0">
-            <el-alert
-              type="warning"
-              :closable="false"
-              show-icon
-              :title="`有 ${emptyRoomNames.length} 个空置考场：${emptyRoomNames.join('、')}，可以取消`"
+            <div class="max-h-60 overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-40">考场</TableHead>
+                    <TableHead class="w-36">科目</TableHead>
+                    <TableHead class="w-20">人数</TableHead>
+                    <TableHead class="w-28">状态</TableHead>
+                    <TableHead class="w-20">冲突</TableHead>
+                    <TableHead class="w-28">未满足限定</TableHead>
+                    <TableHead class="w-20">诊断</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in seatingChecks" :key="row.key">
+                    <TableCell>{{ row.roomName }}</TableCell>
+                    <TableCell>{{ row.subjectsLabel }}</TableCell>
+                    <TableCell>{{ row.studentCount }}</TableCell>
+                    <TableCell>
+                      <Badge :variant="row.ok ? 'default' : 'destructive'">
+                        {{ row.ok ? "零冲突" : row.level }}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{{ row.conflicts }}</TableCell>
+                    <TableCell>{{ row.unmetConstraints }}</TableCell>
+                    <TableCell>{{ row.diagnostics }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+
+            <div
+              v-if="seatingConflicts.length > 0"
+              class="max-h-60 overflow-auto rounded-lg border"
+            >
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-36">考场</TableHead>
+                    <TableHead class="w-32">科目</TableHead>
+                    <TableHead class="w-20">座位A</TableHead>
+                    <TableHead class="w-20">座位B</TableHead>
+                    <TableHead class="w-32">学生A</TableHead>
+                    <TableHead class="w-32">学生B</TableHead>
+                    <TableHead>班级</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in seatingConflicts" :key="row.key">
+                    <TableCell>{{ row.roomName }}</TableCell>
+                    <TableCell>{{ row.subjectsLabel }}</TableCell>
+                    <TableCell>{{ row.seatA }}</TableCell>
+                    <TableCell>{{ row.seatB }}</TableCell>
+                    <TableCell>{{ row.studentA }}</TableCell>
+                    <TableCell>{{ row.studentB }}</TableCell>
+                    <TableCell>{{ row.className }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+
+            <div v-if="seatingUnmet.length > 0" class="max-h-60 overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-36">考场</TableHead>
+                    <TableHead class="w-28">限定 ID</TableHead>
+                    <TableHead class="w-24">涉及学生</TableHead>
+                    <TableHead>原因</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in seatingUnmet" :key="row.key">
+                    <TableCell>{{ row.roomName }}</TableCell>
+                    <TableCell>{{ row.constraintId }}</TableCell>
+                    <TableCell>{{ row.studentCount }}</TableCell>
+                    <TableCell>{{ row.reason }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+
+            <div v-if="overRoomLimit.length > 0" class="max-h-60 overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-36">学号</TableHead>
+                    <TableHead class="w-28">姓名</TableHead>
+                    <TableHead class="w-28">用到考场数</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="row in overRoomLimit" :key="row.studentId">
+                    <TableCell>{{ row.studentId }}</TableCell>
+                    <TableCell>{{ row.name }}</TableCell>
+                    <TableCell>{{ row.count }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+
+            <DiagnosticsPanel
+              v-if="multiDiagnostics.length > 0"
+              :diagnostics="multiDiagnostics"
+              show-evidence
             />
-            <el-button class="mt" type="warning" @click="removeEmptyRooms"
-              >一键移除空置考场</el-button
-            >
-          </template>
-          <div v-else class="hint">没有空置考场，所有配置的考场都有安排。</div>
-        </el-card>
+          </CardContent>
+        </Card>
 
-        <div class="step-actions">
-          <el-button @click="router.push('/solve')">上一步</el-button>
-          <div>
-            <el-button @click="exportPlanJson">导出 plan.json</el-button>
-            <el-button type="primary" @click="exportClassSchedule"
-              >导出 按班级考场安排.xlsx</el-button
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              空置考场
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜排完之后一个学生都没安排的考场
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <template v-if="emptyRoomNames.length > 0">
+              <Alert>
+                <TriangleAlertIcon />
+                <AlertTitle>
+                  有 {{ emptyRoomNames.length }} 个空置考场：{{
+                    emptyRoomNames.join("、")
+                  }}，可以取消
+                </AlertTitle>
+              </Alert>
+              <div>
+                <Button variant="outline" @click="removeEmptyRooms">一键移除空置考场</Button>
+              </div>
+            </template>
+            <div v-else class="text-muted-foreground text-xs">
+              没有空置考场，所有配置的考场都有安排。
+            </div>
+          </CardContent>
+        </Card>
+
+        <div class="text-muted-foreground text-xs">
+          导出交付物：两个 .xlsx 合并工作簿（按班级考场安排 / 考场监考表）适合整体存档；
+          「分班文件（ZIP）」「分考场文件（ZIP）」把总表与每个班 / 每个考场各拆成一个单独的
+          .xlsx，方便分别发给班主任和监考老师。
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="outline" @click="router.push('/solve')">上一步</Button>
+          <div class="flex flex-wrap gap-2">
+            <Button variant="outline" @click="exportPlanJson">导出 plan.json</Button>
+            <Button @click="exportClassSchedule">导出 按班级考场安排.xlsx</Button>
+            <Button @click="exportInvigilator">导出 考场监考表.xlsx</Button>
+            <Button variant="outline" @click="exportClassFilesZip">下载分班文件（ZIP）</Button>
+            <Button variant="outline" @click="exportInvigilatorFilesZip"
+              >下载分考场文件（ZIP）</Button
             >
-            <el-button type="primary" @click="exportInvigilator">导出 考场监考表.xlsx</el-button>
           </div>
         </div>
       </template>
 
       <!-- ============================ 单场结果（行为不变） ============================ -->
       <template v-else>
-        <el-alert
-          v-if="stale"
-          class="mb"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="当前配置已经改过，这份结果是旧配置算出来的；导出的名单还是旧结果，建议回「排考场」重跑一次"
-        />
+        <Alert v-if="stale">
+          <TriangleAlertIcon />
+          <AlertTitle>
+            当前配置已经改过，这份结果是旧配置算出来的；导出的名单还是旧结果，建议回「排考场」重跑一次
+          </AlertTitle>
+        </Alert>
 
-        <el-alert
+        <Alert
           v-if="degradedBanner"
-          class="mb"
-          :type="degradedBanner.type === 'warning' ? 'warning' : degradedBanner.type"
-          :closable="false"
-          show-icon
-          :title="degradedBanner.title"
-        />
-
-        <el-card shadow="never">
-          <template #header>
-            <strong>结果名单</strong>
-            <span class="muted"
-              >｜按考场号 → 座位号升序，共 {{ rows.length }} /
-              {{ resultStore.entries.length }} 条</span
-            >
-          </template>
-
-          <el-form inline>
-            <el-form-item label="搜人 / 搜位">
-              <el-input
-                v-model="query"
-                placeholder="学号 / 姓名 / 班级，空格分隔多个条件"
-                clearable
-                style="width: 320px"
-              />
-            </el-form-item>
-            <el-form-item label="班级">
-              <el-select
-                v-model="classFilter"
-                multiple
-                collapse-tags
-                collapse-tags-tooltip
-                clearable
-                placeholder="全部班级"
-                style="width: 260px"
-              >
-                <el-option
-                  v-for="name in resultStore.classNames"
-                  :key="name"
-                  :value="name"
-                  :label="name"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="考场">
-              <el-select
-                v-model="roomFilter"
-                multiple
-                collapse-tags
-                collapse-tags-tooltip
-                clearable
-                placeholder="全部考场"
-                style="width: 260px"
-              >
-                <el-option
-                  v-for="room in resultStore.roomList"
-                  :key="room.id"
-                  :value="room.id"
-                  :label="room.name"
-                />
-              </el-select>
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" @click="exportWorkbook">导出 xlsx</el-button>
-              <el-button @click="exportPlanJson">导出 plan.json</el-button>
-            </el-form-item>
-          </el-form>
-
-          <VirtualTable
-            :rows="rows"
-            :row-key="entryRowKey"
-            :columns="entryColumns"
-            :height="480"
-            :row-height="40"
-          >
-            <template #cell-room="{ row }">{{ entryRoom(row) }}</template>
-            <template #cell-seatNo="{ row }">{{ cellText(row, "seatNo") }}</template>
-            <template #cell-studentId="{ row }">{{ cellText(row, "studentId") }}</template>
-            <template #cell-name="{ row }">{{ cellText(row, "name") }}</template>
-            <template #cell-className="{ row }">{{ cellText(row, "className") }}</template>
-            <template #cell-position="{ row }">{{ entryPosition(row) }}</template>
-            <template #empty>
-              <div class="hint">没有匹配的座位。</div>
-            </template>
-          </VirtualTable>
-        </el-card>
-
-        <el-card class="mt" shadow="never">
-          <template #header
-            ><strong>校验报告</strong>（独立校验器 validate()，与求解器分开实现）</template
-          >
-
-          <el-alert
-            v-if="report && report.ok && reportWarnings.length === 0"
-            type="success"
-            :closable="false"
-            show-icon
-            title="校验通过：容量、邻域、限定、编号一致性全部满足"
-          />
-          <el-alert
-            v-else-if="report && report.ok"
-            type="warning"
-            :closable="false"
-            show-icon
-            :title="`校验通过，但有 ${reportWarnings.length} 条提醒`"
-          />
-          <el-alert
-            v-else-if="report"
-            type="error"
-            :closable="false"
-            show-icon
-            :title="`校验未通过：${reportErrors.length} 个错误，${reportWarnings.length} 条提醒`"
-          />
-
-          <el-table
-            v-if="report && report.issues.length > 0"
-            class="mt"
-            :data="report.issues"
-            size="small"
-            border
-            max-height="240"
-          >
-            <el-table-column label="级别" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.severity === 'error' ? 'danger' : 'warning'" size="small">
-                  {{ row.severity === "error" ? "错误" : "提醒" }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="code" label="代码" width="220" />
-            <el-table-column prop="message" label="说明" />
-          </el-table>
-
-          <el-descriptions class="mt" :column="4" border>
-            <el-descriptions-item label="考生">{{
-              resultStore.result?.stats.participants
-            }}</el-descriptions-item>
-            <el-descriptions-item label="班级数">{{
-              resultStore.result?.stats.classes
-            }}</el-descriptions-item>
-            <el-descriptions-item label="考场数">
-              {{ resultStore.result?.stats.roomsUsed }} / {{ resultStore.result?.stats.rooms }}
-            </el-descriptions-item>
-            <el-descriptions-item label="座位数">
-              {{ resultStore.result?.stats.seatsUsed }} /
-              {{ resultStore.result?.stats.seatsTotal }}
-            </el-descriptions-item>
-            <el-descriptions-item label="冲突数">{{
-              resultStore.result?.stats.conflicts
-            }}</el-descriptions-item>
-            <el-descriptions-item label="未满足限定">
-              {{ resultStore.result?.stats.unmetConstraints }}
-            </el-descriptions-item>
-            <el-descriptions-item label="种子">{{
-              resultStore.result?.stats.seed
-            }}</el-descriptions-item>
-            <el-descriptions-item label="耗时"
-              >{{ resultStore.result?.stats.elapsedMs }} ms</el-descriptions-item
-            >
-          </el-descriptions>
-        </el-card>
-
-        <el-card v-if="(resultStore.result?.conflicts.length ?? 0) > 0" class="mt" shadow="never">
-          <template #header><strong>冲突明细</strong>（同考场相邻同班）</template>
-          <el-table
-            :data="resultStore.result?.conflicts ?? []"
-            size="small"
-            border
-            max-height="240"
-          >
-            <el-table-column label="考场" width="140">
-              <template #default="{ row }">{{
-                roomNameById.get(row.roomId) ?? row.roomId
-              }}</template>
-            </el-table-column>
-            <el-table-column prop="seatA" label="座位A" width="90" />
-            <el-table-column prop="seatB" label="座位B" width="90" />
-            <el-table-column prop="studentA" label="学生A" width="140" />
-            <el-table-column prop="studentB" label="学生B" width="140" />
-            <el-table-column prop="className" label="班级" />
-          </el-table>
-        </el-card>
-
-        <el-card
-          v-if="(resultStore.result?.unmetConstraints.length ?? 0) > 0"
-          class="mt"
-          shadow="never"
+          :variant="degradedBanner.type === 'error' ? 'destructive' : 'default'"
         >
-          <template #header><strong>未满足的限定</strong></template>
-          <el-table :data="resultStore.result?.unmetConstraints ?? []" size="small" border>
-            <el-table-column prop="constraintId" label="限定 ID" width="120" />
-            <el-table-column label="涉及学生" min-width="200">
-              <template #default="{ row }">{{ row.studentIds.length }} 人</template>
-            </el-table-column>
-            <el-table-column prop="reason" label="原因" />
-          </el-table>
-        </el-card>
+          <CircleCheckIcon v-if="degradedBanner.type === 'success'" />
+          <TriangleAlertIcon v-else-if="degradedBanner.type === 'warning'" />
+          <CircleAlertIcon v-else />
+          <AlertTitle>{{ degradedBanner.title }}</AlertTitle>
+        </Alert>
 
-        <el-card v-if="(resultStore.result?.diagnostics.length ?? 0) > 0" class="mt" shadow="never">
-          <template #header><strong>诊断</strong></template>
-          <DiagnosticsPanel :diagnostics="resultStore.result?.diagnostics ?? []" show-evidence />
-        </el-card>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              结果名单
+              <span class="text-muted-foreground text-xs font-normal">
+                ｜按考场号 → 座位号升序，共 {{ rows.length }} / {{ resultStore.entries.length }} 条
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <div class="flex flex-wrap items-end gap-3">
+              <div class="flex flex-col gap-1.5">
+                <Label for="single-query">搜人 / 搜位</Label>
+                <Input
+                  id="single-query"
+                  v-model="query"
+                  placeholder="学号 / 姓名 / 班级，空格分隔多个条件"
+                  class="h-8 w-80 max-w-full"
+                />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <Label>班级</Label>
+                <MultiSelect
+                  v-model="classFilter"
+                  :options="resultStore.classNames"
+                  placeholder="全部班级"
+                  trigger-class="w-64"
+                />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <Label>考场</Label>
+                <MultiSelect
+                  v-model="roomFilter"
+                  :options="resultStore.roomList.map((room) => room.id)"
+                  :option-labels="
+                    Object.fromEntries(resultStore.roomList.map((room) => [room.id, room.name]))
+                  "
+                  placeholder="全部考场"
+                  trigger-class="w-64"
+                />
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <Button @click="exportWorkbook">导出 xlsx</Button>
+                <Button variant="outline" @click="exportPlanJson">导出 plan.json</Button>
+              </div>
+            </div>
 
-        <el-card class="mt" shadow="never">
-          <template #header
-            ><strong>座位网格预览</strong>（只作页面预览，正式交付是上面的名单）</template
-          >
-          <el-select
-            v-model="previewRoomId"
-            clearable
-            placeholder="选一个考场看座位"
-            style="width: 260px"
-          >
-            <el-option
-              v-for="room in resultStore.roomList"
-              :key="room.id"
-              :value="room.id"
-              :label="room.name"
-            />
-          </el-select>
-          <div v-if="previewRoom" class="mt">
-            <SeatGridPreview :room="previewRoom" :occupants="previewOccupants" />
+            <VirtualTable
+              :rows="rows"
+              :row-key="entryRowKey"
+              :columns="entryColumns"
+              :height="480"
+              :row-height="40"
+            >
+              <template #cell-room="{ row }">{{ entryRoom(row) }}</template>
+              <template #cell-seatNo="{ row }">{{ cellText(row, "seatNo") }}</template>
+              <template #cell-studentId="{ row }">{{ cellText(row, "studentId") }}</template>
+              <template #cell-name="{ row }">{{ cellText(row, "name") }}</template>
+              <template #cell-className="{ row }">{{ cellText(row, "className") }}</template>
+              <template #cell-position="{ row }">{{ entryPosition(row) }}</template>
+              <template #empty>
+                <div class="text-muted-foreground text-xs">没有匹配的座位。</div>
+              </template>
+            </VirtualTable>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              校验报告
+              <span class="text-muted-foreground text-xs font-normal">
+                （独立校验器 validate()，与求解器分开实现）
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <Alert v-if="report && report.ok && reportWarnings.length === 0">
+              <CircleCheckIcon />
+              <AlertTitle>校验通过：容量、邻域、限定、编号一致性全部满足</AlertTitle>
+            </Alert>
+            <Alert v-else-if="report && report.ok">
+              <TriangleAlertIcon />
+              <AlertTitle>校验通过，但有 {{ reportWarnings.length }} 条提醒</AlertTitle>
+            </Alert>
+            <Alert v-else-if="report" variant="destructive">
+              <CircleAlertIcon />
+              <AlertTitle>
+                校验未通过：{{ reportErrors.length }} 个错误，{{ reportWarnings.length }} 条提醒
+              </AlertTitle>
+            </Alert>
+
+            <div
+              v-if="report && report.issues.length > 0"
+              class="max-h-60 overflow-auto rounded-lg border"
+            >
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-24">级别</TableHead>
+                    <TableHead class="w-56">代码</TableHead>
+                    <TableHead>说明</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow v-for="(row, index) in report.issues" :key="`${row.code}:${index}`">
+                    <TableCell>
+                      <Badge :variant="row.severity === 'error' ? 'destructive' : 'secondary'">
+                        {{ row.severity === "error" ? "错误" : "提醒" }}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{{ row.code }}</TableCell>
+                    <TableCell>{{ row.message }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+
+            <dl class="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">考生</dt>
+                <dd>{{ resultStore.result?.stats.participants }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">班级数</dt>
+                <dd>{{ resultStore.result?.stats.classes }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">考场数</dt>
+                <dd>
+                  {{ resultStore.result?.stats.roomsUsed }} / {{ resultStore.result?.stats.rooms }}
+                </dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">座位数</dt>
+                <dd>
+                  {{ resultStore.result?.stats.seatsUsed }} /
+                  {{ resultStore.result?.stats.seatsTotal }}
+                </dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">冲突数</dt>
+                <dd>{{ resultStore.result?.stats.conflicts }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">未满足限定</dt>
+                <dd>{{ resultStore.result?.stats.unmetConstraints }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">种子</dt>
+                <dd>{{ resultStore.result?.stats.seed }}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt class="text-muted-foreground text-xs">耗时</dt>
+                <dd>{{ resultStore.result?.stats.elapsedMs }} ms</dd>
+              </div>
+            </dl>
+          </CardContent>
+        </Card>
+
+        <Card v-if="(resultStore.result?.conflicts.length ?? 0) > 0">
+          <CardHeader>
+            <CardTitle>
+              冲突明细
+              <span class="text-muted-foreground text-xs font-normal">（同考场相邻同班）</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div class="max-h-60 overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-32">考场</TableHead>
+                    <TableHead class="w-24">座位A</TableHead>
+                    <TableHead class="w-24">座位B</TableHead>
+                    <TableHead class="w-36">学生A</TableHead>
+                    <TableHead class="w-36">学生B</TableHead>
+                    <TableHead>班级</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow
+                    v-for="(row, index) in resultStore.result?.conflicts ?? []"
+                    :key="`${row.roomId}:${row.seatA}:${row.seatB}:${index}`"
+                  >
+                    <TableCell>{{ roomNameById.get(row.roomId) ?? row.roomId }}</TableCell>
+                    <TableCell>{{ row.seatA }}</TableCell>
+                    <TableCell>{{ row.seatB }}</TableCell>
+                    <TableCell>{{ row.studentA }}</TableCell>
+                    <TableCell>{{ row.studentB }}</TableCell>
+                    <TableCell>{{ row.className }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card v-if="(resultStore.result?.unmetConstraints.length ?? 0) > 0">
+          <CardHeader>
+            <CardTitle>未满足的限定</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div class="overflow-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead class="w-32">限定 ID</TableHead>
+                    <TableHead class="w-56">涉及学生</TableHead>
+                    <TableHead>原因</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <TableRow
+                    v-for="(row, index) in resultStore.result?.unmetConstraints ?? []"
+                    :key="`${row.constraintId}:${index}`"
+                  >
+                    <TableCell>{{ row.constraintId }}</TableCell>
+                    <TableCell>{{ row.studentIds.length }} 人</TableCell>
+                    <TableCell>{{ row.reason }}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card v-if="(resultStore.result?.diagnostics.length ?? 0) > 0">
+          <CardHeader>
+            <CardTitle>诊断</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <DiagnosticsPanel :diagnostics="resultStore.result?.diagnostics ?? []" show-evidence />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              座位网格预览
+              <span class="text-muted-foreground text-xs font-normal">
+                （只作页面预览，正式交付是上面的名单）
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="flex flex-col gap-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <Select
+                v-bind="{ modelValue: previewRoomModel() }"
+                @update:modelValue="updatePreviewRoom"
+              >
+                <SelectTrigger class="h-8 w-64 max-w-full" size="sm">
+                  <SelectValue placeholder="选一个考场看座位" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem
+                      v-for="room in resultStore.roomList"
+                      :key="room.id"
+                      :value="room.id"
+                    >
+                      {{ room.name }}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Button v-if="previewRoomId" variant="ghost" size="sm" @click="previewRoomId = ''">
+                清空
+              </Button>
+            </div>
+            <SeatGridPreview v-if="previewRoom" :room="previewRoom" :occupants="previewOccupants" />
+            <div v-else class="text-muted-foreground text-xs">
+              选了考场后，这里会按物理列序画出每个座位上的学生。
+            </div>
+          </CardContent>
+        </Card>
+
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="outline" @click="router.push('/solve')">上一步</Button>
+          <div class="flex flex-wrap gap-2">
+            <Button variant="outline" @click="exportPlanJson">导出 plan.json</Button>
+            <Button variant="outline" @click="exportRoomSheets">导出 考场座位表.xlsx</Button>
+            <Button @click="exportWorkbook">导出 考场安排名单.xlsx</Button>
           </div>
-          <div v-else class="hint">选了考场后，这里会按物理列序画出每个座位上的学生。</div>
-        </el-card>
-
-        <div class="step-actions">
-          <el-button @click="router.push('/solve')">上一步</el-button>
-          <el-button type="primary" @click="exportWorkbook">导出 考场安排名单.xlsx</el-button>
         </div>
       </template>
     </template>
   </div>
 </template>
-
-<style scoped>
-.mb {
-  margin-bottom: 10px;
-}
-.mt {
-  margin-top: 12px;
-}
-.muted {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.slot-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.step-actions {
-  margin-top: 16px;
-  display: flex;
-  justify-content: space-between;
-}
-</style>

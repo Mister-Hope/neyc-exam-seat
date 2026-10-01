@@ -5,6 +5,7 @@ import { loadState, saveState } from "@/lib/persist";
 import { useRoomsStore } from "@/stores/rooms";
 import { validate } from "@exam-seat/core";
 import type {
+  BorrowedSeat,
   Job,
   PlanAllResult,
   PlanEntry,
@@ -60,11 +61,27 @@ export const useResultStore = defineStore("result", () => {
 
   const hasResult = computed(() => result.value != null || planAll.value != null);
   const hasMultiResult = computed(() => planAll.value != null);
+  /**
+   * 是否「主动放宽了考场级同班相邻」（`PlanLevel = roomRelaxed` / `PlanAllResult.relaxedRooms` 非空）。
+   *
+   * 与「降级」（orthogonal / softConstraints / minConflicts）区分开：放宽是老师自己的选择， 结果仍然可用，只是要在监考表上标注。
+   */
+  const isRoomRelaxed = computed(() => {
+    if (planAll.value != null) return (planAll.value.relaxedRooms ?? []).length > 0;
+    return result.value?.level === "roomRelaxed";
+  });
+  /** 真·降级（算法被迫让步），`roomRelaxed` 不算。 */
   const isDegraded = computed(() => {
     if (planAll.value != null) {
-      return planAll.value.seatings.some((seating) => seating.result.level !== "strict");
+      return planAll.value.seatings.some(
+        (seating) => seating.result.level !== "strict" && seating.result.level !== "roomRelaxed",
+      );
     }
-    return result.value != null && result.value.level !== "strict";
+    return (
+      result.value != null &&
+      result.value.level !== "strict" &&
+      result.value.level !== "roomRelaxed"
+    );
   });
   const entries = computed<PlanEntry[]>(() => result.value?.entries ?? []);
 
@@ -73,6 +90,22 @@ export const useResultStore = defineStore("result", () => {
   const slots = computed<TimeSlot[]>(() => planAll.value?.slots ?? []);
   const seatings = computed<SeatingPlan[]>(() => planAll.value?.seatings ?? []);
   const scheduleByStudent = computed<StudentSchedule[]>(() => planAll.value?.byStudent ?? []);
+  /** 已放宽「同班相邻」的考场 id（`RoomSpec.relaxSameClass`），按 rooms 顺序。 */
+  const relaxedRoomIds = computed<string[]>(() => planAll.value?.relaxedRooms ?? []);
+  /** 借考落位明细（借考人 + 科目 + 目标考场 / 座位）；没有借考时是空数组。 */
+  const borrowings = computed<BorrowedSeat[]>(() => planAll.value?.borrowings ?? []);
+  /** 放宽了同班相邻的考场名称（结果页展示用，找不到名字时退回 id）。 */
+  const relaxedRoomNames = computed<string[]>(() =>
+    relaxedRoomIds.value.map((id) => roomNameOf(id)),
+  );
+
+  function roomNameOf(roomId: string): string {
+    return (
+      seatings.value.find((seating) => seating.roomId === roomId)?.roomName ??
+      job.value?.rooms.find((room) => room.id === roomId)?.name ??
+      roomId
+    );
+  }
 
   /**
    * 空置考场：**按真正的求解结果判定**——`seatings` 里出现过的 `roomId` 才算用上， 不用容量预测。多场次取 `planAll.seatings`，单场沿用
@@ -244,10 +277,14 @@ export const useResultStore = defineStore("result", () => {
     hasResult,
     hasMultiResult,
     isDegraded,
+    isRoomRelaxed,
     entries,
     slots,
     seatings,
     scheduleByStudent,
+    relaxedRoomIds,
+    relaxedRoomNames,
+    borrowings,
     emptyRoomIds,
     emptyRoomNames,
     sortedEntries,

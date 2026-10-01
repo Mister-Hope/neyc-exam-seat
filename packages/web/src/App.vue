@@ -1,8 +1,32 @@
 <script setup lang="ts">
-import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { toast } from "vue-sonner";
 
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Toaster } from "@/components/ui/sonner";
+import {
+  Stepper,
+  StepperIndicator,
+  StepperItem,
+  StepperSeparator,
+  StepperTitle,
+  StepperTrigger,
+} from "@/components/ui/stepper";
+import { Textarea } from "@/components/ui/textarea";
+import { confirmAction } from "@/composables/useConfirm";
 import { useExamJob } from "@/composables/useExamJob";
 import { JSON_MIME, downloadText, pickFile, readFileText } from "@/lib/download";
 import { jobFileName, parseJobText, serializeJob } from "@/lib/job";
@@ -36,11 +60,17 @@ const active = computed(() => {
 
 const currentStep = computed(() => STEPS[active.value]);
 
+function goToStep(step: number | undefined): void {
+  if (step == null) return;
+  const target = STEPS[step - 1];
+  if (target) router.push(target.path);
+}
+
 function applyImportedJob(text: string): void {
   const parsed = parseJobText(text);
   loadJob(parsed);
   resultStore.clear();
-  ElMessage.success(
+  toast.success(
     `job.json 已导入：${parsed.students.length} 名学生 / ${parsed.rooms.length} 个考场`,
   );
 }
@@ -51,7 +81,7 @@ async function importJobFile(): Promise<void> {
   try {
     applyImportedJob(await readFileText(file));
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : String(err));
+    toast.error(err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -68,160 +98,114 @@ function importFromPaste(): void {
 
 function exportJob(): void {
   downloadText(serializeJob(job.value), jobFileName(job.value.meta?.title), JSON_MIME);
-  ElMessage.success("已导出 job.json，可以交给 CLI / AI 接力");
+  toast.success("已导出 job.json，可以交给 CLI / AI 接力");
 }
 
 async function clearAll(): Promise<void> {
-  try {
-    await ElMessageBox.confirm(
-      "会清空名单、考场、限定、结果，以及 localStorage 里的所有 exam-seat: 数据。确定吗？",
-      "清空全部数据",
-      { type: "warning", confirmButtonText: "清空", cancelButtonText: "取消" },
-    );
-  } catch {
-    return;
-  }
+  const confirmed = await confirmAction({
+    title: "清空全部数据",
+    description: "会清空名单、考场、限定、结果，以及 localStorage 里的所有 exam-seat: 数据。",
+    confirmText: "清空",
+    danger: true,
+  });
+  if (!confirmed) return;
   clearExamSeatStorage();
   roster.reset();
   rooms.reset();
   constraints.reset();
   options.reset();
   resultStore.clear();
-  ElMessage.success("已清空");
+  toast.success("已清空");
   router.push("/import");
 }
 </script>
 
 <template>
-  <el-container class="app-shell">
-    <el-header class="app-header">
-      <div class="brand">
-        <span class="brand__name">排考场</span>
-        <span class="brand__sub">exam-seat</span>
-      </div>
-      <el-input
-        v-model="options.title"
-        class="title-input"
-        placeholder="考试名称，例如 2026届高三一模"
-      />
-      <div class="header-actions">
-        <el-button size="small" @click="importJobFile">导入 job.json</el-button>
-        <el-button size="small" @click="pasteVisible = true">粘贴导入</el-button>
-        <el-button size="small" type="primary" @click="exportJob">导出 job.json</el-button>
-        <el-button size="small" type="danger" plain @click="clearAll">清空数据</el-button>
-      </div>
-    </el-header>
-
-    <div class="summary-bar">
-      <el-tag type="info">名单 {{ roster.total }} 人</el-tag>
-      <el-tag type="info">实际参考 {{ roster.participants }} 人</el-tag>
-      <el-tag type="info">考场 {{ rooms.rooms.length }} 个 / {{ rooms.totalSeats }} 座</el-tag>
-      <el-tag type="info">限定 {{ constraints.count }} 条</el-tag>
-      <el-tag :type="resultStore.hasResult ? 'success' : 'info'">
-        {{ resultStore.hasResult ? "已有结果" : "未排考场" }}
-      </el-tag>
-      <span class="summary-bar__hint">{{ currentStep?.description }}</span>
-    </div>
-
-    <el-main>
-      <el-steps class="step-bar" :active="active" align-center finish-status="success">
-        <el-step
-          v-for="step in STEPS"
-          :key="step.path"
-          :title="step.short"
-          @click="router.push(step.path)"
+  <div class="bg-background text-foreground flex min-h-screen flex-col">
+    <header
+      class="bg-background/95 supports-backdrop-filter:backdrop-blur sticky top-0 z-20 border-b"
+    >
+      <div class="flex flex-wrap items-center gap-3 px-5 py-2.5">
+        <div class="flex items-baseline gap-1.5 whitespace-nowrap">
+          <span class="text-lg font-bold">排考场</span>
+          <span class="text-muted-foreground text-xs">exam-seat</span>
+        </div>
+        <Input
+          v-model="options.title"
+          class="h-8 max-w-[22rem]"
+          placeholder="考试名称，例如 2026届高三一模"
         />
-      </el-steps>
-
-      <router-view />
-    </el-main>
-
-    <el-dialog v-model="pasteVisible" title="粘贴导入 job.json" width="640px">
-      <el-input
-        v-model="pasteText"
-        type="textarea"
-        :rows="14"
-        placeholder="把 AI / CLI 生成的 job.json 粘到这里"
-      />
-      <el-alert
-        v-if="pasteError"
-        class="mt"
-        type="error"
-        :closable="false"
-        show-icon
-        :title="pasteError"
-      />
-      <template #footer>
-        <el-button @click="pasteVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="pasteText.trim().length === 0"
-          @click="importFromPaste"
+        <div class="ml-auto flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" @click="importJobFile">导入 job.json</Button>
+          <Button variant="outline" size="sm" @click="pasteVisible = true">粘贴导入</Button>
+          <Button size="sm" @click="exportJob">导出 job.json</Button>
+          <Button variant="destructive" size="sm" @click="clearAll">清空数据</Button>
+        </div>
+      </div>
+      <Separator />
+      <div class="bg-muted/40 flex flex-wrap items-center gap-2 px-5 py-2">
+        <Badge variant="secondary">名单 {{ roster.total }} 人</Badge>
+        <Badge variant="secondary">实际参考 {{ roster.participants }} 人</Badge>
+        <Badge variant="secondary"
+          >考场 {{ rooms.rooms.length }} 个 / {{ rooms.totalSeats }} 座</Badge
         >
-          导入
-        </el-button>
-      </template>
-    </el-dialog>
-  </el-container>
-</template>
+        <Badge variant="secondary">限定 {{ constraints.count }} 条</Badge>
+        <Badge :variant="resultStore.hasResult ? 'default' : 'secondary'">
+          {{ resultStore.hasResult ? "已有结果" : "未排考场" }}
+        </Badge>
+        <span class="text-muted-foreground text-xs">{{ currentStep?.description }}</span>
+      </div>
+    </header>
 
-<style scoped>
-.app-shell {
-  min-height: 100vh;
-}
-.app-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  border-bottom: 1px solid var(--el-border-color);
-  background: var(--el-bg-color);
-  height: auto;
-  padding: 10px 20px;
-}
-.brand {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  white-space: nowrap;
-}
-.brand__name {
-  font-size: 18px;
-  font-weight: 700;
-}
-.brand__sub {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.title-input {
-  max-width: 360px;
-}
-.header-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.summary-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 8px 20px;
-  background: var(--el-fill-color-lighter);
-  border-bottom: 1px solid var(--el-border-color-lighter);
-}
-.summary-bar__hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-}
-.step-bar {
-  cursor: pointer;
-  margin-bottom: 8px;
-}
-:deep(.el-step) {
-  cursor: pointer;
-}
-.mt {
-  margin-top: 12px;
-}
-</style>
+    <main class="flex-1 px-5 pb-12">
+      <Stepper
+        :model-value="active + 1"
+        :linear="false"
+        class="mx-auto my-3 w-full max-w-5xl"
+        @update:model-value="goToStep"
+      >
+        <StepperItem
+          v-for="(step, index) in STEPS"
+          :key="step.path"
+          :step="index + 1"
+          class="min-w-0 flex-1"
+        >
+          <StepperTrigger class="w-full cursor-pointer" :data-testid="`step-${index + 1}`">
+            <StepperIndicator>{{ index + 1 }}</StepperIndicator>
+            <StepperTitle class="text-xs whitespace-nowrap">{{ step.short }}</StepperTitle>
+          </StepperTrigger>
+          <StepperSeparator
+            v-if="index < STEPS.length - 1"
+            class="bg-border mx-1 h-px min-w-4 flex-1"
+          />
+        </StepperItem>
+      </Stepper>
+
+      <RouterView />
+    </main>
+
+    <Dialog v-model:open="pasteVisible">
+      <DialogContent class="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>粘贴导入 job.json</DialogTitle>
+          <DialogDescription
+            >把 AI / CLI 生成的 job.json 粘到这里，导入后可继续核对。</DialogDescription
+          >
+        </DialogHeader>
+        <Textarea
+          v-model="pasteText"
+          :rows="14"
+          placeholder="把 AI / CLI 生成的 job.json 粘到这里"
+        />
+        <p v-if="pasteError" class="text-destructive text-sm">{{ pasteError }}</p>
+        <DialogFooter>
+          <Button variant="outline" @click="pasteVisible = false">取消</Button>
+          <Button :disabled="pasteText.trim().length === 0" @click="importFromPaste">导入</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <ConfirmDialog />
+    <Toaster position="top-center" rich-colors />
+  </div>
+</template>

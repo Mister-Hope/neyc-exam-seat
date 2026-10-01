@@ -334,7 +334,8 @@ export async function main(argv: string[]): Promise<number> {
     .option("--rows <n>", "排数", "6")
     .option("--cols <n>", "列数", "5")
     .option("--door <side>", "门在左还是右：left | right", "right")
-    .action((options: { rows: string; cols: string; door: string }) => {
+    .option("--extra <cols>", "讲台侧加座所在业务列，例如 2,4")
+    .action((options: { rows: string; cols: string; door: string; extra?: string }) => {
       const rows = Number(options.rows);
       const cols = Number(options.cols);
       if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1) {
@@ -342,19 +343,33 @@ export async function main(argv: string[]): Promise<number> {
       }
       if (options.door !== "left" && options.door !== "right") fail("--door 只能是 left 或 right");
       const { door } = options;
-      const text = renderNumbering(rows, cols, door);
+      const extraFrontSeats = (options.extra ?? "")
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part !== "")
+        .map(Number);
+      if (extraFrontSeats.some((col) => !Number.isInteger(col) || col < 1 || col > cols)) {
+        fail(`--extra 只能是 1..${cols} 的列号，用逗号分隔，例如 --extra 2,4`);
+      }
+      const text = renderNumbering(rows, cols, door, extraFrontSeats);
       if (globalJson()) {
         const seats: { row: number; physicalCol: number; businessCol: number }[] = [];
-        for (let row = 1; row <= rows; row += 1) {
+        for (let row = 0; row <= rows; row += 1) {
+          if (row === 0 && extraFrontSeats.length === 0) continue;
           for (let pc = 1; pc <= cols; pc += 1) {
-            seats.push({
-              row,
-              physicalCol: pc,
-              businessCol: door === "right" ? cols - pc + 1 : pc,
-            });
+            const businessCol = door === "right" ? cols - pc + 1 : pc;
+            if (row === 0 && !extraFrontSeats.includes(businessCol)) continue;
+            seats.push({ row, physicalCol: pc, businessCol });
           }
         }
-        writeJson({ rows, cols, doorSide: door, preview: text, seats });
+        writeJson({
+          rows,
+          cols,
+          doorSide: door,
+          ...(extraFrontSeats.length > 0 ? { extraFrontSeats } : {}),
+          preview: text,
+          seats,
+        });
       } else {
         process.stdout.write(`${text}\n`);
       }
@@ -477,7 +492,20 @@ export async function main(argv: string[]): Promise<number> {
               }
             }
             log(`已导出 ${written.files.length} 个文件：`);
-            for (const path of written.files) log(`  ${path}`);
+            // 多场次会写出「合并版 + 每班/每考场一个文件」，逐条刷 40+ 行很吵，这里只给目录摘要
+            const dirs = written.directories;
+            if (dirs.classFiles > 0) {
+              log(`  按班级考场安排.xlsx（总表 + ${dirs.classFiles} 个班）`);
+              if (dirs.classDir) log(`  ${dirs.classDir}/（${dirs.classFiles} 个班级文件）`);
+            }
+            if (dirs.roomFiles > 0) {
+              log(`  考场监考表.xlsx（${dirs.roomFiles} 个考场）`);
+              if (dirs.roomDir) log(`  ${dirs.roomDir}/（${dirs.roomFiles} 个考场文件）`);
+            }
+            const jsonPaths = written.files.filter(
+              (file) => file.endsWith("plan.json") || file.endsWith("job.json"),
+            );
+            if (jsonPaths.length > 0) log(`  ${jsonPaths.join(" ｜ ")}`);
             if (written.removedRooms.length > 0) {
               log(
                 `已剔除空置考场：${written.removedRooms.join("、")}（导出的 job.json 里不再包含）`,

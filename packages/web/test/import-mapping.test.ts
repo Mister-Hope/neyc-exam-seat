@@ -1,10 +1,10 @@
-import ElementPlus from "element-plus";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp, h, nextTick } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 import * as XLSX from "xlsx";
 
+import { toArrayBuffer } from "@/lib/download";
 import { analyzeSheet, columnLabel, missingRequired, pickRosterSheet } from "@/lib/roster-import";
 import { useRosterStore } from "@/stores/roster";
 import StepImport from "@/views/StepImport.vue";
@@ -65,7 +65,6 @@ async function mountImport(setup: (roster: ReturnType<typeof useRosterStore>) =>
   const app = createApp({ render: () => h(StepImport) });
   app.use(pinia);
   app.use(router);
-  app.use(ElementPlus);
   app.mount(container);
   await flush();
   return { app, container, roster };
@@ -273,7 +272,11 @@ describe("名单导入 · 列映射与预填", () => {
     expect(container.textContent).toContain("自动识别");
     expect(container.textContent).toContain("A 列");
     expect(container.textContent).toContain("考证号");
-    expect(container.querySelector(".el-form-item.is-error")).toBeNull();
+    // 预填结果要真的落在下拉框上（不只是文字提示）：考证号 = 第 0 列
+    expect(container.querySelector<HTMLSelectElement>("#mapping-id")?.value).toBe("0");
+    expect(container.querySelector<HTMLSelectElement>("#mapping-name")?.value).toBe("1");
+    expect(container.querySelector<HTMLSelectElement>("#mapping-className")?.value).toBe("2");
+    expect(container.querySelector("[data-invalid='true']")).toBeNull();
     app.unmount();
   });
 
@@ -282,13 +285,51 @@ describe("名单导入 · 列映射与预填", () => {
       roster.importSheets([sheet("名单", ["名字", "备注"], [["张三", "x"]])], "缺列.xlsx");
     });
 
-    const errorItems = container.querySelectorAll(".el-form-item.is-error");
+    const errorItems = container.querySelectorAll("[data-invalid='true']");
     expect(errorItems.length).toBeGreaterThan(0);
     expect(container.textContent).toContain("没认出来这些必填列");
-    // el-form-item 的错误文案有 100ms 防抖，等一拍再断言
+    // 必填列没认出来时错误文案要一直挂在字段下面，且下拉停在「还没认出来」的占位项
+    expect(container.querySelector<HTMLSelectElement>("#mapping-id")?.value).toBe("-1");
     await sleep(150);
     await nextTick();
     expect(container.textContent).toContain("没认出来，请手动指定");
+    app.unmount();
+  });
+
+  it("页面：隐藏的 file input 选文件后走完整导入链路并预填映射", async () => {
+    const { app, container, roster } = await mountImport(() => {});
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    expect(input!.accept).toBe(".xlsx,.xls");
+
+    const file = new File(
+      [
+        toArrayBuffer(
+          workbookBytes([
+            {
+              name: "名单",
+              rows: [
+                ["考证号", "姓 名", "班 级", "缺考"],
+                ["S1", "张三", "高三(1)班", "是"],
+              ],
+            },
+          ]),
+        ),
+      ],
+      "上传名单.xlsx",
+      { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+    );
+    Object.defineProperty(input!, "files", { value: [file], configurable: true });
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flush();
+    await sleep(0);
+
+    expect(roster.total).toBe(1);
+    expect(roster.mapping).toMatchObject({ id: 0, name: 1, className: 2, absent: 3 });
+    expect(container.textContent).toContain("已自动识别 3/3 个必填列");
+    expect(container.textContent).toContain("上传名单.xlsx");
+    // 缺考列照样直接生效
+    expect(container.textContent).toContain("1 人已标记为不参加");
     app.unmount();
   });
 

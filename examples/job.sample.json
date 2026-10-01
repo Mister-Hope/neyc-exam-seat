@@ -1,0 +1,399 @@
+{
+  "jobVersion": 2,
+  "meta": {
+    "title": "样例：36 人 / 五种组合 / 19 类能力演示",
+    "createdAt": "2026-09-30T13:00:00+08:00"
+  },
+  "options": {
+    "seed": 20260930,
+    "adjacency": "king",
+    "groupPreference": "fillRooms",
+    "slots": [
+      {
+        "id": "T1",
+        "name": "第1时段",
+        "subjects": ["chinese"]
+      },
+      {
+        "id": "T2",
+        "name": "第2时段",
+        "subjects": ["math"]
+      },
+      {
+        "id": "T3",
+        "name": "第3时段",
+        "subjects": ["english"]
+      },
+      {
+        "id": "T4",
+        "name": "第4时段",
+        "subjects": ["physics", "history"]
+      },
+      {
+        "id": "T5",
+        "name": "第5时段",
+        "subjects": ["chemistry"]
+      },
+      {
+        "id": "T6",
+        "name": "第6时段",
+        "subjects": ["biology", "geography"]
+      },
+      {
+        "id": "T7",
+        "name": "第7时段",
+        "subjects": ["politics"]
+      }
+    ]
+  },
+  "students": [
+    {
+      "id": "20260001",
+      "name": "物化生1",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260002",
+      "name": "物化生2",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260003",
+      "name": "物化生3",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260004",
+      "name": "物化生4",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260005",
+      "name": "物化生5",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260006",
+      "name": "物化生6",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260007",
+      "name": "物化生7",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260008",
+      "name": "物化生8",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260009",
+      "name": "物化生9",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260010",
+      "name": "物化生10",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260011",
+      "name": "物化生11",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260012",
+      "name": "物化生12",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260013",
+      "name": "物化生13",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260014",
+      "name": "物化生14",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260015",
+      "name": "物化生15",
+      "className": "高一(1)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260016",
+      "name": "物化生16",
+      "className": "高一(2)班",
+      "included": true,
+      "combination": "物化生",
+      "subjects": ["physics", "chemistry", "biology"]
+    },
+    {
+      "id": "20260017",
+      "name": "物化政1",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
+    },
+    {
+      "id": "20260018",
+      "name": "物化政2",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
+    },
+    {
+      "id": "20260019",
+      "name": "物化政3",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
+    },
+    {
+      "id": "20260020",
+      "name": "物化政4",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
+    },
+    {
+      "id": "20260021",
+      "name": "物化政5",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
+    },
+    {
+      "id": "20260022",
+      "name": "物化政6",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化政",
+      "subjects": ["physics", "chemistry", "politics"]
+    },
+    {
+      "id": "20260023",
+      "name": "物化地1",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
+    },
+    {
+      "id": "20260024",
+      "name": "物化地2",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
+    },
+    {
+      "id": "20260025",
+      "name": "物化地3",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
+    },
+    {
+      "id": "20260026",
+      "name": "物化地4",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
+    },
+    {
+      "id": "20260027",
+      "name": "物化地5",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
+    },
+    {
+      "id": "20260028",
+      "name": "物化地6",
+      "className": "高一(3)班",
+      "included": true,
+      "combination": "物化地",
+      "subjects": ["physics", "chemistry", "geography"]
+    },
+    {
+      "id": "20260029",
+      "name": "史地政1",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260030",
+      "name": "史地政2",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260031",
+      "name": "史地政3",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260032",
+      "name": "史地政4",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260033",
+      "name": "史地政5",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260034",
+      "name": "史地政6",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260035",
+      "name": "史地政7",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史地政",
+      "subjects": ["history", "politics", "geography"]
+    },
+    {
+      "id": "20260036",
+      "name": "史生政1",
+      "className": "高一(4)班",
+      "included": true,
+      "combination": "史生政",
+      "subjects": ["history", "biology", "politics"],
+      "subjectRoom": {
+        "biology": "R1"
+      }
+    }
+  ],
+  "rooms": [
+    {
+      "id": "R1",
+      "name": "第一考场",
+      "location": "高一·一班",
+      "rows": 7,
+      "cols": 6,
+      "note": "监考：张老师"
+    },
+    {
+      "id": "R2",
+      "name": "第二考场",
+      "location": "高一·二班",
+      "rows": 7,
+      "cols": 5,
+      "doorSide": "right",
+      "extraFrontSeats": [2, 4]
+    },
+    {
+      "id": "R3",
+      "name": "第三考场",
+      "location": "录播教室",
+      "rows": 6,
+      "cols": 5,
+      "dedicatedSubjects": ["politics", "geography"]
+    },
+    {
+      "id": "R4",
+      "name": "第四考场",
+      "location": "高一·四班",
+      "rows": 7,
+      "cols": 5,
+      "relaxSameClass": true
+    }
+  ],
+  "constraints": [
+    {
+      "id": "C1-文科生在第四考场",
+      "combinations": ["史地政"],
+      "roomId": "R4"
+    },
+    {
+      "id": "C2-史生政也去第四考场",
+      "studentIds": ["20260036"],
+      "roomId": "R4"
+    },
+    {
+      "id": "C3-两个学生坐第一排",
+      "studentIds": ["20260001", "20260017"],
+      "rows": ["first"]
+    },
+    {
+      "id": "C4-高一2班的理科生去第二考场（演示加座考场）",
+      "classes": ["高一(2)班"],
+      "roomId": "R2"
+    }
+  ]
+}

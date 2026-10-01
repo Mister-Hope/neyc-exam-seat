@@ -1,23 +1,31 @@
-# 独立验收记录（task-7 / task-11 / task-14）
+# 独立验收记录（task-7 / task-11 / task-14 / task-15 / task-16）
 
-> 验收人：verifier（不改业务实现，只改 `examples/acceptance.mjs` 与本文件）。
+> 验收人：verifier（不改业务实现；task-7/11/14 只改 `examples/acceptance.mjs` 与本文件，
+> task-15/16 只改本文件）。
 > task-7：主链路（硬规则 / 分房策略 / 导出闸门 / 退出码 / skill）—— 已完结（§1–§5，71/71）。
 > task-11：输入契约（表头宽容 / 缺考两路 / 未匹配不静默）—— 阶段 1 脚本已写（§6）。
 > task-14：多场次限定 + 多场次校验 —— 阶段 1 脚本已写（§6）。
-> 基线契约：`docs/design.md` §3.2 / §5.1 / §5.4 / §7.1 / §8.1 / §9；`docs/issues.md`（议题 1–5）。
+> task-15：考场级放宽 / 按科目借考 / 加座考场 / 显式时段 —— 已完结（§7，独立复核 0 反例；
+> 含一次增量复验：验收 108 → **111**（新增 19h/19i/19j，收紧后复验通过），见 §7.9）。
+> task-16：Excel 交付物重做（准考证号 / 标题 / 字号 / A4 横向 / 每班每考场单文件）—— 已完结（§8）。
+> **隐私**：本文只写脱敏占位符（「某生」「同学甲」「`<借考生学号>`」），不抄 `inputs/`、`out/` 的真实姓名/学号。
+> 基线契约：`docs/design.md` §3.2 / §4.5 / §5.1 / §5.4 / §5.8 / §7.1 / §8.1 / §9；
+> `docs/需求-考场级限制与放宽.md`；`docs/issues.md`（议题 1–5）。
 > 原则：硬规则与限定断言**全部独立推导**（只看 CLI 输出与导出文件，不调用 core 的
 > `findRoomSubjectClashes` / `validate` / `validateAll` 自证）。
 
 ## 0. 当前状态
 
-| 项           | 值                                                                                                                       |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| 验收脚本     | `examples/acceptance.mjs`，**93 项**（原 26 项语义不变；task-7 增 45、task-11 增 12、task-14 增 10）                     |
-| 阶段         | task-7 阶段 1+2 ✅（71/71 全绿）；task-11/14 阶段 1+2 ✅（93/93 全绿）                                                   |
-| 依赖         | CLI bin 走 `packages/cli/dist`：`packages/cli/bin/exam-seat.mjs` → `import { main } from "../dist/cli.mjs"`              |
-| 最近一次运行 | **93/93 全绿**（dist 19:45:19：task-8/12/13 全部落地），exit 0，约 180ms                                                 |
-| lint         | `npx oxlint examples/acceptance.mjs` = **0 error / 0 warning**（`max-lines` 由 Lead 加单文件覆盖）；`oxfmt --check` 通过 |
-| 命令         | `node examples/acceptance.mjs`（只跑脚本与临时目录里的 CLI，不跑 `pnpm verify`）                                         |
+| 项           | 值                                                                                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 验收脚本     | `examples/acceptance.mjs`，**130 项**（task-16 第 20 节 15 → **19** 条：本轮随 io 列名/地点列/姓名截断增 4 条）                                                          |
+| 阶段         | task-7 ✅ 71/71；task-11/14 ✅ 93/93；task-15 ✅ 111/111；task-16 ✅ 126/126；**web 迁 shadcn-vue ✅ 130/130**（见 §9）                                                  |
+| 单测         | `pnpm exec vitest run` = **548 passed / 39 files**（node 353 / 18 files、web 195 / 21 files），exit 0                                                                    |
+| 依赖         | CLI bin 走 `packages/cli/dist`：`packages/cli/bin/exam-seat.mjs` → `import { main } from "../dist/cli.mjs"`                                                              |
+| 最近一次运行 | acceptance **130/130**（380ms）；单测 **548/548**                                                                                                                        |
+| lint         | `pnpm exec oxlint` = **0 error / 2 warning**（既有 `max-lines`）；⚠️ `pnpm lint:check` 当前**失败**：`oxfmt --check` 卡在 `AGENTS.md`（1 个文件，见 §9.7）               |
+| 独立复核器   | `/tmp/vfy/check.mjs`（task-15）、`/tmp/vfy/check_r3_b.py` + `mutate_r3e.py`（task-16）、`/private/tmp/vfy-web/probe.test.ts` + `/private/tmp/mut-web`（web 迁移，见 §9） |
+| 命令         | `node examples/acceptance.mjs`、`exam-seat plan/validate`、`pnpm --filter @exam-seat/web build`（不跑 `pnpm verify`）                                                    |
 
 > task-7 阶段 1 在旧 dist 上观察到的失败在最终 build 后全部归零；其中 1 项是我自己的断言写错
 > （`已排人数 < 总数`），已按 design §5.4 改成「应考时段未排满人数 > 0」，见 §4 第 16 条。
@@ -313,3 +321,521 @@ task-12 让多场次限定真正生效并让 `CONSTRAINTS_IGNORED_MULTI` 退场�
 - **无未修复 bug**；发现的问题只有我自己的夹具不可行（已修正）与 task-7 的 C8 契约切换
   （多场次 validate 改为 `validateAll`，见 §3 C8 / §6.3）。
 - 建议：把多场次 `validateAll` 契约补进 `docs/design.md` §9（见 §5 残余项 3）。
+
+---
+
+## 7. task-15（考场级放宽 / 按科目借考 / 加座考场 / 显式时段）
+
+### 7.1 验收环境与前置
+
+| 项       | 值                                                                                                                                                                                                                                                                               |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| git      | `4e73e59`，工作区 **dirty（47 项，本轮 4 个能力未 commit）**；验收对象就是这份工作区                                                                                                                                                                                             |
+| 构建     | 我 23:42 先 `pnpm build`；io-cli 的 task-7 之后重建一次（dist 23:49:04–23:49:05），§7.2–§7.7 的数字取自这次。Lead 补 19h/19i/19j 后我又 `pnpm build`（dist 00:01:38–00:01:39）；Lead 收紧这 3 条断言后第三次 `pnpm build`（dist 00:07:08–00:07:09），§7.6 与 §7.9/§7.10 取自这次 |
+| 工具     | node v24.21.0 / pnpm 12.7.0                                                                                                                                                                                                                                                      |
+| 独立复核 | `/tmp/vfy/check.mjs`（临时脚本，**不 import `@exam-seat/core`**）：自实现座位编号（含加座）、4/8 邻域、硬规则、座位冲突、限定解析、放宽邻接                                                                                                                                      |
+
+**必须先 build，而且要等最后一次 build 落地**。第一次 `node examples/acceptance.mjs`（23:47 启动）正好撞上
+io-cli 重建 `packages/*/dist`，跑出 **101/108**，7 个新项清一色 `exit=1 / ok=undefined / 无诊断`——
+那是**并发构建的假失败**；dist 稳定（23:49:05）后复跑即 **108/108**。CLI 走 `packages/cli/dist` 这条纪律，
+要延伸到「确认最后一次 build 已经落地」。
+
+### 7.2 真实 job：`out/job.accept.json`（706 人 / 19 考场 / 12×42 + 7×35 = 749 座）
+
+```bash
+node packages/cli/bin/exam-seat.mjs plan     --job out/job.accept.json --out-dir /tmp/vfy/final --json
+node packages/cli/bin/exam-seat.mjs validate --job out/job.accept.json --plan /tmp/vfy/final/plan.json --json
+```
+
+`plan` exit 0（导出 4 个文件）、`validate` exit 0；`ok=true`、`emptyRooms=[]`、19 个考场全部用上、
+706 人全部进 `byStudent`。实测人数与 `docs/design.md` §5.8.6 逐项一致：
+
+| 考场   | 实测                               | 我的独立推导（只读 plan.json / job.accept.json）                                           |
+| ------ | ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| R1–R16 | **644**（4×35 + 12×42 = 644 满座） | 由 `studentIds`/`entries` 直接计数；全是物化生                                             |
+| R17    | **29**                             | 2518:22 + 2517 史地政 6 + 某生；`relaxedRooms=["R17"]`，`ROOM_SAME_CLASS_RELAXED`(warning) |
+| R18    | **34**（33 + 某生借考）            | 物化政 13 + 物化地 9 + 物化生 11 + 某生；`borrowedSubjects={"<借考生学号>":["biology"]}`   |
+| R19    | 政治 **13** / 地理 **9**           | 两套 seating（13 / 9），`dedicatedSubjects:["politics","geography"]`                       |
+| 合计   | 706 人（借考 1 人跨两房）          | `byStudent` 706 人，distinct 学生 706；R18 的 34 含借考生，与文档写明的差异一致            |
+
+**我自己推的硬规则与限定（不调用 core 的 `validate` / `findRoomSubjectClashes`）**：
+
+- 把 `byStudent[].slots` 摊平成 19×7 个「考场 × 时段」格子：**每格科目集合 size ≤ 1**；
+  每格座号无重复（同一座号可在不同时段复用，例如 R18 的 1 号：T1–T5 是同学甲、T6 是某生）。
+- 706 人每人**应考时段无空**（语数外人人必考；选考科目 ∩ 该时段科目非空 ⇒ 必须有座）。
+- 限定：C1 三个学号所有时段 `row=1`；C2 2517 全部时段 `col=1`（含某生在 R18 的借考座 1 号，
+  由座号→行列**自己解**出来）；C3 史地政只在 R17；C3b 某生除借考外都在 R17；C4 物化政/物化地
+  只出现在 R18（主考场）与 R19（专用考场）。
+- 放宽只对 R17 生效：**除 R17 外，每个考场在它实际使用的邻接模式下同班相邻对数都是 0**；
+  R17 = **40 对**（`orthogonal`，2517/2518 两班）——与 `validate` 的
+  `ADJACENCY_RELAXED：跳过了 40 处` 数字一致（两条独立实现互相印证；我自己的复核器一开始把
+  4 邻域的「同行左右」漏了，只数出 24，修正后 = 40）。
+- 借考：某生 `T6 → R18 座 1，subject=biology`；`R18|T6` 科目集合恰为 `{biology}`；该座该时段只他一人。
+
+### 7.3 37 座非矩形（`out/job.accept37.json`：R1/R6/R7/R12 加 `extraFrontSeats:[2,4]`）
+
+`plan` exit 0、`validate` exit 0。实测：R1/R6/R7/R12 各 **37** 人（用满 37 座），R18 = **26**
+（13 + 9 + 物化生溢出 3 + 借考 1），R17 = 29，R19 = 13/9，R1–R16 = 652，706 人全部有座。
+
+我的复核器用**自己按 §4.5 实现**的按列蛇形编号（`n=[7,8,7,8,7]`，加座永远是本列最后一个号、行号 0）
+逐座对照 `entries.row/col/physicalCol`：**37 个座号全部一致**，`15 号=(0,2)`、`30 号=(0,4)` 都是加座，
+`physicalCol` 与 `cols+1-col` 互逆。`numbering --rows 7 --cols 5 --extra 2,4` 输出的 r0 行也是
+`c2=30 / c4=15`，与 design §4.5.1 的图逐格相同；不传 `--extra` 时 5×7 输出与 §4.1 一致。
+
+### 7.4 对抗用例（手改 plan.json / job.json，喂 `exam-seat validate`）
+
+| #   | 改法（在真实 job 的 plan 上）                               | 期望           | 实测                                                                                  |
+| --- | ----------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------- |
+| C1  | 借考生 T6 座号改成 R18\|T6 已被别人占的 6 号                | exit 3         | ✅ `ENTRY_DUPLICATE_SEAT`「6 号在第6时段被安排了 2 个人」                             |
+| C2  | 借考生 T6 科目改成化学（制造第二张卷子）                    | exit 3         | ✅ `ROOM_SUBJECT_CLASH`「R18 第6时段同时安排了 biology / chemistry」                  |
+| C3  | 借考座号改成 R18 第 2 列（违反 C2 `cols:["door"]`）         | exit 3         | ✅ `CONSTRAINT_UNMET`「借考座位…不在限定要求的范围内」                                |
+| C4a | **job** 删 R17.`relaxSameClass`（plan 不动）                | exit 3         | ✅ `ADJACENCY_CONFLICT`（R17）                                                        |
+| C4b | **job** R17.`relaxSameClass=30`（数字上限）                 | exit 0         | ✅ 与 `true` 同样放开相邻                                                             |
+| C4c | **plan** 删 `relaxedRooms`（job 仍 `true`）                 | —（观察项）    | exit 0；校验器以 **job** 为准，plan 自带标记未被交叉核对                              |
+| C4d | **plan** 删 `relaxedRooms` + R17 `seating.relaxedSameClass` | —（观察项）    | exit 0；同上                                                                          |
+| C5  | **job** R19 `dedicatedSubjects` 只留政治                    | exit 3（我猜） | exit 0 —— **我的期望不成立**：`dedicatedSubjects` 是排考期的用途声明，不是校验规则    |
+| C6  | 把借考挪回 R17（R17\|T6 已是地理）                          | exit 3         | ✅ `ENTRY_DUPLICATE_SEAT` + `ROOM_SUBJECT_CLASH` + `ENTRY_UNKNOWN_ROOM`               |
+| C7  | 真实 job `relaxSameClass=21` / `=22`（2518 有 22 人）       | 3 / 0          | ✅ 21 → `CLASS_LIMIT_EXCEEDED`「最多只能容纳该班 21 人」，exit 3、不导表；22 → exit 0 |
+| C8  | `plan` 用删掉 relax 的 job（真实 706 人规模）               | exit 3 不导表  | ✅ `CLASS_LIMIT_EXCEEDED`，只留 `plan.json` + `job.json`                              |
+
+### 7.5 显式时段 / 禁止同段 / 游标回卷
+
+用 `out/job.tool.json`（677 人、剔除文科生后的旧 fixture，正是「时段塌陷」场景）：
+
+| 场景                                                                     | 实测                                                                                                  |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| 原样（自动推导）                                                         | `T6 = biology+politics+geography` → `ROOM_SUBJECT_CLASH`（R19），exit 3、不导表                       |
+| `options.slots` 给死 7 段（§1.1 那张表）                                 | `ok=true`、7 段原样、`SLOTS_PROVIDED`(info)、exit 0、导出 4 个文件；政治/地理不再同段                 |
+| `options.forbiddenSameSlot`（化学×生物/地理/政治、生物×政治、地理×政治） | 推导出 `T5=chemistry` 单独、`T7=politics` 单独、`T6=biology+geography`，exit 0；不报 `SLOTS_PROVIDED` |
+| 两者同时给                                                               | **以 `slots` 为准**（给了 9 段就出 9 段，`forbiddenSameSlot` 不再影响）                               |
+| `slots` 不给 id/name                                                     | 自动补 `T1..Tn` / 第 n 时段                                                                           |
+| `slots` 把一人的两科排进同段（physics+chemistry）                        | `SLOTS_CONFLICT`（error，报 1354 处）+ 不导表，exit 3；**19h 已在验收脚本里固化**（见 §7.9）          |
+| 借考目标考场该时段满座（42 座 42 人，借考生 T6 无空位）                  | `SUBJECT_ROOM_NO_SEAT`（error）+ 不导表，exit 3；**19i 已在验收脚本里固化**（见 §7.9）                |
+
+**游标回卷（`allocateDemands`）**：验收第 19f 项是干净用例——整批钉考场后未钉住的 6 人回到本批次
+考场，`ok=true`、无 `CAPACITY_INSUFFICIENT`。旧 fixture `out/job.intent.json`（**没有** `relaxSameClass`、
+也**没有** `subjectRoom`）仍然 exit 3，但原因已经换人：R17 里 2518 的 22 人 + 未钉住的 2517 六人
+（`studentIds` 实测 = {2518:22, 2517:6}），只剩 `CAPACITY_INSUFFICIENT：还缺 1 个座位` +
+`CLASS_LIMIT_EXCEEDED`；给某生补上 `subjectRoom:{biology:"R18"}` 后**缺座那条消失**，只剩
+`CLASS_LIMIT_EXCEEDED`——即那 1 座就是他的生物。所以「还缺 7 座」的旧症状已不复现，但
+`job.intent.json` 已不适合单独充当本轮验收门禁，见 §7.8。
+
+### 7.6 单测与验收脚本
+
+| 命令                           | 结果                                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm exec vitest run`         | **479 passed / 36 files**，exit 0（含本轮新增 `core/test/borrow-relax.test.ts`、`core/test/nonrect.test.ts`、`io/test/relax-extra-export.test.ts`、`web/test/seat-extra-ui.test.ts`） |
+| `node examples/acceptance.mjs` | **111/111**，exit 0，266ms（dist 00:07:09；首轮 108/108 与增量过程见 §7.9）                                                                                                           |
+| `pnpm exec oxlint`             | 0 error / **2 warning**（都是既有 `max-lines`，非本轮新增）                                                                                                                           |
+
+### 7.7 导出物抽查（xlsx / 编号）
+
+- `考场监考表.xlsx`：R17 表头多一行「**本考场已放宽同班相邻**」；**全工作簿只有 1 个数据行有备注**——
+  第十八考场座位 1 的某生「**借考（第6时段 生物）**」；同一座号 1 的同学甲（T1–T5 在那）备注为空，
+  证实「借考座可跨时段复用座号」。
+- `按班级考场安排.xlsx`：某生 考场① = 第十七考场（语数外政史），考场② = 第十八考场（生物）。
+- `numbering --extra 2,4`：见 §7.3。
+
+### 7.8 没验证到 / 存疑（诚实标注）
+
+1. **web 未做 E2E**：座位图 / 第③步考场配置只由 `packages/web/test` 单测覆盖，我没有浏览器级验证。
+2. **plan 自带的放宽标记未被 `validate` 交叉核对**（C4c/C4d exit 0）。校验器以 job 的 `RoomSpec` 为准，
+   语义上说得通（座位排布没变、job 允许放宽），但「plan 自己声明 relaxedRooms」这条信息目前不进校验判据；
+   若以后要让 plan 自证，需要补契约。
+3. **`SeatingPlan` 里借考生的表示是「半套」**：`studentIds` / `seatNoById` 含他（R18 = 34），
+   `entries` / `studentBySeatNo` 不含他（33）；区分靠 `borrowedSubjects` / `borrowings`。
+   这是 design §5.8.2 写明的口径，监考表实物也正确；但任何**按 `entries` 数人**的消费方都会少 1，
+   我没有逐个核 web worker / 预览组件是否都走 borrowings。
+4. **`out/job.intent.json` 是过时 fixture**：缺 `relaxSameClass` 与 `subjectRoom`，本轮只能用它观察
+   游标回卷的副作用（缺座 7→1），不能当门禁；正例请用 `out/job.accept.json` / `out/job.accept37.json`。
+5. **未跑 `pnpm verify`**（会重建 dist，Lead 已跑）；我的门禁是 vitest 479 + acceptance 111/111 + oxlint。
+6. **复现性只抽了两处**：`out/job.accept.json` 两次 plan（递归剔除 `generatedAt`/`elapsedMs` 后逐字节一致）
+   与验收脚本里的借考小 job；`accept37` 未单独跑两次。
+7. **验收脚本的覆盖（3 条「写松」已按建议收紧并复验通过；历史说明保留）**：
+   - `SLOTS_CONFLICT`（19h）、`SUBJECT_ROOM_NO_SEAT`（19i）、`numbering --extra`（19j）均已进 acceptance，
+     且按 §7.9 的建议收紧完毕。
+   - **收紧前的三处问题（历史记录，已不复现）**：19h 的 `plan?.entries?.length === 0` 在多场次下是空断言
+     （多场次 `plan.json` 没有顶层 `entries`，`?? []` 恒为 0）；19i 标题写「不导出名单」但只验 exit 3 + 诊断码；
+     19j 只拿常量验脚本自算公式、没和 CLI 输出比对（`numbering --json` 的 `seats` 没有 seatNo，真实座号只在
+     `preview` 文本里）。
+   - 仍未在 acceptance 断言：`forbiddenSameSlot`、`SUBJECT_ROOM_UNKNOWN_ROOM` / `UNKNOWN_SUBJECT` / `NO_SLOT`
+     （core `borrow-relax.test.ts` 有）。
+8. **真实 706/19 job 不在 acceptance 里**（`out/` 不是仓库 fixture），它的数字只在本文与 design §5.8.6 留痕。
+
+### 7.9 增量复验（验收 108 → 111；19h/19i/19j 收紧后复验通过）
+
+时间线：Lead 补 3 条断言（108 → 111）→ 我指出 3 处「写松」（§7.8-7 历史记录）→ Lead 按建议收紧 →
+我做最后一轮复验（第三次 `pnpm build`，dist 00:07:08–00:07:09）。
+
+| 项  | 收紧前的问题                                       | 收紧后的做法                                                                                                                                                              | 我的独立复核（dist 00:07:09）                                                                                                                                                                                                                                                                                                                                                         |
+| --- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 19h | 「不导名单」是空断言（多场次无顶层 `entries`）     | 改为断言两份工作簿 `fileSize(...) < 0`（不存在）                                                                                                                          | ✅ 复跑 exit 3、诊断含 `SLOTS_CONFLICT`、输出 `名单文件=-1`；我另用同 job 直读文件系统：outDir 只有 `job.json` + `plan.json`                                                                                                                                                                                                                                                          |
+| 19i | 标题写「不导出名单」，断言只验 exit 3 + 诊断码     | 同样补两份工作簿不存在                                                                                                                                                    | ✅ 复跑 exit 3、`SUBJECT_ROOM_NO_SEAT`、`名单文件=-1`；前提成立：R1 = 42/42、`R1\|T6` 占座 42、借考生 T6 = null，诊断证据 `{roomId:R1,slot:T6,subject:biology}`；文件系统同样只有 job/plan                                                                                                                                                                                            |
+| 19j | 只拿常量验脚本自算公式，没和 CLI 输出（preview）比 | 解析 `preview` 文本逐排取 CLI 打印的座号，与脚本独立重算（物理列 pc → 业务列 cols−pc+1、列内蛇形、加座为该列最后一个号）比对；另保留 37 席 / r0 恰 2 席 / 矩形 35 席无 r0 | ✅ 我把验收的 `previewRow`/`expectedRow`/`seatNoInRoom` **逐字复制**出来独立跑：r0=[30,15]、r1=[31,29,16,14,1]、r3=[33,27,18,12,3]、r7=[37,23,22,8,7]，preview 与自算**全等**；并做 5 组 preview 变异（删 r0 行 / 30↔15 对调 / r1 的 16→17 / preview 置空 / r7 的 37→38）+ 3 组形状变异（`extraFrontSeats=[]`、`seats` 少一个、纯矩形也带 extra）→ 断言**全部翻假**，既不恒真也没写死 |
+
+**复跑**：`pnpm exec vitest run` → **479 passed / 36 files**，exit 0；`node examples/acceptance.mjs` →
+**111/111**，exit 0，266ms；`pnpm exec oxlint examples/acceptance.mjs` = 0 warning / 0 error，
+`pnpm exec oxlint`（全仓库）= 0 error / 2 warning（既有 `max-lines`，非本轮新增）。
+
+结论：三条收紧后的断言**判据正确、可失效（非自证、非恒真）**；19h/19i 的「不导名单」现在真的守住了，
+19j 的编号已由 CLI 的 `preview` 输出与脚本独立重算逐排互证。未发现新问题。
+
+### 7.10 结论
+
+**task-15 通过（有保留，保留项见 §7.8）。**
+
+- 4 个能力在**真实 job** 上都跑通：放宽只对 R17 生效（其余考场同班相邻 0 处）、借考不产生第二张卷子
+  （R18|T6 = {biology}）、37 座编号与容量逐座正确、显式时段/禁止同段/`SLOTS_CONFLICT` 行为符合 §5.8。
+- 硬规则与限定全部由**独立推导**复核：706 人 × 7 时段逐格 ≤ 1 科、座位号同段不撞、限定逐条满足。
+- 对抗用例 8 组里 7 组按预期 exit 3/0（C5 是我的期望写错）；`validate` 只导 plan/job、不导名单，闸门有效。
+- 未发现实现 bug；发现的都是口径/文档级观察项（§7.8 的 2、3）与旧 fixture 过时（第 4 条）。
+- 增量复验（§7.9）：111/111 + 479 单测；3 条新断言曾被指出「写松」，Lead 收紧后我复验通过——
+  19h/19i 的「不导名单」已由「工作簿不存在」守住，19j 已改为 `preview` 逐排与独立重算比对
+  （5 组变异测试均可翻假），不存在自证或恒真。
+- 环境教训：**验收必须在最后一次 build 落地后跑**，否则会出现 101/108 式的假失败。
+
+---
+
+## 8. task-16（Excel 交付物重做：准考证号 / 标题 / 字号 / A4 横向 / 单文件）
+
+### 8.1 验收环境与前置
+
+- 对象：io 新增零依赖 xlsx 写出器（`packages/io/src/xlsx.ts` + `zip.ts`）与 `schedule-export.ts`；
+  `writeMultiPlanFiles` 的落盘形态（4 个主文件 + 两个子目录）。
+- 环境：git `4e73e59`，工作区 dirty 56 项（本轮未 commit）。首轮 build 在 dist `01:14:34–01:14:35`；
+  复验（14 条版）重新 build → `01:32:46`；快复验（15 条版）再 build → **01:41:36** 并重新复跑全部检查；
+  node v24.21.0 / pnpm 12.7.0。
+- 命令：`node packages/cli/bin/exam-seat.mjs plan --job out/job.accept.json --out-dir /tmp/vfy-r3 --json`（exit 0）。
+- 判据来源：只读 `/tmp/vfy-r3` 的 42 个产物文件——openpyxl、`unzip -p` XML、LibreOffice `convert`
+  （PDF / CSV）、自写变异脚本；不拿 io 源码常量自证（`xlsx.ts` 只当被验对象，字号一律以产物为准）。
+- **隐私**：真实姓名/学号只在内存/终端比对，本文只用占位符（「某生」「`<借考生学号>`」）。
+
+### 8.2 A 产物清单（42 个文件）
+
+| 组         | 数量 | 实测                                                                                                                               |
+| ---------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 合并工作簿 | 2    | `按班级考场安排.xlsx`（总表 + 18 班 = 19 sheet）、`考场监考表.xlsx`（20 sheet = 20 套座位）                                        |
+| 单班文件   | 18   | `按班级考场安排/<班级>.xlsx`：各 1 张 sheet、sheet 名 = 文件名，且与合并版对应 sheet **逐格相等**                                  |
+| 单考场文件 | 20   | `考场监考表/<第N考场（科目）>.xlsx`：同上；R19 拆成「第十九考场（政治）」「第十九考场（地理）」，与 plan 的 20 套 seating 一一对应 |
+| 求解产物   | 2    | `plan.json`、`job.json`                                                                                                            |
+
+### 8.3 B openpyxl 逐条（55/55 通过）
+
+| 检查项       | 实测                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| sheet 结构   | 班级表 19 张（第一张「总表」+ 18 班，集合与 job 一致）；监考表 20 张、名字皆 `第N考场（科目）`、不重复                                   |
+| A1 标题      | **39 张表逐个**：A1 已合并（`A1:…1`）、16pt 加粗居中、字体「等线」                                                                       |
+| 字号分层     | A2 小字 9pt 灰字（meta 档）；第 3 行表头 11pt 加粗 + 浅灰填充；正文 11pt（body 档）                                                      |
+| 页面设置     | 每张表 landscape / paperSize=9 / fitToWidth=1 / `pageSetUpPr.fitToPage` / freeze `A4` / `print_title_rows` 1:3                           |
+| 列宽         | **每张表**总宽 ≤ 27.8cm；班级表最大 13.88cm（5 列 75 字符宽），监考表各表 6.66–13.13cm                                                   |
+| 总表内容     | 706 行数据；班级列 706/706 非空；准考证号集合 == job 参考学生 id 集合（706/706）                                                         |
+| 主/换考场    | 主考场列 706 行全部无括号；换考场列 23 行全部 `第N考场（科目）`（= 物化政 13 + 物化地 9 + 某生）                                         |
+| 与 plan 交叉 | 每人考场列数 = plan 房间数，首列 = 该生**时段数最多**的主考场（逐人对照，0 例外）                                                        |
+| 监考表内容   | A1 = sheet 名（20/20）；A2 全部匹配 `地点：… ｜ 考场人数：N`；第 3 行 5 列表头齐全；全簿无「监考：」；各表人数合计 729 = plan 座位数合计 |
+| 放宽标注     | 只出现在 R17 那一张（「本考场已放宽同班相邻」）                                                                                          |
+| 借考备注     | 全簿只有 1 条备注 = 某生的「借考（第6时段 生物）」                                                                                       |
+| 座位号映射   | 每张表「座位号 → 准考证号」与 plan 的 `seatNoById` 逐表全等（20/20）                                                                     |
+
+> 自查记录（**我的脚本 bug，不是产品问题**）：首轮 5 条「失败」全是我的脚本错——把空单元格 `str(None)`
+> 当成内容、A2 字号预期误写 12（实际 meta 档就是 9pt）、`print_title_rows` 的 `$1:$3` 未归一化、
+> `seatNoById` 的映射方向写反。修正后 55/55。写进记录是提醒后来者别把这些当产品缺陷。
+
+### 8.4 C XML（`unzip -p` 直读）
+
+| 检查     | 实测                                                                                                                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 字号字体 | `xl/styles.xml` 恰有 `<sz val="9"｜"11"｜"12"｜"16">` 四档（9/11 各 3 次、12/16 各 1 次）；字体名「等线」出现 6 次（6 个字型）                                                      |
+| 页面     | `<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>`、`<pageSetUpPr fitToPage="1"/>`、`<pageMargins left="0.3" right="0.3" top="0.4" bottom="0.4"/>` |
+| 冻结     | `<pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/>`                                                                                                        |
+| 合并     | `<mergeCell ref="A1:E1"/>`                                                                                                                                                          |
+| 行高     | 前 3 行 `ht="26" / "16" / "20"` + `customHeight="1"`，正文行**不写 ht**（交给 Excel 自适应）                                                                                        |
+| 样式引用 | 班级表 sheet1：s=1 标题×1、s=3 小字×1、s=4 表头×5、s=5 正文×706、s=6 居中×2824                                                                                                      |
+| 打印标题 | `xl/workbook.xml` 每个 sheet 一条 `_xlnm.Print_Titles`（班级 19、监考 20），值均为 `'<sheet 名>'!$1:$3`                                                                             |
+| 打包     | `unzip -v` 全部 `Stored`（method 0）+ CRC32；`unzip -t` 无错误；ZIP 时间戳固定 1980-01-01                                                                                           |
+
+### 8.5 D 打印（LibreOffice）
+
+- `convert` 两本为 PDF，均 **无 missingFonts**。
+- MediaBox：两本都是 `[0,0,841.889763779528,595.303937007874]` → **841.89 × 595.30pt = A4 横向** ✓。
+- 页数（PDF 页树 `/Count`）：班级表 **57 页**、监考表 **37 页**。`fitToHeight="0"` 表示只锁一页宽、纵向不限，
+  长表跨页是预期行为；页数都明显多于 sheet 数，未逐表核对各占几页（见 8.9）。
+- CSV（`convert --sheet`）：`总表` → 709 行 = 3 行表头 + 706 行数据（第 4 列 706 行无括号、第 5 列 23 行带括号）；
+  `第十八考场（语数外物化生）` → 37 行 = 3 + 34，借考备注「借考（第6时段 生物）」可读。
+  LibreOffice 能完整读出大标题 / 小字 / 表头 / 正文 / 备注。
+- **视觉检查不可用（按 office-xlsx 技能规则处理）**：只 `render` 了一次（`第十九考场（政治）` A1:E20 @144dpi），
+  Pillow 复核合成白底后 `589×634`、通道极值 255、**标准差 0、非白像素 0 / 373426** → 渲染器故障，
+  不是工作簿缺陷。随即停止全部视觉检查，**未换范围 / DPI / sheet**，改用 PDF 几何 + CSV + XML/openpyxl 作证据。
+
+### 8.6 E 反例：23 组 XML 变异 —— 收紧后的第 20 节 **23/23 全抓住**
+
+做法：直接改产物 xlsx 内部 XML（openpyxl 只用于读），再用**逐条复刻**的第 20 节判据判定。
+三次收紧的轨迹（同一批 23 组变异）：
+
+| 第 20 节版本            | 判据数 | 抓住      | 漏网（原 6 组）        |
+| ----------------------- | ------ | --------- | ---------------------- |
+| 首轮（只看 `sheet1`）   | 11     | 4/10      | M4 M5 M7 M8 M9 M10     |
+| 第二轮（逐张 sheet 等） | 14     | 17/23     | M8 P12 P15 P19 P21 P22 |
+| **第三轮（本次）**      | **15** | **23/23** | **无**                 |
+
+基线：复刻的 §20 判据 **15/15 全绿**（不是靠「必然失败」抓变异）。
+
+**上一轮 6 组漏网点，本轮各自被哪条判据抓住**（改动见 `examples/acceptance.mjs` §20）：
+
+| 上一轮漏网                 | 本轮抓住它的判据                                                               |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| M8 同座号两行对调准考证号  | 20e-2：备注的 `(roomId｜studentId)` 与 `plan.borrowings` **双向**比对          |
+| P12 备注挪到非借考行       | 20e-2：同上（漏标 / 错挂都算错）                                               |
+| P15 A2 人数 +1             | 20d-1：`考场人数：N` 断言 `N === 该表数据行数`                                 |
+| P19 只留 1 条 Print_Titles | 20f-1：两个工作簿的 `_xlnm.Print_Titles` 条数分别 == 各自 sheet 数             |
+| P21 去掉某张表全部样式引用 | 20f-1：每张 worksheet 必须同时有 `s="1"`(标题) / `s="3"`(小字) / `s="4"`(表头) |
+| P22 单班文件内容改坏       | 20h-3：18 个班文件 + 37 个考场文件与合并版对应 sheet **逐格 JSON 相等**        |
+
+本轮 23 组实测（J1 = 新 §20 15 条）：**M1–M10、M8b、P11–P22 全部被判负**，无一漏网；
+其中原 10 组从 4/10 → 9/10 → **10/10**，13 组探针从 0（当年未跑）→ 8/13 → **13/13**。
+
+**两点如实记录**：
+
+1. **20h-3 是个「兜底放大镜」**：单文件与合并版逐格比对后，任何只改合并工作簿的变异会连带被它抓住
+   （例如 M3/M4/M7/P15 同时命中目标判据与 20h-3）。这是好事，但解释覆盖时要知道：某些项不是靠
+   「专用判据」单独抓到的。
+2. **数字口径**：本轮 §20 实际是 **15 条** `check()`（`grep -cE '^\s+check\('` 计数；验收总数
+   126 = 111 + 15），不是「17 条」；建议同步。
+3. 我自己的辅助判据 J2（15 条，本次为快复验做过裁剪）在本次仍漏 P18/P19/P20/P21 四项，
+   属于我的判据不全，不影响 §20 的结论。
+
+### 8.7 F 单测与验收
+
+| 命令                           | 结果                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| `pnpm exec vitest run`         | **529 passed / 38 files**，exit 0                                                    |
+| `node examples/acceptance.mjs` | **126/126**，exit 0，123ms（第 20 节 15 条全绿，dist 01:41:36 上复跑）               |
+| `pnpm exec oxlint`             | 0 error / **2 warning**（既有 `max-lines`，非本轮新增）；单文件 `acceptance.mjs` 0/0 |
+
+### 8.8 复现性（附）
+
+- `考场监考表.xlsx` 两次导出 **sha256 完全一致**（该表不含时间戳）。
+- `按班级考场安排.xlsx` 两次导出只差 `xl/worksheets/sheet1.xml`，逐字符 diff **仅「生成时间 HH:MM」一处**
+  （01:32 → 01:34），其余 24 个 ZIP 成员逐字节相同 → 写出器本身确定性，班级表按设计记录导出时刻。
+
+### 8.9 没验证到 / 存疑
+
+1. **视觉检查不可用**：`render` 全白（渲染器故障），没做像素级版面检查；「打印出来好不好看」只有 PDF 几何 + CSV/XML 证据。
+2. **只在 LibreOffice + openpyxl 上验过**，没在真 Excel / WPS 打开；Excel 对 `fitToHeight="0"`、`_xlnm.Print_Titles`、「等线」的解释未实测。
+3. **页数分配未逐表核对**：只确认总页数 57/37 与 MediaBox，未验证「哪张表占几页 / 断行位置」。
+4. **列宽换算口径**：用 1 字符宽 = 0.185cm（与实现同一约定，也是 7px@96dpi 的标准近似）；换别的字体度量结论可能变，但总表实测 13.88cm、余量很大。
+5. **第 20 节覆盖已闭环**（8.6）：首轮「抽样」问题经三轮收紧后，23 组变异 **23/23 全抓住**
+   （原 10 组 10/10、探针 13/13）；本轮起 20h-3 还充当「单文件 vs 合并版」的兜底放大镜。
+   产品侧由我的独立检查（openpyxl 55/55、XML、PDF/CSV）确认无误。
+6. **未复跑 `pnpm verify`**（Lead 已跑）；本轮门禁 = vitest 529 + acceptance **126/126** + oxlint + 8.2–8.6 的独立检查。
+7. 隐私：`inputs/`、`out/` 的真实数据未抄入本文，全部用占位符。
+
+### 8.10 结论
+
+**task-16 通过（有保留，保留项见 8.9）。**
+
+- 结构：42 个文件齐全；合并工作簿 + 每班/每考场单文件，单文件 1 张 sheet 且与合并版逐格一致。
+- 内容：准考证号 706/706 与名单一致、班级列每行都填、主考场无括号且与该生主考场一致、换考场带科目；
+  监考表 5 列齐全、无「监考：」、借考备注带时段、座位号映射与 plan 全等。
+- 打印：A4 横向（PDF MediaBox 841.89×595.30pt）+ fitToWidth/fitToPage + 冻结 3 行 + 每页重复 1–3 行 + 列宽每表 ≤ 27.8cm + 字号 16/12/11/9 + 等线，XML 与 PDF 双侧证据一致。
+- 反例 23 组：**产品侧 0 反例**（J1/J2 基线、8.3–8.5 全绿）；收紧后的第 20 节（15 条）**23/23 全抓住**
+  （原 10 组 10/10、探针 13/13，轨迹见 8.6）。
+- 预览不可用（render 全白）按技能规则如实记录，未据此做任何版面判定。
+
+---
+
+## 9. `packages/web` 迁移到 shadcn-vue（web-ui 轮次）
+
+> 任务板 id 是 task-15，但文档 §7 已有一个历史的「task-15（考场级放宽）」。为避免混淆，本节按内容命名。
+> 本轮最大风险是「web 测试被重写还是被删弱」，所以 §9.3 是重点。
+
+### 9.1 环境与范围
+
+- git `4e73e59`，工作区 dirty 88 项；本轮对象：`packages/web` 由 Element Plus 全量换成
+  shadcn-vue（Tailwind v4 + reka-ui）+ 自研 `VirtualTable`，并重写一批 web 测试。
+- 顺带改动（不在「web 迁移」标题内，但必须记录）：`packages/io` 的班级表格式 + 工具化配置 → 见 §9.8 / §9.9。
+- 工具：node v24.21.0 / pnpm 12.7.0。判据：只读测试/源码 diff 与产物，自己跑构建、探针与变异；不改实现。
+
+### 9.2 A：Element Plus 是否真的没了
+
+| 检查                                                                                                                       | 结果                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `grep -rn "element-plus｜ElementPlus｜ElMessage｜<el-｜--el-" packages/web/{src,test,package.json,tsconfig.json,env.d.ts}` | 只有 **3 处注释**提到历史（`useConfirm.ts`「替代 ElMessageBox.confirm」、`VirtualTable.vue`「替代 el-table-v2」、一处测试注释），**无代码依赖**  |
+| `grep -rl element-plus packages/web`（排除 node_modules）                                                                  | **0 个文件**                                                                                                                                     |
+| `grep element-plus pnpm-lock.yaml`                                                                                         | **0 命中**                                                                                                                                       |
+| `packages/web/node_modules`                                                                                                | 无 `element-plus` / `@element-plus` 软链                                                                                                         |
+| `packages/web/package.json`                                                                                                | 依赖改为 reka-ui、@lucide/vue、class-variance-authority、clsx、tailwind-merge、vue-sonner（dev：tailwindcss、@tailwindcss/vite、tw-animate-css） |
+| `main.ts`                                                                                                                  | 只有 `createApp(App).use(createPinia()).use(router).mount("#app")`，无 EP 注册                                                                   |
+| `styles.css`                                                                                                               | `@import "tailwindcss"` + shadcn 主题变量，无 `--el-*`                                                                                           |
+
+**结论：代码 / 依赖 / lock / 软链 0 残留**，剩下的仅是有意保留的历史注释。
+
+### 9.3 B：测试有没有被写弱（重点）
+
+**diff 规模**：`git diff --stat packages/web/test/` = 12 个文件改 + 2 个新文件，**+1040 / −107 行**。
+**expect 总量**：HEAD 544 → 现在 **753（+209，+38%）**；且**每个改动文件的 expect 与 it 数都不少于改前**：
+
+| 文件 | expect | it | | 文件 | expect | it |
+| ----------------- | ------ | --- | | --------------------- | ------ | --- |
+| import-mapping | 53→64 | 15→16 | | step-result-multi | 42→68 | 10→15 |
+| job-contract | 48→77 | 12→17 | | step-solve-multi | 43→52 | 5→7 |
+| result-store-multi| 56→67 | 8→11 | | stores | 31→52 | 6→8 |
+| seat-grid | 35→70 | 10→17 | | virtual-table | 22→24 | 9→10 |
+| session-export | 36→64 | 18→25 | | absent-import/app-smoke | 31/2 不变 | 不变 |
+| step-exclude-virtual | 22→24 | 5→6 | | 新文件 | seat-extra-ui 18 / session-export-zip 17 | 4 / 6 |
+
+**逐条核对 107 行删除**（没有发现被删掉的旧断言）：
+
+1. `import ElementPlus` + `app.use(ElementPlus)`（4 个文件）→ 迁移必需。
+2. EP 选择器 → 新 DOM 选择器，**语义等价或更强**：
+   `.el-table-v2__row`→`.vt-row`；`.el-input__inner`→`#exclude-query`；`.el-checkbox__input.is-indeterminate`→`.vt-select-all[aria-checked="mixed"]`；
+   `.el-form-item.is-error`→`[data-invalid='true']`。import-mapping 更是从「没有错误样式」加强为
+   「三个下拉的值 == 0/1/2，且必填未识别时 id 下拉停在 -1」。
+3. `describe("makeRoomLookup 纯函数")` 4 条删除：**函数本身已从源码移除**（只剩 `makeRoomLayout`），
+   其职责（把 location/note 交给 io）改由 io 直接读 `RoomSpec`/`seating`；新测试用**真实 io 往返**
+   （`buildClassScheduleSheets`/`buildInvigilatorSheets` + 自解 ZIP + SheetJS 读回）覆盖产物内容。
+4. 两条 mock 断言（`buildClassScheduleWorkbook` 的调用参数）→ 换成真实工作簿/ZIP 内容断言。
+5. `ElMessageBox.confirm` spy → `useConfirm` 回调断言；「一键移除空置考场」的 title/description、
+   rooms store 删除、结果作废回到空状态**全部保留**。
+6. VirtualTable 的 `ResizeObserver` stub 删除（自研组件不再需要），并**新增**「滚动后窗口移动」一条
+   （原来只断言第一屏）。
+7. 模式切换由 EP radio `input` 改为 `[data-testid="solve-mode"] button`，仍断言 worker `mode=single` 与 `store.mode`。
+
+**任务列出的关键覆盖点逐项在不在**（关键词计数 HEAD→现在）：
+虚拟滚动 3→3、全选 11→11、缺考 29→33、列映射 4→4、job.json 往返 7→10、多场次 18→21、
+ZIP 0→18、空置 18→19、加座 0→34、放宽 0→31、借考 0→23、诊断 2→2、冲突 5→5、六页挂载 6→6、
+准考证号 16→20。**唯一下降的是「监考」5→4**：删掉的是 `makeRoomLookup 按考场 id 取地点与监考`
+（载体消失，见第 3 条），其余 4 处保留。
+
+**我认为丢掉的覆盖点（很少，均为「载体下沉」而非删弱）**：
+
+1. web 层不再断「把 location/note 传给 io」；且 exported 监考表「不含监考老师」现在只有 io/acceptance
+   级断言，web 结果页概览**仍展示** `seating.note`（含监考老师）——两者口径不同，若要防回归建议在
+   web 侧补一条「导出的监考表不含『监考：』」。
+2. `app-smoke` 仍只断言「能挂载 + innerHTML>200 + 含排考场」，不点交互（与改前一致，非本轮退化）。
+3. `worker-e2e.test.ts` 只有 1 条（既有）。
+
+**结论：没有发现被删弱或删掉的旧断言**；新增覆盖（job-contract 的默认值/非法值过滤/错误分支、
+session-export 的借考放宽 + 真实 ZIP、seat-extra-ui 的加座 DOM、virtual-table 的滚动窗口）明显多于删除。
+
+### 9.4 C：独立行为探针（我自己的，7/7 通过）
+
+探针在 `/private/tmp/vfy-web/probe.test.ts`，用独立 vitest 配置（alias 指向仓库源码，不进仓库），
+数据用 `out/job.accept.json` + 当场导出的真实 plan：
+
+| 探针                 | 断言                                                                                                                                                                                                                        | 结果 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| C1 导出层（706 人）  | 总表 706 行「班级」「准考证号」非空；`主考场` 列不带括号、`单科考场N` 列 = `第N考场（科目）`；每个考场列后紧跟 `…地点` 且与 job 的 location 一一对应（19 个房间）；不再出现 `考场①`                                         | ✅   |
+| C1b 监考表（20 张）  | A1 = sheet 名、A2 = `地点：… ｜ 考场人数：N`、表头五列、**全簿无「监考：」**；R19 拆「政治」「地理」两张；唯一借考备注 = `借考（第6时段 生物）`                                                                             | ✅   |
+| C1c ZIP              | `buildClassFilesZip` = 19 个条目（总表 + 18 班）、`buildInvigilatorFilesZip` = 20 个条目，条目名 = sheet 名 + `.xlsx`；Python `zipfile` 读出中文名正常、解出的单表工作簿 openpyxl 可开（详见 §9.10-7 的 `unzip` 6.00 限制） | ✅   |
+| C2 StepResult 挂载   | 真实多场次结果下「借考与放宽」卡片 + 「1 个考场已放宽同班相邻：第十七考场」+ 导出按钮都在；虚拟表渲染行 >0 且 <80                                                                                                           | ✅   |
+| C3 加座预览          | `5 列 × 7 排 = 37 座`、`含 2 个讲台侧加座`、第 0 排两格 = `30` / `15`、空位列 3 个                                                                                                                                          | ✅   |
+| C4 自研 VirtualTable | 1000 行只渲染 <50 行；`scrollTop = 44 × 500` 后首行不再是 0001 且页内出现 0501                                                                                                                                              | ✅   |
+
+**口径差异（记录，不是缺陷）**：页面「座位方案概览」仍显示 `监考：…`（取 `seating.note`），
+而 Excel 监考表按上一轮契约**不含**监考老师——评价「监考表没有监考老师」时只能指导出物。
+
+### 9.5 D：体积与构建（口径差异）
+
+命令：`pnpm --filter @exam-seat/web exec vite build --outDir /tmp/webdist-check`（不动仓库 `dist/`）。
+
+| 口径                       | 我的实测（字节）                                              |
+| -------------------------- | ------------------------------------------------------------- |
+| dist 全部（html + assets） | **1,282,728 B = 1.223 MiB**（十进制 1.28 MB）                 |
+| CSS                        | 4 个文件 **98,157 B = 95.9 KiB**；最大 `index-*.css` 96,003 B |
+| JS                         | 28 个文件 **1,184,009 B = 1.129 MiB**                         |
+| 主 chunk                   | `index-*.js` **108,041 B**                                    |
+| 最大 JS                    | `roster-*.js` **695,112 B**（SheetJS 等被拆成独立 chunk）     |
+
+与 web-ui 报的对照：
+
+| 项       | web-ui        | 我的实测                     | 说明                                                                                                               |
+| -------- | ------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| dist     | 2.4M → 1.3M   | 1.223 MiB（≈1.28 MB）**✓**   | 「后」一致；**「前」我没能独立复现**（见下）                                                                       |
+| CSS      | 480K → 108K   | **98,157 B（95.9 KiB）**     | **「后」对不上**：98,157 B ≈ 98 KB，而 `108,041 B` 恰好是主 chunk `index-*.js` —— 疑似把 JS 主 chunk 当成 CSS 报了 |
+| 主 chunk | 955.8K → 108K | `index-*.js` **108,041 B** ✓ | 一致；代码分割后主 chunk 只剩框架 + 外壳，xlsx 进 `roster` chunk                                                   |
+
+**为什么「前」不可独立复现**：HEAD 的 web 依赖 element-plus，但本轮已把它从 pnpm store **prune**
+（`node_modules/.pnpm/element-plus@*` 不存在、`packages/web/node_modules` 也无软链）；离线重建 HEAD
+需要重新 install（会改 lockfile/工作区，超出验收范围）。所以 2.4M / 480K / 955.8K 三个「前」值是
+**实现者口径，未独立复核**——按你的要求，以我的实测为准。
+
+### 9.6 E：反例（4 组变异，全部被现有测试抓住）
+
+做法：`cp -R packages/web/src /private/tmp/mut-web/src`，只改**副本**，把仓库自带 web 测试的 `@` alias
+指向副本再跑——这样能真答「现有测试抓不抓得住」，又不碰仓库。
+
+| #   | 变异                                                       | 结果                                                                      |
+| --- | ---------------------------------------------------------- | ------------------------------------------------------------------------- |
+| E1  | `VirtualTable` 改成渲染全部行（start=0 / end=rows.length） | ✅ 2 个文件失败、**5 条断言失败**（virtual-table + step-exclude-virtual） |
+| E2  | `safeExportFileName` 不清洗（直接 return name）            | ✅ 2 个文件失败、**3 条失败**（session-export + session-export-zip）      |
+| E3  | `StepResult` 空置考场列表恒为 `[]`                         | ✅ 1 个文件失败、**1 条失败**（「空置考场被点名列出…」）                  |
+| E4  | `VirtualTable` 表头全选只选「渲染行」而非全部 rowKey       | ✅ 1 个文件失败、**2 条失败**（「全选当前 rows 全量」）                   |
+
+基线（未变异）4 个文件 **56/56 通过**。→ 这四处最容易写弱的行为都还有牙；**没有抓不住的**。
+
+### 9.7 F：复跑
+
+| 命令                           | 结果                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| `pnpm exec vitest run`         | **548 passed / 39 files**（node 353 / 18 files、web 195 / 21 files），exit 0 |
+| `node examples/acceptance.mjs` | **130/130**，exit 0，380ms（§20 已扩到 19 条）                               |
+| `pnpm exec oxlint`             | **0 error / 2 warning**（既有 `max-lines`）                                  |
+| `pnpm lint:check`              | ❌ **失败**：`oxfmt --check` 报 **`AGENTS.md`** 有格式问题                   |
+
+`AGENTS.md` 的 `git diff` 只有 1 行（Web 技术栈改成 shadcn-vue），但它没过 oxfmt：当前工作区
+`pnpm exec oxfmt --check AGENTS.md` 可稳定复现。**这与你说的「pnpm verify exit 0 / oxfmt 全合规」不一致**——
+`AGENTS.md` 不在我的写权限里，留给你们 `oxfmt AGENTS.md` 修一下即可。
+
+### 9.8 G：工具化配置评审
+
+| 改动                                                                 | 判断                                        | 依据                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| oxlint `import/max-dependencies` → 40（`packages/web/src/**`，warn） | ✅ 合理                                     | HEAD 无此 override（走预设默认）；Vue SFC 会把模板里的子组件算成 import（App.vue 23、StepExclude 18）；warn 级不阻塞                                                                                                                                                                                                                                                                                                                                                   |
+| oxlint 对 `components/ui/**` 关 6 条                                 | ✅ 合理且必要                               | 我用独立配置重开这 6 条实测：`ui/**`（181 个 `.vue` + 38 个 `index.ts`）报 **38 条 `import/no-cycle`** + 9 条其它（no-negated-condition ×6、no-implicit-coercion、no-else-return、array-type）；6 条全是风格/架构规则，**无 correctness 规则**，且范围只覆盖上游生成目录                                                                                                                                                                                               |
+| oxfmt 忽略 `.agents/skills/shadcn-vue/**`                            | ✅ 合理                                     | 上游 skill（`skills-lock.json` 记 hash），本仓自己的 `.agents/skills/exam-seating/**` 仍格式化                                                                                                                                                                                                                                                                                                                                                                         |
+| .gitignore 加 `.claude/`、`.continue/`                               | ✅ 合理                                     | skills CLI 给别的 agent 生成的副本                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| .gitignore 另加 `inputs/`、`out/`、`docs/需求-*.md`                  | ⚠️ 隐私动机对，但 `docs/需求-*.md` 值得再想 | `inputs/`、`out/` 含真实姓名，必须忽略；但 `docs/需求-考场级限制与放宽.md` 是被 `design.md` 引用的**设计输入**，整文件 ignore 会让干净检出丢掉需求单。更小的做法：保留文件、把真实姓名/学号换成占位符后入库                                                                                                                                                                                                                                                            |
+| `pnpm-workspace.yaml` `allowBuilds: vue-demi: true`                  | ⚠️ 字段选对，但有残留死键                   | 实测 pnpm 12.5.1 / 12.8.1 的 dist 只有 `allowBuilds`、没有 `onlyBuiltDependencies`（11.15.1 两者都有）→ 12.x 下 `allowBuilds` 才是生效字段；但文件里还留着 `onlyBuiltDependencies: []`（pnpm 11 语义 = 只允许列表内构建），在 12 下是死键且语义打架，**建议删**。必要性：vue-demi 0.14.10 的 postinstall 只切换 shim，而出货的 `lib/index.mjs` 已经是 Vue 3 shim（`isVue3 = true`），所以大概率可不加；加上无害、能消掉「ignored build scripts」提示，属可接受但非最小 |
+
+### 9.9 本轮顺带的 io 交付物变更（不在「web 迁移」标题内，但必须记录）
+
+- `packages/io/src/schedule-export.ts`（本任务里仍是未跟踪新增文件）在本轮又被改过：班级表列名由
+  `考场① | 考场②` 换成 **`主考场 | 主考场地点 | 单科考场1 | 单科考场1地点 | …`**，新增**地点列**与
+  **姓名按宽度截断**（`displayStudentName` / `fitNamesToA4`，默认 5 个字）。我用 CLI 复现过
+  （12:48 导出的表头就是新格式），`docs/design.md` 也同步写了新列定义与「主考场不带括号、单科考场才带科目」。
+- 影响：**§8（task-16）里「考场①/②」的原文已被本轮取代**；验收 §20 从 15 条扩到 **19 条**
+  （新增：地点列一一对应、不再出现旧列名、正文居中、姓名整表不超宽时不截断），130/130 通过；
+  我的 §9.4 C1 探针即按新格式独立核对。
+- **提醒**：这是跨包改动，任务标题写的是「web 迁移」，却改了 CLI 交付物格式。后续再动这里时，
+  记得同步 §8 的段落（或给 §8 加一条「已被 §9.9 取代」的指针）。
+
+### 9.10 没验证到 / 存疑
+
+1. 迁移**前**的体积（2.4M / CSS 480K / 主 chunk 955.8K）**没能独立复现**：element-plus 已从 store prune，离线重建 HEAD 不可行。
+2. web 只跑了单测 + 自写探针，**没有浏览器级 E2E/真机视觉**；shadcn 组件的观感（间距、暗色、响应式）未看。
+3. `components/ui/**` 181 个上游组件按约定不写测试，我也没逐个审源码（只审了 lint 豁免范围与来源）。
+4. `app-smoke` 只做挂载冒烟；跨页交互没有 E2E。
+5. `pnpm lint:check` 当前失败（AGENTS.md 未过 oxfmt）；`pnpm verify` 我未复跑。
+6. 隐私：本文与探针都没把真实姓名/学号写进文档，探针只在内存里使用真实 plan。
+7. **ZIP 中文名的「疑似乱码」是 macOS `unzip` 的限制，不是产品缺陷**：我一度以为 `buildZip` 没写 UTF-8
+   标志位（macOS `unzip` 6.00 打印的是乱码、还拒绝解压中文名），但复核 ZIP 头：本地头与中央目录的
+   general purpose flag 都是 **0x0800（UTF-8 位已置）**，Python `zipfile` 读出 `总表.xlsx` /
+   `第一考场（语数外物化生）.xlsx` 等名字全部正常，解出的工作簿 openpyxl 也能打开。
+   即：标准合规，Apple 版 Info-ZIP 6.00（2009）是已知旧工具限制。教学场景用 Windows 资源管理器 /
+   macOS 归档实用工具一般没问题，但用老 `unzip` 命令行会看到乱码——记在这里免得以后重复踩。
+
+### 9.11 结论
+
+**通过（有保留，保留项见 §9.10）。**
+
+- **A（EP 清除）**：代码/依赖/lock/软链 **0 残留**，仅 3 处历史注释。
+- **B（测试是否被写弱）**：**没有发现被删弱或删掉**——web expect 544→753（+38%），每个改动文件的
+  expect/it 都不少于改前；107 行删除全部有等价或更强替代；4 组针对性变异 4/4 被现有测试抓住。
+  唯一「丢掉的覆盖」是 location/note 传递的 web 级断言（职责下沉到 io，io 级仍覆盖）。
+- **C（行为等价）**：7/7 独立探针通过（706 人总表口径、监考表无监考老师、加座第 0 排、VirtualTable 窗口移动）。
+- **D（体积）**：当前 dist **1,282,728 B（1.223 MiB）**、CSS 98,157 B、JS 1,184,009 B、主 chunk 108,041 B；
+  「CSS 108K」对不上（疑似与主 chunk 混淆），三个「前」值未独立复核。
+- **E（反例）**：4/4 被抓。
+- **F（复跑）**：548 单测 + 130 验收通过；⚠️ `pnpm lint:check` 当前失败于 `AGENTS.md` 的 oxfmt 格式。
+- **G（配置）**：6 条 lint 豁免与 max-dependencies 40 有实测依据、范围合理；`onlyBuiltDependencies: []`
+  在 pnpm 12 下是死键建议删；`docs/需求-*.md` 整文件 ignore 建议改成脱敏后入库。

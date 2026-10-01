@@ -1,8 +1,9 @@
 import { compileDomains, hasAnySelector } from "./domain";
 import { compileModel } from "./model";
-import { roomCapacity, seatNoToRC, toPhysicalCol } from "./numbering";
+import { roomCapacity, seatNoToRCIn, toPhysicalCol } from "./numbering";
 import type { PlanAllResult, RoomSubjectClash } from "./plan-all";
 import type { Job, PlanResult, Student, ValidationIssue, ValidationReport } from "./types";
+import { isSameClassRelaxed } from "./util";
 
 /** 独立校验器：只依赖 job 与最终 entries，**不复用求解器的任何状态**。 任何一条硬约束不过，就拒绝导出。 */
 export function validate(job: Job, result: PlanResult): ValidationReport {
@@ -37,7 +38,7 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
         refs: { studentId: entry.studentId, seatNo: entry.seatNo },
       });
     }
-    const expected = seatNoToRC(entry.seatNo, room.spec.rows, room.spec.cols);
+    const expected = seatNoToRCIn(room.spec, entry.seatNo);
     if (entry.row !== expected.row || entry.col !== expected.col) {
       issues.push({
         code: "ENTRY_NUMBERING_MISMATCH",
@@ -98,7 +99,7 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
     }
   }
 
-  /* 3) 邻接约束（独立重算，不用求解器的计数） */
+  /* 3) 邻接约束（独立重算，不用求解器的计数）；放宽「同班相邻」的考场只留 warning */
   const studentAtSeat = new Int32Array(model.seatCount).fill(-1);
   const studentIndexOf = new Map<string, number>();
   for (let i = 0; i < model.students.length; i += 1) studentIndexOf.set(model.students[i]!.id, i);
@@ -106,12 +107,15 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
   for (const entry of result.entries) {
     const room = roomById.get(entry.roomId);
     if (!room) continue;
-    const rc = seatNoToRC(entry.seatNo, room.spec.rows, room.spec.cols);
+    const rc = seatNoToRCIn(room.spec, entry.seatNo);
     const seat = room.grid[(rc.row - 1) * room.spec.cols + (rc.col - 1)];
     const si = studentIndexOf.get(entry.studentId);
     if (seat === undefined || seat < 0 || si === undefined) continue;
     studentAtSeat[seat] = si;
   }
+
+  /** 被跳过的放宽考场：roomId → 跳过次数（只报一条 warning，不按冲突对数刷屏） */
+  const relaxedSkipped = new Map<string, { roomName: string; count: number }>();
 
   for (let s = 0; s < model.seatCount; s += 1) {
     const u = studentAtSeat[s]!;
@@ -126,6 +130,16 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
       if (v < 0) continue;
       if (model.classOfStudent[v] !== cls) continue;
       const room = model.rooms[model.seatRoom[s]!]!;
+      if (isSameClassRelaxed(room.spec)) {
+        // 本考场放宽了同班相邻：不再算 error，但留一条 warning 记账
+        const info = relaxedSkipped.get(room.spec.id) ?? {
+          roomName: roomLabel(room.spec, room.spec.id),
+          count: 0,
+        };
+        info.count += 1;
+        relaxedSkipped.set(room.spec.id, info);
+        continue;
+      }
       issues.push({
         code: "ADJACENCY_CONFLICT",
         severity: "error",
@@ -142,6 +156,15 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
     }
   }
 
+  for (const [roomId, info] of relaxedSkipped) {
+    issues.push({
+      code: "ADJACENCY_RELAXED",
+      severity: "warning",
+      message: `${info.roomName} 已放宽「同班相邻」：跳过了 ${info.count} 处相邻同班的判定`,
+      refs: { roomId, skipped: info.count },
+    });
+  }
+
   /* 4) 限定是否被满足 */
   const domains = compileDomains(model);
   for (const entry of result.entries) {
@@ -151,7 +174,7 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
     if (domain == null) continue;
     const room = roomById.get(entry.roomId);
     if (!room) continue;
-    const rc = seatNoToRC(entry.seatNo, room.spec.rows, room.spec.cols);
+    const rc = seatNoToRCIn(room.spec, entry.seatNo);
     const seat = room.grid[(rc.row - 1) * room.spec.cols + (rc.col - 1)];
     if (seat === undefined || seat < 0) continue;
     if (!domain.has(seat)) {
@@ -181,6 +204,8 @@ export interface PlanAllSeatingValidation {
   subjects: string[];
   /** 这套座位实际排入的学生人数 */
   seats: number;
+  /** 借考学生：学生 id → 在这套座位里只考这些科目 */
+  borrowedSubjects?: Record<string, string[]>;
   ok: boolean;
   report: ValidationReport;
 }
@@ -273,10 +298,16 @@ export function validateAll(job: Job, result: PlanAllResult): PlanAllValidation 
         ],
       };
     } else {
+      const borrowers = seating.borrowedSubjects ?? {};
+      const seated = new Set((seating.result.entries ?? []).map((entry) => entry.studentId));
       const subStudents: Student[] = [];
       for (const id of seating.studentIds ?? []) {
         const student = studentById.get(id);
-        if (student != null) subStudents.push({ ...student });
+        if (student == null) continue;
+        // 「只来这个时段」的借考生不在求解结果里占固定座位（座位由 planAll 按空位挑），
+        // 这类人不进单房校验，改由第 4b 步在 byStudent 这一层独立复核。
+        if (borrowers[id] !== undefined && !seated.has(id)) continue;
+        subStudents.push({ ...student });
       }
       const subJob: Job = {
         jobVersion: job.jobVersion,
@@ -291,6 +322,7 @@ export function validateAll(job: Job, result: PlanAllResult): PlanAllValidation 
       roomName,
       subjects: seating.subjects ?? [],
       seats: (seating.studentIds ?? []).length,
+      borrowedSubjects: seating.borrowedSubjects,
       ok: report.ok,
       report,
     };
@@ -409,6 +441,46 @@ export function validateAll(job: Job, result: PlanAllResult): PlanAllValidation 
           severity: "error",
           message: `${student.studentId} 在${slotId}的座位号（${assignment.seatNo}）与${seating.roomName}座位方案里的（${expectedSeat ?? "无"}）对不上`,
           refs: { studentId: student.studentId, roomId: assignment.roomId, slot: slotId },
+        });
+      }
+    }
+  }
+
+  /* 4b) 借考座位也要独立复核 roomId-less 行列限定：按目标考场自己的行列数重新解析 */
+  for (const seating of seatings) {
+    const borrowers = seating.borrowedSubjects ?? {};
+    const studentIds = Object.keys(borrowers);
+    if (studentIds.length === 0) continue;
+    const room = roomById.get(seating.roomId);
+    if (!room) continue;
+    const roomConstraints = constraints.filter(
+      (constraint) =>
+        hasAnySelector(constraint) && (!constraint.roomId || constraint.roomId === seating.roomId),
+    );
+    for (const studentId of studentIds) {
+      const student = studentById.get(studentId);
+      const schedule = byStudent.find((item) => item?.studentId === studentId);
+      if (!student || !schedule) continue;
+      const borrowed = new Set(borrowers[studentId]);
+      const subJob: Job = {
+        jobVersion: job.jobVersion,
+        students: [{ ...student }],
+        rooms: [room],
+        constraints: roomConstraints,
+      };
+      const subModel = compileModel(subJob);
+      const domain = compileDomains(subModel).domains[0] ?? null;
+      if (domain == null) continue;
+      for (const [slotId, assignment] of Object.entries(schedule.slots ?? {})) {
+        if (!assignment || assignment.roomId !== seating.roomId) continue;
+        if (!borrowed.has(assignment.subject)) continue;
+        const seatIndex = subModel.rooms[0]!.firstSeat + assignment.seatNo - 1;
+        if (domain.has(seatIndex)) continue;
+        issues.push({
+          code: "CONSTRAINT_UNMET",
+          severity: "error",
+          message: `${student.name || student.id} 的借考座位（${roomLabel(room, seating.roomId)} ${assignment.seatNo} 号）不在限定要求的范围内`,
+          refs: { studentId, roomId: seating.roomId, slot: slotId, seatNo: assignment.seatNo },
         });
       }
     }

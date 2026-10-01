@@ -1,19 +1,11 @@
-import ElementPlus from "element-plus";
 import { createPinia, setActivePinia } from "pinia";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createApp, h, nextTick } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 import { useRosterStore } from "@/stores/roster";
 import StepExclude from "@/views/StepExclude.vue";
 import type { Student } from "@exam-seat/core";
-
-/** Jsdom 缺 ResizeObserver，ElAutoResizer 要用（与 app-smoke.test.ts 同一份最小 stub）。 */
-class ResizeObserverStub {
-  observe = (): void => {};
-  unobserve = (): void => {};
-  disconnect = (): void => {};
-}
 
 const CLASS_COUNT = 18;
 
@@ -31,7 +23,7 @@ const flush = async (): Promise<void> => {
 };
 
 const renderedRows = (container: HTMLElement): number =>
-  container.querySelectorAll(".el-table-v2__row").length;
+  container.querySelectorAll(".vt-row").length;
 
 const findButton = (container: HTMLElement, text: string): HTMLButtonElement | undefined =>
   [...container.querySelectorAll("button")].find((el) => el.textContent?.includes(text));
@@ -54,16 +46,15 @@ async function mountStep(students: Student[]) {
   const app = createApp({ render: () => h(StepExclude) });
   app.use(pinia);
   app.use(router);
-  app.use(ElementPlus);
   app.mount(container);
   await flush();
 
   return { app, container, roster };
 }
 
-/** 在查询框里输入，触发 el-input 的 v-model。 */
+/** 在查询框里输入，触发 v-model。 */
 async function typeQuery(container: HTMLElement, text: string): Promise<void> {
-  const input = container.querySelector<HTMLInputElement>(".el-input__inner");
+  const input = container.querySelector<HTMLInputElement>("#exclude-query");
   expect(input).not.toBeNull();
   input!.value = text;
   input!.dispatchEvent(new Event("input", { bubbles: true }));
@@ -71,10 +62,6 @@ async function typeQuery(container: HTMLElement, text: string): Promise<void> {
 }
 
 describe("排除缺考页 · 虚拟滚动", () => {
-  beforeAll(() => {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= ResizeObserverStub;
-  });
-
   afterEach(() => {
     document.body.innerHTML = "";
   });
@@ -124,7 +111,7 @@ describe("排除缺考页 · 虚拟滚动", () => {
     expect(findButton(container, `查看已排除（${expected}）`)).toBeDefined();
     // 被排除的行置灰 + 「不参加」标签
     expect(container.querySelector(".row-excluded")).not.toBeNull();
-    expect(container.querySelector(".el-table-v2__row")?.textContent).toContain("不参加");
+    expect(container.querySelector(".vt-row")?.textContent).toContain("不参加");
     app.unmount();
   });
 
@@ -133,7 +120,7 @@ describe("排除缺考页 · 虚拟滚动", () => {
     students[0] = { ...students[0]!, included: false };
     const { app, container, roster } = await mountStep(students);
 
-    const row = container.querySelector<HTMLElement>(".el-table-v2__row");
+    const row = container.querySelector<HTMLElement>(".vt-row");
     expect(row).not.toBeNull();
     expect(row!.textContent).toContain("不参加");
     expect(row!.classList.contains("row-excluded")).toBe(true);
@@ -162,6 +149,13 @@ describe("排除缺考页 · 虚拟滚动", () => {
     findButton(container, "清空勾选")!.click();
     await flush();
     expect(findButton(container, "批量排除")?.disabled).toBe(true);
+    app.unmount();
+  });
+
+  it("缺考名单导入走隐藏 file input（不再依赖 el-upload）", async () => {
+    const { app, container } = await mountStep(makeStudents(20));
+    expect(container.querySelector('[data-testid="absent-file"]')).not.toBeNull();
+    expect(findButton(container, "导入缺考名单")).toBeDefined();
     app.unmount();
   });
 });

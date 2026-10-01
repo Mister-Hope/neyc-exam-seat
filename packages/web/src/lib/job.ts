@@ -4,6 +4,7 @@ import type {
   Constraint,
   Job,
   PlanOptions,
+  PlanSlotSpec,
   RoomSpec,
   RowRef,
   Student,
@@ -25,7 +26,13 @@ export interface JobDraft {
   options: PlanOptions;
 }
 
-export const DEFAULT_OPTIONS: Required<PlanOptions> = normalizeOptions();
+export const DEFAULT_OPTIONS: Required<PlanOptions> = {
+  ...normalizeOptions(),
+  // 显式时段表 / 必须分开的科目对：core 的 normalizeOptions 已给默认值，这里再兜一层，
+  // 保证 `Required<PlanOptions>` 在运行时也真有这两个字段（界面直接 `options.slots.length` 不炸）。
+  slots: [],
+  forbiddenSameSlot: [],
+};
 
 /**
  * 已知字段用 core 的默认值补全；**未知字段原样保留**。
@@ -48,10 +55,28 @@ export function createEmptyDraft(): JobDraft {
   };
 }
 
-/** 数组元素逐个浅拷贝。用循环而不是 `map((x) => ({ ...x }))`：后者每轮迭代都新建字面量。 */
-function cloneItems<T extends object>(items: readonly T[] | undefined): T[] {
-  const out: T[] = [];
-  for (const item of items ?? []) out.push({ ...item });
+/** 考场：数组字段（加座列 / 专用科目）拷一层，避免草稿与 job 共享同一个数组。 */
+function cloneRooms(rooms: readonly RoomSpec[] | undefined): RoomSpec[] {
+  const out: RoomSpec[] = [];
+  for (const room of rooms ?? []) {
+    const next: RoomSpec = { ...room };
+    if (room.extraFrontSeats) next.extraFrontSeats = [...room.extraFrontSeats];
+    if (room.dedicatedSubjects) next.dedicatedSubjects = [...room.dedicatedSubjects];
+    out.push(next);
+  }
+  return out;
+}
+
+/** 学生：选科 / 借考映射拷一层（`subjectRoom` 是对象，浅拷贝会共享引用）。 */
+function cloneStudents(students: readonly Student[] | undefined): Student[] {
+  const out: Student[] = [];
+  for (const student of students ?? []) {
+    const next: Student = { ...student };
+    if (student.subjects) next.subjects = [...student.subjects];
+    if (student.tags) next.tags = [...student.tags];
+    if (student.subjectRoom) next.subjectRoom = { ...student.subjectRoom };
+    out.push(next);
+  }
   return out;
 }
 
@@ -78,8 +103,8 @@ export function buildJob(draft: JobDraft): Job {
       createdAt: draft.createdAt || new Date().toISOString(),
     },
     options,
-    students: cloneItems(draft.students),
-    rooms: cloneItems(draft.rooms),
+    students: cloneStudents(draft.students),
+    rooms: cloneRooms(draft.rooms),
     constraints: cloneConstraints(draft.constraints),
   };
 }
@@ -89,8 +114,8 @@ export function draftFromJob(job: Job): JobDraft {
   return {
     title: job.meta?.title ?? "排考场",
     createdAt: job.meta?.createdAt ?? new Date().toISOString(),
-    students: cloneItems(job.students),
-    rooms: cloneItems(job.rooms),
+    students: cloneStudents(job.students),
+    rooms: cloneRooms(job.rooms),
     constraints: cloneConstraints(job.constraints),
     options: mergeOptions(job.options),
   };
@@ -156,6 +181,9 @@ export function parseJob(raw: unknown): Job {
     }
     const subjects = stringList(item.subjects, `students[${i}].subjects`);
     if (subjects) student.subjects = subjects;
+    // v3：按科目借考（科目 id → 目标考场 id）；非法条目直接丢掉，不让脏值进求解器
+    const subjectRoom = stringMap(item.subjectRoom, `students[${i}].subjectRoom`);
+    if (subjectRoom) student.subjectRoom = subjectRoom;
     if (Array.isArray(item.tags)) student.tags = item.tags.map(String);
     if (isRecord(item.meta)) student.meta = item.meta;
     return student;
@@ -177,6 +205,16 @@ export function parseJob(raw: unknown): Job {
     // v2：专用考场标记，例如 ['politics', 'geography']
     const dedicated = stringList(item.dedicatedSubjects, `rooms[${i}].dedicatedSubjects`);
     if (dedicated) room.dedicatedSubjects = dedicated;
+    // v3：讲台侧加座（业务列号）；只保留 1..cols 内的整数，去重升序
+    const extra = normalizeExtraSeats(
+      item.extraFrontSeats,
+      room.cols,
+      `rooms[${i}].extraFrontSeats`,
+    );
+    if (extra) room.extraFrontSeats = extra;
+    // v3：放宽同班相邻：true / 正整数；false 与缺省等价（保留 false 以便原样往返）
+    const relax = readRelaxSameClass(item.relaxSameClass);
+    if (relax !== undefined) room.relaxSameClass = relax;
     return room;
   });
 
@@ -207,7 +245,7 @@ export function parseJob(raw: unknown): Job {
     });
   }
 
-  const options = isRecord(raw.options) ? (raw.options as PlanOptions) : undefined;
+  const options = readOptions(raw.options);
 
   return {
     jobVersion: typeof raw.jobVersion === "number" ? raw.jobVersion : JOB_VERSION,
@@ -235,6 +273,88 @@ function stringList(value: unknown, what: string): string[] | undefined {
     if (text.length > 0) out.push(text);
   }
   return out.length > 0 ? out : undefined;
+}
+
+/** 解析「科目 id → 考场 id」映射（借考）；非对象抛错，空 / 非字符串条目直接过滤。 */
+function stringMap(value: unknown, what: string): Record<string, string> | undefined {
+  if (value == null) return undefined;
+  if (!isRecord(value)) throw new Error(`${what} 必须是对象（科目 → 考场）`);
+  const out: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    if (typeof rawValue !== "string") continue;
+    const subject = rawKey.trim();
+    const roomId = rawValue.trim();
+    if (subject.length === 0 || roomId.length === 0) continue;
+    out[subject] = roomId;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** 加座列（讲台侧）：只认 1..cols 内的整数，去重升序；非数组抛错，空 / 全非法返回 undefined。 */
+function normalizeExtraSeats(value: unknown, cols: number, what: string): number[] | undefined {
+  if (value == null) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${what} 必须是数组`);
+  const seen = new Set<number>();
+  for (const item of value) {
+    if (typeof item === "number" && Number.isInteger(item) && item >= 1 && item <= cols) {
+      seen.add(item);
+    }
+  }
+  return seen.size > 0 ? [...seen].sort((a, b) => a - b) : undefined;
+}
+
+/** 放宽同班相邻：`true` / 正整数；其余（含 false）按缺省处理，但保留 `false` 以便原样往返。 */
+function readRelaxSameClass(value: unknown): boolean | number | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
+  return undefined;
+}
+
+/**
+ * Options：字段白名单 + 非法值过滤，**未知字段原样保留**（前向兼容）。
+ *
+ * `slots` / `forbiddenSameSlot` 是本轮新增的显式时段表，形状不对时抛中文错误，个体非法条目丢掉。
+ */
+function readOptions(value: unknown): PlanOptions | undefined {
+  if (!isRecord(value)) return undefined;
+  const options = { ...value } as PlanOptions;
+  if (value.slots !== undefined) options.slots = readSlots(value.slots);
+  if (value.forbiddenSameSlot !== undefined) {
+    options.forbiddenSameSlot = readForbiddenSameSlot(value.forbiddenSameSlot);
+  }
+  return options;
+}
+
+function readSlots(value: unknown): PlanSlotSpec[] {
+  if (!Array.isArray(value)) throw new Error("options.slots 必须是数组");
+  const out: PlanSlotSpec[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) throw new Error(`options.slots[${index}] 必须是对象`);
+    // 没有科目的时段没有意义，直接丢掉
+    const subjects = stringList(item.subjects, `options.slots[${index}].subjects`);
+    if (!subjects) continue;
+    const slot: PlanSlotSpec = { subjects };
+    if (typeof item.id === "string" && item.id.trim().length > 0) slot.id = item.id.trim();
+    if (typeof item.name === "string" && item.name.trim().length > 0) slot.name = item.name.trim();
+    out.push(slot);
+  }
+  // 空数组是合法输入（= 不用显式时段表），原样保留才能无损往返
+  return out;
+}
+
+function readForbiddenSameSlot(value: unknown): string[][] {
+  if (!Array.isArray(value)) throw new Error("options.forbiddenSameSlot 必须是数组");
+  const out: string[][] = [];
+  for (const [index, pair] of value.entries()) {
+    if (!Array.isArray(pair)) throw new Error(`options.forbiddenSameSlot[${index}] 必须是数组`);
+    const subjects = pair
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    // 少于两科不成对，丢掉
+    if (subjects.length >= 2) out.push(subjects);
+  }
+  return out;
 }
 
 /** 限定的 id：缺省时补一个稳定且不冲突的 `C序号`，让 AI 生成的 job 也能直接导进来。 */

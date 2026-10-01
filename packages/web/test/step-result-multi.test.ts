@@ -1,12 +1,12 @@
-import ElementPlus, { ElMessageBox } from "element-plus";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, h, nextTick } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 import type VirtualTableComponent from "@/components/VirtualTable.vue";
+import type * as UseConfirmModule from "@/composables/useConfirm";
 import { useExamJob } from "@/composables/useExamJob";
-import { XLSX_MIME } from "@/lib/download";
+import { XLSX_MIME, ZIP_MIME } from "@/lib/download";
 import type { ScheduleColumn } from "@/lib/session-export";
 import { useResultStore } from "@/stores/result";
 import { useRoomsStore } from "@/stores/rooms";
@@ -22,30 +22,62 @@ import type {
   StudentSlotAssignment,
   TimeSlot,
 } from "@exam-seat/core";
+import type { XlsxSheet } from "@exam-seat/io";
 
 /* ------------------------------------------------------------------ */
 /* mock：下载与 io（只断言调用参数，不真写文件）                         */
 /* ------------------------------------------------------------------ */
 
 const mocks = vi.hoisted(() => ({
+  /** 确认框替身：默认确认（`resolveConfirm(true)` 的语义）。 */
+  confirmAction: vi.fn<
+    (options: { title: string; description?: string; confirmText?: string }) => Promise<boolean>
+  >(() => Promise.resolve(true)),
   downloadBytes: vi.fn<(bytes: Uint8Array, fileName: string, mime: string) => void>(),
   downloadText: vi.fn<(text: string, fileName: string, mime?: string) => void>(),
-  buildClassScheduleWorkbook: vi.fn<(result: PlanAllResult) => Uint8Array>(
+  buildClassScheduleWorkbook: vi.fn<(result: PlanAllResult, rooms?: RoomSpec[]) => Uint8Array>(
     () => new Uint8Array([1, 2, 3]),
   ),
-  buildInvigilatorWorkbook: vi.fn<
-    (
-      result: PlanAllResult,
-      roomLookup?: (roomId: string) => { location?: string; note?: string } | undefined,
-    ) => Uint8Array
-  >(() => new Uint8Array([4, 5, 6])),
+  buildInvigilatorWorkbook: vi.fn<(result: PlanAllResult, rooms?: RoomSpec[]) => Uint8Array>(
+    () => new Uint8Array([4, 5, 6]),
+  ),
+  buildClassScheduleSheets: vi.fn<(result: PlanAllResult, rooms?: RoomSpec[]) => XlsxSheet[]>(
+    () => [],
+  ),
+  buildInvigilatorSheets: vi.fn<(result: PlanAllResult, rooms?: RoomSpec[]) => XlsxSheet[]>(
+    () => [],
+  ),
+  buildXlsx: vi.fn<(book: { sheets: XlsxSheet[]; title?: string }) => Uint8Array>(
+    () => new Uint8Array([13, 14]),
+  ),
+  buildZip: vi.fn<(files: { name: string; bytes: Uint8Array }[]) => Uint8Array>(
+    () => new Uint8Array([15, 16]),
+  ),
   buildPlanWorkbook: vi.fn<(result: PlanResult, jobTitle?: string) => Uint8Array>(
     () => new Uint8Array([7, 8, 9]),
   ),
+  buildRoomSheets: vi.fn<
+    (
+      result: PlanResult,
+      layout: (roomId: string) => {
+        rows: number;
+        cols: number;
+        name: string;
+        extraFrontSeats?: number[];
+      },
+    ) => Uint8Array
+  >(() => new Uint8Array([10, 11, 12])),
 }));
+
+/** 只换掉 `confirmAction`，其余（`resolveConfirm` / `confirmState`）保持真实实现。 */
+vi.mock(import("@/composables/useConfirm"), async (importOriginal) => {
+  const actual = await importOriginal<typeof UseConfirmModule>();
+  return { ...actual, confirmAction: mocks.confirmAction };
+});
 
 vi.mock(import("@/lib/download"), () => ({
   XLSX_MIME: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" as const,
+  ZIP_MIME: "application/zip" as const,
   JSON_MIME: "application/json" as const,
   downloadBytes: mocks.downloadBytes,
   downloadText: mocks.downloadText,
@@ -53,8 +85,13 @@ vi.mock(import("@/lib/download"), () => ({
 
 vi.mock(import("@exam-seat/io"), () => ({
   buildClassScheduleWorkbook: mocks.buildClassScheduleWorkbook,
+  buildClassScheduleSheets: mocks.buildClassScheduleSheets,
   buildInvigilatorWorkbook: mocks.buildInvigilatorWorkbook,
+  buildInvigilatorSheets: mocks.buildInvigilatorSheets,
+  buildXlsx: mocks.buildXlsx,
+  buildZip: mocks.buildZip,
   buildPlanWorkbook: mocks.buildPlanWorkbook,
+  buildRoomSheets: mocks.buildRoomSheets,
 }));
 
 /**
@@ -135,6 +172,11 @@ const ROOMS: RoomSpec[] = [
   { id: "R20", name: "第二十考场", rows: 5, cols: 6, doorSide: "right", location: "生物实验室" },
   { id: "R99", name: "第九十九考场", rows: 5, cols: 6, doorSide: "right" },
 ];
+
+/** 只带 name 的 sheet 替身：web 侧只用 sheet 名拼文件名 / 交给 buildXlsx。 */
+function fakeSheet(name: string): XlsxSheet {
+  return { name } as unknown as XlsxSheet;
+}
 
 function assignment(
   subject: string,
@@ -280,6 +322,7 @@ function multiResult(): PlanAllResult {
         location: "高二三班",
         note: "张老师",
         studentIds: ["S1", "S2", "S3"],
+        relaxedSameClass: true,
       }),
       seating({
         roomId: "R20",
@@ -287,11 +330,26 @@ function multiResult(): PlanAllResult {
         subjects: ["politics"],
         location: "生物实验室",
         studentIds: ["S2"],
+        borrowedSubjects: { S2: ["politics"] },
       }),
     ],
     byStudent: makeStudents(),
     emptyRooms: ["R99"],
     overRoomLimit: [],
+    // 本轮新增：R3 放宽了同班相邻；李娜的政治借考到第二十考场
+    relaxedRooms: ["R3"],
+    borrowings: [
+      {
+        studentId: "S2",
+        name: "李娜",
+        className: "高三(7)班",
+        subject: "politics",
+        subjectLabel: "政治",
+        roomId: "R20",
+        roomName: "第二十考场",
+        seatNo: 12,
+      },
+    ],
     diagnostics: [],
     unmetConstraints: [],
   };
@@ -317,7 +375,6 @@ function mount(): Harness {
     ],
   });
   const app = createApp({ render: () => h(StepResult) });
-  app.use(ElementPlus);
   app.use(router);
   app.mount(container);
   return { container, app };
@@ -331,7 +388,7 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
   return button;
 }
 
-/** 等所有嵌套组件（el-card / el-table / el-descriptions）都完成渲染。 */
+/** 等所有嵌套组件（Card / Table / Select 等）都完成渲染。 */
 async function settle(depth = 5): Promise<void> {
   if (depth <= 0) return;
   await nextTick();
@@ -408,6 +465,10 @@ describe("第 ⑥ 步结果页：多场次 / 单场", () => {
     // 概览：科目简称与人数
     expect(text).toContain("语数物化");
     expect(text).toContain("政治");
+    // 交付说明 + 两个整包下载入口
+    expect(text).toContain("合并工作簿");
+    expect(text).toContain("下载分班文件（ZIP）");
+    expect(text).toContain("下载分考场文件（ZIP）");
   });
 
   it("时刻表每个时段一列，行数 = 全部考生", async () => {
@@ -441,31 +502,64 @@ describe("第 ⑥ 步结果页：多场次 / 单场", () => {
     await settle();
     expect(container.textContent).toContain("第九十九考场");
 
-    const confirmSpy = vi.spyOn(ElMessageBox, "confirm").mockResolvedValue("confirm" as never);
+    const confirmSpy = mocks.confirmAction;
     buttonByText(container, "一键移除空置考场").click();
-    await nextTick();
-    await nextTick();
+    await settle();
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
-    const call = confirmSpy.mock.calls[0] ?? [];
-    const options = call[0] as { message?: string } | string | undefined;
-    const message = typeof options === "string" ? options : options?.message;
-    expect(message).toContain("第九十九考场");
+    const options = confirmSpy.mock.calls[0]?.[0] as { title?: string; description?: string };
+    expect(options.title).toBe("移除空置考场");
+    expect(options.description).toContain("第九十九考场");
+    expect(options.description).toContain("移除后这份结果就作废了");
     expect(useRoomsStore().rooms.some((room) => room.id === "R99")).toBe(false);
     // 结果已作废 → 回到空状态
     expect(container.textContent).toContain("还没有求解结果");
-    confirmSpy.mockRestore();
   });
 
-  it("导出「按班级考场安排.xlsx」用 buildClassScheduleWorkbook(planAll)", async () => {
+  it("借考与放宽卡片：列出放宽考场与借考人 / 时段 / 科目 / 目标考场座位", async () => {
+    const container = mountMulti();
+    await settle();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("借考与放宽");
+    expect(text).toContain("1 个考场已放宽同班相邻：第三考场");
+    expect(text).toContain("已放宽");
+    expect(text).toContain("T6 生物/政治");
+    expect(text).toContain("李娜");
+    expect(text).toContain("第二十考场");
+    // 借考表格里的座位列写成「12 号」
+    expect(text).toContain("12 号");
+  });
+
+  it("没有借考也没有放宽时不报假警（成功提示）", async () => {
+    const store = useResultStore();
+    useRooms();
+    const plain = multiResult();
+    plain.relaxedRooms = [];
+    plain.borrowings = [];
+    plain.seatings[0]!.relaxedSameClass = false;
+    store.planAll = plain;
+    store.result = null;
+    store.mode = "all";
+    store.job = useExamJob().job.value;
+    store.report = null;
+    const harness = mount();
+    ({ app } = harness);
+    await settle();
+
+    expect(harness.container.textContent).toContain("本场没有考场放宽同班相邻，也没有借考学生");
+  });
+
+  it("导出「按班级考场安排.xlsx」把 job.rooms 传给 io", async () => {
     const container = mountMulti();
     await settle();
     const { planAll } = useResultStore();
+    const { job } = useExamJob();
 
     buttonByText(container, "导出 按班级考场安排.xlsx").click();
     await nextTick();
 
-    expect(mocks.buildClassScheduleWorkbook).toHaveBeenCalledWith(planAll);
+    expect(mocks.buildClassScheduleWorkbook).toHaveBeenCalledWith(planAll, job.value.rooms);
     expect(mocks.downloadBytes).toHaveBeenCalledWith(
       mocks.buildClassScheduleWorkbook.mock.results[0]?.value,
       "按班级考场安排.xlsx",
@@ -473,26 +567,84 @@ describe("第 ⑥ 步结果页：多场次 / 单场", () => {
     );
   });
 
-  it("导出「考场监考表.xlsx」时把 location/note 的 roomLookup 传给 io", async () => {
+  it("导出「考场监考表.xlsx」时把 job.rooms 传给 io（地点 / 监考在 io 侧取）", async () => {
     const container = mountMulti();
     await settle();
     const { planAll } = useResultStore();
+    const { job } = useExamJob();
 
     buttonByText(container, "导出 考场监考表.xlsx").click();
     await nextTick();
 
     expect(mocks.buildInvigilatorWorkbook).toHaveBeenCalledTimes(1);
-    const [passedResult, lookup] = mocks.buildInvigilatorWorkbook.mock.calls[0] as [
+    const [passedResult, passedRooms] = mocks.buildInvigilatorWorkbook.mock.calls[0] as [
       PlanAllResult,
-      (roomId: string) => { location?: string; note?: string } | undefined,
+      RoomSpec[],
     ];
     expect(passedResult).toBe(planAll);
-    expect(lookup("R3")).toEqual({ location: "高二三班", note: "张老师" });
-    expect(lookup("R99")).toEqual({ location: undefined, note: undefined });
+    // job 是 computed 每次新生成的对象，这里比内容
+    expect(passedRooms).toStrictEqual(job.value.rooms);
+    expect(passedRooms.some((room) => room.id === "R3")).toBe(true);
     expect(mocks.downloadBytes).toHaveBeenCalledWith(
       mocks.buildInvigilatorWorkbook.mock.results[0]?.value,
       "考场监考表.xlsx",
       XLSX_MIME,
+    );
+  });
+
+  it("下载「分班文件（ZIP）」：逐张 sheet 写单表工作簿再打包", async () => {
+    const container = mountMulti();
+    await settle();
+    const { planAll } = useResultStore();
+    const { job } = useExamJob();
+    mocks.buildClassScheduleSheets.mockReturnValue([
+      fakeSheet("高三(1)班"),
+      fakeSheet("高三(7)班"),
+    ]);
+
+    buttonByText(container, "下载分班文件（ZIP）").click();
+    await nextTick();
+
+    expect(mocks.buildClassScheduleSheets).toHaveBeenCalledWith(
+      planAll,
+      job.value.rooms,
+      undefined,
+    );
+    expect(mocks.buildXlsx).toHaveBeenCalledTimes(2);
+    expect(mocks.buildZip).toHaveBeenCalledTimes(1);
+    const [files] = mocks.buildZip.mock.calls[0]!;
+    expect(files.map((file) => file.name)).toEqual(["高三(1)班.xlsx", "高三(7)班.xlsx"]);
+    expect(mocks.downloadBytes).toHaveBeenCalledWith(
+      mocks.buildZip.mock.results[0]?.value,
+      "分班文件.zip",
+      ZIP_MIME,
+    );
+  });
+
+  it("下载「分考场文件（ZIP）」：每个考场一套座位一个 xlsx", async () => {
+    const container = mountMulti();
+    await settle();
+    const { planAll } = useResultStore();
+    const { job } = useExamJob();
+    mocks.buildInvigilatorSheets.mockReturnValue([
+      fakeSheet("第三考场（语数外物化）"),
+      fakeSheet("第二十考场（政治）"),
+    ]);
+
+    buttonByText(container, "下载分考场文件（ZIP）").click();
+    await nextTick();
+
+    expect(mocks.buildInvigilatorSheets).toHaveBeenCalledWith(planAll, job.value.rooms);
+    expect(mocks.buildXlsx).toHaveBeenCalledTimes(2);
+    const [files] = mocks.buildZip.mock.calls[0]!;
+    expect(files.map((file) => file.name)).toEqual([
+      "第三考场（语数外物化）.xlsx",
+      "第二十考场（政治）.xlsx",
+    ]);
+    expect(mocks.downloadBytes).toHaveBeenCalledWith(
+      mocks.buildZip.mock.results[0]?.value,
+      "分考场文件.zip",
+      ZIP_MIME,
     );
   });
 
@@ -561,6 +713,26 @@ describe("第 ⑥ 步结果页：多场次 / 单场", () => {
     expect(mocks.downloadBytes).toHaveBeenCalledWith(
       expect.any(Uint8Array),
       "排考场-考场安排名单.xlsx",
+      XLSX_MIME,
+    );
+  });
+
+  it("单场导出「考场座位表.xlsx」：layout 回调带上考场形状与加座列", async () => {
+    const { container } = mountSingle();
+    await settle();
+    buttonByText(container, "导出 考场座位表.xlsx").click();
+    await nextTick();
+
+    expect(mocks.buildRoomSheets).toHaveBeenCalledTimes(1);
+    const [passedResult, layout] = mocks.buildRoomSheets.mock.calls[0] as [
+      PlanResult,
+      (roomId: string) => { rows: number; cols: number; name: string; extraFrontSeats?: number[] },
+    ];
+    expect(passedResult).toBe(useResultStore().result);
+    expect(layout("R3")).toEqual({ rows: 6, cols: 7, name: "第三考场" });
+    expect(mocks.downloadBytes).toHaveBeenCalledWith(
+      mocks.buildRoomSheets.mock.results[0]?.value,
+      "考场座位表.xlsx",
       XLSX_MIME,
     );
   });

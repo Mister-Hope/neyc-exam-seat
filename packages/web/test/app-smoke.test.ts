@@ -1,4 +1,3 @@
-import ElementPlus from "element-plus";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp, h, nextTick } from "vue";
@@ -7,7 +6,7 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import App from "@/App.vue";
 import { STEPS } from "@/router";
 
-/** 渲染冒烟测试：六个步骤页各挂载一次，保证模板真能跑通。 jsdom 缺 ResizeObserver，Element Plus 的表格/下拉会用到，这里补一个最小实现。 */
+/** 渲染冒烟测试：六个步骤页各挂载一次，保证模板真能跑通。 jsdom 缺 ResizeObserver，预留一个最小 stub（部分组件/浏览器 API 会探测它）。 */
 class ResizeObserverStub {
   observe = (): void => {};
   unobserve = (): void => {};
@@ -37,7 +36,6 @@ describe("六个步骤页挂载冒烟", () => {
     setActivePinia(createPinia());
     app.use(createPinia());
     app.use(router);
-    app.use(ElementPlus);
     app.mount(container);
     await nextTick();
     await nextTick();

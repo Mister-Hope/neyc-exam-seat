@@ -1,4 +1,3 @@
-import ElementPlus from "element-plus";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp, h, nextTick } from "vue";
@@ -73,13 +72,12 @@ async function mountExclude(students: Student[]) {
   const app = createApp({ render: () => h(StepExclude) });
   app.use(pinia);
   app.use(router);
-  app.use(ElementPlus);
   app.mount(container);
   await flush();
   return { app, container, roster };
 }
 
-/** 直接给 el-upload 的 file input 塞一个真文件，触发页面上的导入逻辑。 */
+/** 直接给隐藏的 file input 塞一个真文件，触发页面上的导入逻辑。 */
 async function uploadAbsent(container: HTMLElement, name: string, bytes: Uint8Array) {
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   expect(input).not.toBeNull();

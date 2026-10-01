@@ -1,7 +1,12 @@
+import { inflateRawSync } from "node:zlib";
+
 import { describe, expect, it } from "vitest";
 
 import {
   assignmentText,
+  buildBorrowingRows,
+  buildClassFilesZip,
+  buildInvigilatorFilesZip,
   buildScheduleTable,
   buildSeatingChecks,
   buildSeatingOverview,
@@ -11,7 +16,9 @@ import {
   collectSeatingUnmet,
   countChangedStudents,
   filterScheduleRows,
-  makeRoomLookup,
+  makeRoomLayout,
+  relaxedRoomLabels,
+  safeExportFileName,
 } from "@/lib/session-export";
 import type {
   PlanAllResult,
@@ -21,6 +28,7 @@ import type {
   StudentSchedule,
   TimeSlot,
 } from "@exam-seat/core";
+import { buildClassScheduleSheets, buildInvigilatorSheets, readWorkbook } from "@exam-seat/io";
 
 /* ------------------------------------------------------------------ */
 /* 夹具                                                                */
@@ -408,6 +416,8 @@ describe("collectMultiDiagnostics 纯函数", () => {
       byStudent: [],
       emptyRooms: [],
       overRoomLimit: [],
+      relaxedRooms: [],
+      borrowings: [],
       diagnostics: [duplicate],
       unmetConstraints: [],
     };
@@ -420,7 +430,130 @@ describe("collectMultiDiagnostics 纯函数", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 人数统计 / roomLookup                                                */
+/* 借考 / 放宽 / 座位表 layout                                          */
+/* ------------------------------------------------------------------ */
+
+describe("借考与放宽（本轮新增）", () => {
+  const s2 = schedule({
+    studentId: "S2",
+    name: "李娜",
+    className: "高三(7)班",
+    slots: {
+      T1: {
+        subject: "chinese",
+        subjectLabel: "语文",
+        roomId: "R3",
+        roomName: "第三考场",
+        seatNo: 5,
+      },
+      T6: {
+        subject: "politics",
+        subjectLabel: "政治",
+        roomId: "R20",
+        roomName: "第二十考场",
+        seatNo: 12,
+      },
+    },
+    distinctRooms: 2,
+  });
+
+  function planAll(): PlanAllResult {
+    return {
+      ok: true,
+      slots: SLOTS,
+      seatings: [
+        seating({
+          roomId: "R3",
+          roomName: "第三考场",
+          subjects: ["chinese", "math"],
+          studentIds: ["S2"],
+          relaxedSameClass: true,
+        }),
+        seating({
+          roomId: "R20",
+          roomName: "第二十考场",
+          subjects: ["politics"],
+          studentIds: ["S2"],
+          borrowedSubjects: { S2: ["politics"] },
+        }),
+      ],
+      byStudent: [s2],
+      emptyRooms: [],
+      overRoomLimit: [],
+      relaxedRooms: ["R3"],
+      borrowings: [
+        {
+          studentId: "S2",
+          name: "李娜",
+          className: "高三(7)班",
+          subject: "biology",
+          subjectLabel: "生物",
+          roomId: "R99",
+          roomName: "第九十九考场",
+          seatNo: 3,
+        },
+        {
+          studentId: "S2",
+          name: "李娜",
+          className: "高三(7)班",
+          subject: "politics",
+          subjectLabel: "",
+          roomId: "R20",
+          roomName: "第二十考场",
+          seatNo: 12,
+        },
+      ],
+      diagnostics: [],
+      unmetConstraints: [],
+    };
+  }
+
+  it("座位方案概览带出「已放宽」与借考人数", () => {
+    const rows = buildSeatingOverview(planAll().seatings);
+    expect(rows[0]).toMatchObject({ relaxed: true, borrowedCount: 0 });
+    expect(rows[1]).toMatchObject({ relaxed: false, borrowedCount: 1 });
+  });
+
+  it("借考明细按考场顺序排序，并从时刻表补出时段名", () => {
+    const rows = buildBorrowingRows(planAll());
+    expect(rows).toHaveLength(2);
+    // R20 在 seatings 里的顺序在前 → 排在前面（R99 不在 seatings 里，排最后）
+    expect(rows.map((row) => row.roomName)).toEqual(["第二十考场", "第九十九考场"]);
+    expect(rows[0]).toMatchObject({
+      slotId: "T6",
+      slotName: "T6 生物/政治",
+      subject: "politics",
+      subjectLabel: "政治",
+      seatNo: 12,
+    });
+    // 冷门科目名兜底 + 找不到时段时给破折号
+    expect(rows[1]).toMatchObject({ slotId: "", slotName: "—", subjectLabel: "生物" });
+    expect(buildBorrowingRows(null)).toEqual([]);
+  });
+
+  it("放宽考场标签按 relaxedRooms 顺序并用考场名", () => {
+    expect(relaxedRoomLabels(planAll())).toEqual([{ roomId: "R3", roomName: "第三考场" }]);
+    expect(relaxedRoomLabels(planAll(), new Map([["R3", "备用名"]]))).toEqual([
+      { roomId: "R3", roomName: "第三考场" },
+    ]);
+    expect(relaxedRoomLabels(null)).toEqual([]);
+  });
+
+  it("makeRoomLayout 带上加座列，缺省时不加 extraFrontSeats 字段", () => {
+    const rooms: RoomSpec[] = [
+      { id: "R1", name: "第一考场", rows: 7, cols: 5, extraFrontSeats: [2, 4] },
+      { id: "R2", rows: 6, cols: 5 },
+    ];
+    const layout = makeRoomLayout(rooms);
+    expect(layout("R1")).toEqual({ rows: 7, cols: 5, name: "第一考场", extraFrontSeats: [2, 4] });
+    // 缺省 name 用 id；纯矩形不写 extraFrontSeats（io 侧行为与旧版一致）
+    expect(layout("R2")).toEqual({ rows: 6, cols: 5, name: "R2" });
+    expect(layout("R404")).toEqual({ rows: 0, cols: 0, name: "R404" });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 人数统计                                                             */
 /* ------------------------------------------------------------------ */
 
 describe("换考场人数统计", () => {
@@ -442,20 +575,240 @@ describe("换考场人数统计", () => {
   });
 });
 
-describe("makeRoomLookup 纯函数", () => {
-  const rooms: RoomSpec[] = [
-    { id: "R1", name: "第一考场", rows: 6, cols: 7, location: "高二一班", note: "张老师" },
-    { id: "R2", name: "第二考场", rows: 5, cols: 6 },
-  ];
+/* ------------------------------------------------------------------ */
+/* 分班 / 分考场整包（ZIP）                                             */
+/* ------------------------------------------------------------------ */
 
-  it("按考场 id 取地点与监考", () => {
-    const lookup = makeRoomLookup(rooms);
-    expect(lookup("R1")).toEqual({ location: "高二一班", note: "张老师" });
-    expect(lookup("R2")).toEqual({ location: undefined, note: undefined });
-    expect(lookup("R404")).toBeUndefined();
+interface ZipEntry {
+  name: string;
+  bytes: Uint8Array;
+}
+
+/**
+ * 极简 ZIP 读取器：中央目录 + 压缩方式 0（stored）/ 8（deflate）。
+ *
+ * 只给测试用——验证 io 的 `buildZip` 产物真能被解开、条目名和内容都对。
+ */
+function readZip(bytes: Uint8Array): ZipEntry[] {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= 0; i -= 1) {
+    if (view.getUint32(i, true) === 0x06_05_4b_50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("不是合法的 ZIP：找不到中央目录结束记录");
+  const count = view.getUint16(eocd + 10, true);
+  let offset = view.getUint32(eocd + 16, true);
+
+  const entries: ZipEntry[] = [];
+  for (let i = 0; i < count; i += 1) {
+    if (view.getUint32(offset, true) !== 0x02_01_4b_50) throw new Error("ZIP 中央目录损坏");
+    const method = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    const name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
+
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const raw = bytes.subarray(dataStart, dataStart + compressedSize);
+    const content = method === 0 ? raw : new Uint8Array(inflateRawSync(raw));
+    entries.push({ name, bytes: new Uint8Array(content) });
+
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+const EXPORT_ROOMS: RoomSpec[] = [
+  { id: "R1", name: "第一考场", rows: 6, cols: 5, location: "高二一班", note: "张老师" },
+  { id: "R20", name: "第二十考场", rows: 5, cols: 5, location: "生物实验室", note: "王老师" },
+];
+
+/** 两个班、两套座位方案（含一次借考）的多场次结果。 */
+function exportPlanAll(): PlanAllResult {
+  const zhang: StudentSchedule = schedule({
+    studentId: "S1",
+    name: "张伟",
+    className: "高三(1)班",
+    combination: "物化生",
+    distinctRooms: 1,
+    slots: {
+      T1: {
+        subject: "chinese",
+        subjectLabel: "语文",
+        roomId: "R1",
+        roomName: "第一考场",
+        seatNo: 1,
+      },
+      T2: {
+        subject: "math",
+        subjectLabel: "数学",
+        roomId: "R1",
+        roomName: "第一考场",
+        seatNo: 1,
+      },
+      T6: {
+        subject: "biology",
+        subjectLabel: "生物",
+        roomId: "R1",
+        roomName: "第一考场",
+        seatNo: 1,
+      },
+    },
+    rooms: [{ roomId: "R1", roomName: "第一考场", subjects: ["chinese", "math", "biology"] }],
+  });
+  const li: StudentSchedule = schedule({
+    studentId: "S2",
+    name: "李娜",
+    className: "高三(7)班",
+    combination: "物化政",
+    distinctRooms: 2,
+    slots: {
+      T1: {
+        subject: "chinese",
+        subjectLabel: "语文",
+        roomId: "R1",
+        roomName: "第一考场",
+        seatNo: 2,
+      },
+      T2: {
+        subject: "math",
+        subjectLabel: "数学",
+        roomId: "R1",
+        roomName: "第一考场",
+        seatNo: 2,
+      },
+      T6: {
+        subject: "politics",
+        subjectLabel: "政治",
+        roomId: "R20",
+        roomName: "第二十考场",
+        seatNo: 3,
+      },
+    },
+    rooms: [
+      { roomId: "R1", roomName: "第一考场", subjects: ["chinese", "math"] },
+      { roomId: "R20", roomName: "第二十考场", subjects: ["politics"] },
+    ],
   });
 
-  it("空配置也不炸", () => {
-    expect(makeRoomLookup([])("R1")).toBeUndefined();
+  return {
+    ok: true,
+    slots: SLOTS,
+    seatings: [
+      seating({
+        roomId: "R1",
+        roomName: "第一考场",
+        subjects: ["chinese", "math", "biology"],
+        studentIds: ["S1", "S2"],
+        seatNoById: { S1: 1, S2: 2 },
+        studentBySeatNo: { 1: "S1", 2: "S2" },
+        location: "高二一班",
+        note: "张老师",
+      }),
+      seating({
+        roomId: "R20",
+        roomName: "第二十考场",
+        subjects: ["politics"],
+        studentIds: ["S2"],
+        seatNoById: { S2: 3 },
+        studentBySeatNo: { 3: "S2" },
+        location: "生物实验室",
+        note: "王老师",
+        borrowedSubjects: { S2: ["politics"] },
+      }),
+    ],
+    byStudent: [zhang, li],
+    emptyRooms: [],
+    overRoomLimit: [],
+    relaxedRooms: [],
+    borrowings: [],
+    diagnostics: [],
+    unmetConstraints: [],
+  };
+}
+
+describe("safeExportFileName 纯函数", () => {
+  it("路径分隔符与 Windows 禁用字符换成 -", () => {
+    expect(safeExportFileName("高三(1)班/第一考场")).toBe("高三(1)班-第一考场");
+    expect(safeExportFileName(String.raw`a\b:c*d?e"f<g>h|i`)).toBe("a-b-c-d-e-f-g-h-i");
+  });
+
+  it("正常名原样保留，空名退回 fallback", () => {
+    expect(safeExportFileName("第一考场（语数外物化生）")).toBe("第一考场（语数外物化生）");
+    expect(safeExportFileName("   ")).toBe("sheet");
+    expect(safeExportFileName("", "班")).toBe("班");
+  });
+});
+
+describe("分班 / 分考场整包（真实 io 往返）", () => {
+  it("buildClassFilesZip：总表 + 每班一张，各自一个 xlsx，ZIP 能解开", () => {
+    const result = exportPlanAll();
+    const sheets = buildClassScheduleSheets(result, EXPORT_ROOMS);
+    const entries = readZip(buildClassFilesZip(result, EXPORT_ROOMS));
+
+    expect(sheets.length).toBeGreaterThan(1); // 总表 + 至少一个班
+    // 文件名就是 sheet 名 + .xlsx：总表 + 每个班一个
+    expect(entries.map((entry) => entry.name)).toEqual([
+      "总表.xlsx",
+      "高三(1)班.xlsx",
+      "高三(7)班.xlsx",
+    ]);
+    expect(entries.map((entry) => entry.name)).toEqual(
+      sheets.map((sheet) => `${safeExportFileName(sheet.name)}.xlsx`),
+    );
+
+    // 每个文件都是一个单表工作簿，且能被 SheetJS 读回来
+    for (const entry of entries) {
+      const back = readWorkbook(entry.bytes);
+      expect(back).toHaveLength(1);
+      expect(back[0]!.name.length).toBeGreaterThan(0);
+    }
+    // 单班文件里带着本轮新增的准考证号列（表头在第 3 行，前面是标题与汇总行）
+    const classOne = readWorkbook(entries[1]!.bytes)[0]!;
+    const classOneRows = [classOne.headers, ...classOne.rows];
+    expect(classOneRows.some((row) => row.includes("准考证号"))).toBe(true);
+    expect(classOne.rows.some((row) => row.includes("S1"))).toBe(true);
+  });
+
+  it("buildInvigilatorFilesZip：每个考场一套座位一个文件", () => {
+    const result = exportPlanAll();
+    const sheets = buildInvigilatorSheets(result, EXPORT_ROOMS);
+    const entries = readZip(buildInvigilatorFilesZip(result, EXPORT_ROOMS));
+
+    expect(entries.map((entry) => entry.name)).toEqual([
+      "第一考场（语数生）.xlsx",
+      "第二十考场（政治）.xlsx",
+    ]);
+    expect(entries.map((entry) => entry.name)).toEqual(
+      sheets.map((sheet) => `${safeExportFileName(sheet.name)}.xlsx`),
+    );
+
+    for (const entry of entries) {
+      const back = readWorkbook(entry.bytes);
+      expect(back).toHaveLength(1);
+      expect(back[0]!.name.length).toBeLessThanOrEqual(31);
+    }
+    // 表头含准考证号列；借考学生在备注里写明时段 + 科目
+    const politics = readWorkbook(entries[1]!.bytes)[0]!;
+    const politicsRows = [politics.headers, ...politics.rows];
+    expect(
+      politicsRows.some((row) => row.join("|").includes("座位号|班级|姓名|准考证号|备注")),
+    ).toBe(true);
+    expect(politics.rows.some((row) => row[4]?.includes("借考（T6 生物/政治 政治）"))).toBe(true);
+  });
+
+  it("工作表名里的禁用字符不会漏进 ZIP 条目名", () => {
+    const result = exportPlanAll();
+    const entries = readZip(buildClassFilesZip(result, EXPORT_ROOMS));
+    for (const entry of entries) {
+      expect(entry.name).not.toMatch(/[/\\:*?"<>|]/);
+    }
   });
 });

@@ -1,3 +1,33 @@
+import type { RoomSpec } from "./types";
+
+/**
+ * 这个考场是否放宽了「同班相邻」（`RoomSpec.relaxSameClass`，见 `docs/design.md` §5.8.1）。
+ *
+ * 只有显式写了 `true` 或数字才算放宽；`false` / 缺省 / `null` 都按原规则处理。
+ */
+export function isSameClassRelaxed(room: Pick<RoomSpec, "relaxSameClass">): boolean {
+  return room.relaxSameClass !== undefined && room.relaxSameClass !== false;
+}
+
+/**
+ * 放宽后这个考场「同班学生数」的有效上限。
+ *
+ * - 没放宽 → `fallback`（通常是按真实座位图算出来的 `maxSameClass`）
+ * - `true` → 座位数（等于完全放开）
+ * - 数字 n → `min(n, 座位数)`；n 不合法（NaN / < 1）时退回 `fallback`
+ */
+export function relaxedClassLimit(
+  room: Pick<RoomSpec, "relaxSameClass">,
+  fallback: number,
+  capacity: number,
+): number {
+  const relax = room.relaxSameClass;
+  if (relax === undefined || relax === false) return fallback;
+  if (relax === true) return capacity;
+  if (typeof relax !== "number" || !Number.isFinite(relax)) return fallback;
+  return Math.max(1, Math.min(Math.floor(relax), capacity));
+}
+
 /** 稳定序列化：对象键排序，保证同输入得到同字符串。 */
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortValue(value));

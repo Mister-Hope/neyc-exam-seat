@@ -8,6 +8,7 @@
 
 /** 时段排序用的展示顺序：语文、数学、外语、物理、历史、化学、生物、政治、地理 */
 import { CORE_SUBJECTS } from "./subjects";
+import type { PlanSlotSpec } from "./types";
 
 const SLOT_DISPLAY_ORDER = [
   "chinese",
@@ -72,10 +73,22 @@ function orderIndex(subject: string): number {
 export function deriveTimeSlots(
   combinations: readonly (readonly string[])[],
   coreSubjects: readonly string[] = CORE_SUBJECTS,
+  forbiddenSameSlot: readonly (readonly string[])[] = [],
 ): TimeSlot[] {
   const fullSets = combinations.map((combo) => [...coreSubjects, ...combo]);
   const adjacency = buildConflictGraph(fullSets);
   if (adjacency.size === 0) return [];
+
+  // 老师手工补的「必须分开」科目对：并进冲突图再着色（两边都得真实存在）
+  for (const pair of forbiddenSameSlot) {
+    const [a, b] = pair;
+    if (a == null || b == null || a === b) continue;
+    const setA = adjacency.get(a);
+    const setB = adjacency.get(b);
+    if (!setA || !setB) continue;
+    setA.add(b);
+    setB.add(a);
+  }
 
   const colorOf = new Map<string, number>();
   const remaining = new Set(adjacency.keys());
@@ -134,6 +147,33 @@ export function deriveTimeSlots(
     name: `第${index + 1}时段`,
     subjects: entry.subjects,
   }));
+}
+
+/**
+ * 把 job 里手写的显式时段表规范化：id / name 缺省时按顺序补齐，科目去重、去空。
+ *
+ * 老师按考务表填死时段（`docs/design.md` §5.8.3）时用它；时序语义完全由这张表决定， 校核（同一学生同一时段两科）由调用方用 {@link findSlotConflicts}
+ * 做。
+ */
+export function normalizeSlots(specs: readonly PlanSlotSpec[]): TimeSlot[] {
+  return specs.map((spec, index) => ({
+    id: emptyToUndefined(spec.id) ?? `T${index + 1}`,
+    name: emptyToUndefined(spec.name) ?? `第${index + 1}时段`,
+    subjects: [
+      ...new Set(
+        (spec.subjects ?? [])
+          .filter((subject): subject is string => typeof subject === "string")
+          .map((subject) => subject.trim())
+          .filter((subject) => subject !== ""),
+      ),
+    ],
+  }));
+}
+
+/** 空串 / 全空白按「没写」处理（老师手填 job 时很常见）。 */
+function emptyToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
 }
 
 /** 校验：同一个学生在同一个时段里是否被安排了两场考试。返回冲突描述。 */

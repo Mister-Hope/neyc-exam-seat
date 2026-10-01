@@ -1,12 +1,10 @@
 import * as XLSX from "xlsx";
 
-import {
-  parseCombination,
-  subjectLabel,
-  subjectListLabel,
-  validateSelection,
-} from "@exam-seat/core";
+import { parseCombination, seatNoToRCIn, validateSelection } from "@exam-seat/core";
 import type { PlanAllResult, PlanResult, RoomSpec, Student } from "@exam-seat/core";
+
+/** 带样式的极小 xlsx 写出器（`buildXlsx` / `buildZip` / `planColumnWidths` / `fitToA4Landscape`）。 */
+export * from "./xlsx";
 
 export interface SheetData {
   name: string;
@@ -615,10 +613,24 @@ export function buildPlanWorkbook(result: PlanResult, jobTitle?: string): Uint8A
   ]);
 }
 
-/** 逐考场一张表：按真实桌面网格排布，方便贴门口。 `seatNoToRC` 由调用方注入，避免 io 依赖 core 的运行时。 */
+/** 座位表里单个考场的网格形状；`extraFrontSeats` 缺省 = 纯矩形。 */
+export interface RoomSheetLayout {
+  rows: number;
+  cols: number;
+  name: string;
+  /** 讲台一侧加座所在业务列（从靠门侧起算），例如 `[2, 4]`；缺省 = 纯矩形。 */
+  extraFrontSeats?: number[];
+}
+
+/**
+ * 逐考场一张表：按真实桌面网格排布，方便贴门口。
+ *
+ * 有加座（`extraFrontSeats`）时在网格最上面多画一行「加座」，加座画在对应业务列；行 / 列都用 core 的编号函数算， 不在这里重写蛇形。`layout` 回调返回值新增的
+ * `extraFrontSeats` 是可选字段，缺省时行为与纯矩形完全一致。
+ */
 export function buildRoomSheets(
   result: PlanResult,
-  layout: (roomId: string) => { rows: number; cols: number; name: string },
+  layout: (roomId: string) => RoomSheetLayout,
 ): Uint8Array {
   const byRoom = new Map<string, Map<number, PlanResult["entries"][number]>>();
   for (const e of result.entries) {
@@ -630,22 +642,26 @@ export function buildRoomSheets(
   const sheets: { name: string; ws: XLSX.WorkSheet }[] = [];
   for (const [roomId, seats] of byRoom) {
     const info = layout(roomId);
-    const rows: (string | number)[][] = [];
-    for (let col = 1; col <= info.cols; col += 1) {
-      const header: (string | number)[] = [`第${col}列`];
-      for (let row = 1; row <= info.rows; row += 1) {
-        void row;
-        header.push("");
-      }
-      rows.push(header);
-    }
+    // 去重 + 越界过滤，避免 layout 回调给脏数据时把网格画歪
+    const extra = [...new Set(info.extraFrontSeats)]
+      .filter((col) => Number.isInteger(col) && col >= 1 && col <= info.cols)
+      .sort((a, b) => a - b);
+    const roomSpec: RoomSpec = {
+      id: roomId,
+      rows: info.rows,
+      cols: info.cols,
+      extraFrontSeats: extra,
+    };
+    // 有加座时网格顶部多一行「加座」（加座的行号是 0，第 1 排之前）
+    const extraRow = extra.length > 0 ? 1 : 0;
     // 用「行 × 业务列」的网格；业务列 1 = 靠门列
-    const grid: string[][] = Array.from({ length: info.rows }, () =>
+    const grid: string[][] = Array.from({ length: info.rows + extraRow }, () =>
       Array.from({ length: info.cols }, () => ""),
     );
     for (const e of seats.values()) {
-      const r = e.row - 1;
-      const c = e.col - 1;
+      const { row, col } = seatNoToRCIn(roomSpec, e.seatNo);
+      const r = row === 0 ? 0 : row - 1 + extraRow;
+      const c = col - 1;
       if (grid[r] && grid[r][c] !== undefined) {
         grid[r][c] = `${e.studentId}\n${e.name}\n${e.className}`;
       }
@@ -653,12 +669,13 @@ export function buildRoomSheets(
     const aoa: (string | number)[][] = [
       ["", ...Array.from({ length: info.cols }, (_, i) => `第${i + 1}列`)],
     ];
+    if (extraRow === 1) aoa.push(["加座", ...grid[0]!]);
     for (let r = 0; r < info.rows; r += 1) {
-      aoa.push([`第${r + 1}排`, ...grid[r]!]);
+      aoa.push([`第${r + 1}排`, ...grid[r + extraRow]!]);
     }
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = [{ wch: 8 }, ...Array.from({ length: info.cols }, () => ({ wch: 18 }))];
-    ws["!rows"] = Array.from({ length: info.rows + 1 }, () => ({ hpt: 42 }));
+    ws["!rows"] = Array.from({ length: info.rows + extraRow + 1 }, () => ({ hpt: 42 }));
     sheets.push({ name: info.name.slice(0, 28), ws });
   }
 
@@ -712,149 +729,5 @@ export function pruneEmptyRooms<T extends { rooms?: RoomSpec[] }>(
   return { job: { ...job, rooms: kept }, removed };
 }
 
-/* ------------------------------------------------------------------ */
-/* 多场次（选科）输出                                                   */
-/* ------------------------------------------------------------------ */
-
-/** Excel 工作表名上限 31 字符，且不能含这些符号 */
-function safeSheetName(name: string): string {
-  const cleaned = name.replaceAll(/[[\]:*?/\\]/g, "-").trim() || "Sheet";
-  return cleaned.length > 31 ? cleaned.slice(0, 31) : cleaned;
-}
-
-/** 单个科目用全名（「政治」），多个科目用简称拼（「语数外物化生」） */
-function roomSubjectsLabel(subjects: readonly string[]): string {
-  if (subjects.length === 1) return subjectLabel(subjects[0]!);
-  return subjectListLabel(subjects);
-}
-
-function seatingTitle(roomName: string, subjects: readonly string[]): string {
-  const label = roomSubjectsLabel(subjects);
-  return label ? `${roomName}（${label}）` : roomName;
-}
-
-/**
- * 输出 A：按班级。
- *
- * 列：班级 | 姓名 | 考场① | 考场② | 考场③ 每个单元格写成「考场名（这个学生在该考场考的科目）」。 ②③列只对**需要换考场**的人有值 —— 班主任一眼能看到本班谁要换、换去哪。
- * 全年级没人用到第③列时，不输出该列。
- */
-export function buildClassScheduleRows(result: PlanAllResult): {
-  rows: (string | number)[][];
-  headers: string[];
-} {
-  const maxRooms = Math.max(1, ...result.byStudent.map((s) => s.rooms.length));
-  const roomHeaders = ["考场①", "考场②", "考场③"].slice(0, Math.max(maxRooms, 1));
-  // 超过 3 列（不该发生）时补足列名
-  while (roomHeaders.length < maxRooms) roomHeaders.push(`考场${roomHeaders.length + 1}`);
-
-  const headers = ["班级", "姓名", ...roomHeaders];
-
-  const sorted = [...result.byStudent].sort(
-    (a, b) =>
-      a.className.localeCompare(b.className, "zh") || a.studentId.localeCompare(b.studentId),
-  );
-
-  const rows: (string | number)[][] = [];
-  let currentClass = "";
-  for (const student of sorted) {
-    const cells = student.rooms.map(
-      (room) => `${room.roomName}（${roomSubjectsLabel(room.subjects)}）`,
-    );
-    while (cells.length < roomHeaders.length) cells.push("");
-    // 班级列只在换班时写一次，表格更好读
-    const className = student.className === currentClass ? "" : student.className;
-    currentClass = student.className;
-    rows.push([className, student.name, ...cells]);
-  }
-
-  return { rows, headers };
-}
-
-/** 输出 A 的完整工作簿 */
-export function buildClassScheduleWorkbook(result: PlanAllResult): Uint8Array {
-  const { rows, headers } = buildClassScheduleRows(result);
-  const aoa = [headers, ...rows];
-
-  // 表尾附「各班需要换考场的人数」，班主任最关心这个
-  const perClass = new Map<string, number>();
-  for (const student of result.byStudent) {
-    if (student.distinctRooms <= 1) continue;
-    perClass.set(student.className, (perClass.get(student.className) ?? 0) + 1);
-  }
-  aoa.push([]);
-  aoa.push(["班级", "需要换考场的人数"]);
-  for (const [className, count] of [...perClass.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0], "zh"),
-  )) {
-    aoa.push([className, count]);
-  }
-
-  const ws = sheetFromRows(aoa, [14, 12, 28, 22, 22]);
-  return writeWorkbook([{ name: "按班级考场安排", ws }]);
-}
-
-export interface InvigilatorSheet {
-  /** 工作表名，等于「考场名（科目）」 */
-  name: string;
-  /** 表头三行 + 正文 */
-  rows: (string | number)[][];
-}
-
-/**
- * 输出 B：按考场（给监考老师）。
- *
- * 一张表 = 一套座位 = 「考场 × 同一批考生的科目」。 常规考场（同组合）只会出一张，例如「第一考场（语数外物化生）」；
- * 某个考场混了组合时会拆成「第一考场（语数外物化）」+「第一考场（生物）」。
- */
-export function buildInvigilatorSheets(
-  result: PlanAllResult,
-  roomLookup?: (roomId: string) => { location?: string; note?: string } | undefined,
-): InvigilatorSheet[] {
-  const byId = new Map(result.byStudent.map((s) => [s.studentId, s]));
-  return result.seatings.map((seating) => {
-    const title = seatingTitle(seating.roomName, seating.subjects);
-    const meta = roomLookup?.(seating.roomId);
-    const rows: (string | number)[][] = [
-      [title],
-      [
-        `地点：${seating.location ?? meta?.location ?? "—"}`,
-        "",
-        `监考：${seating.note ?? meta?.note ?? "—"}`,
-      ],
-      [],
-      ["座位号", "班级", "姓名"],
-    ];
-
-    const entries = Object.entries(seating.seatNoById)
-      .map(([studentId, seatNo]) => ({ studentId, seatNo }))
-      .sort((a, b) => a.seatNo - b.seatNo);
-    for (const { studentId, seatNo } of entries) {
-      const student = byId.get(studentId);
-      rows.push([seatNo, student?.className ?? "", student?.name ?? studentId]);
-    }
-    return { name: safeSheetName(title), rows };
-  });
-}
-
-/** 输出 B 的完整工作簿（每个考场一套座位一张表） */
-export function buildInvigilatorWorkbook(
-  result: PlanAllResult,
-  roomLookup?: (roomId: string) => { location?: string; note?: string } | undefined,
-): Uint8Array {
-  const sheets = buildInvigilatorSheets(result, roomLookup);
-  if (sheets.length === 0) {
-    return writeWorkbook([
-      {
-        name: "无安排",
-        ws: XLSX.utils.aoa_to_sheet([["本次没有任何考场安排"]]),
-      },
-    ]);
-  }
-  return writeWorkbook(
-    sheets.map((sheet) => ({
-      name: sheet.name,
-      ws: sheetFromRows(sheet.rows, [10, 16, 14]),
-    })),
-  );
-}
+/** 多场次两套导出表（`buildClassScheduleSheets` / `buildInvigilatorSheets` 等）。 */
+export * from "./schedule-export";

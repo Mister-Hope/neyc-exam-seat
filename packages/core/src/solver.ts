@@ -1,7 +1,7 @@
 import type { StudentDomain } from "./domain";
 import type { CompiledModel } from "./model";
 import type { Adjacency, Conflict, RelaxMode } from "./types";
-import { mulberry32 } from "./util";
+import { isSameClassRelaxed, mulberry32 } from "./util";
 
 export interface SolveInput {
   model: CompiledModel;
@@ -41,6 +41,13 @@ export function solve(input: SolveInput): SolveOutput {
 
   const studentAtSeat = new Int32Array(seatCount).fill(-1);
   const seatOfStudent = new Int32Array(nStudents).fill(-1);
+
+  // 放宽了「同班相邻」的考场：这些座位上的同班相邻不算冲突（`docs/design.md` §5.8.1）
+  const seatRelaxed = new Uint8Array(seatCount);
+  for (const room of model.rooms) {
+    if (!isSameClassRelaxed(room.spec)) continue;
+    for (let s = room.firstSeat; s < room.firstSeat + room.seatCount; s += 1) seatRelaxed[s] = 1;
+  }
 
   const rng = mulberry32(seed);
   const strict = relax === "none";
@@ -85,6 +92,7 @@ export function solve(input: SolveInput): SolveOutput {
   };
 
   const sameClassNeighborCount = (student: number, seat: number): number => {
+    if (seatRelaxed[seat] === 1) return 0;
     const cls = model.classOfStudent[student]!;
     let count = 0;
     const end = model.neighborStart[seat + 1]!;
@@ -221,6 +229,7 @@ export function solve(input: SolveInput): SolveOutput {
     let pairs = 0;
     for (let i = 0; i < affectedLen; i += 1) {
       const a = affected[i]!;
+      if (seatRelaxed[a] === 1) continue;
       const ua = studentAtSeat[a]!;
       if (ua < 0) continue;
       const ca = model.classOfStudent[ua]!;
@@ -237,6 +246,7 @@ export function solve(input: SolveInput): SolveOutput {
   };
 
   const seatConflictCount = (seat: number): number => {
+    if (seatRelaxed[seat] === 1) return 0;
     const u = studentAtSeat[seat]!;
     if (u < 0) return 0;
     const cls = model.classOfStudent[u]!;
@@ -252,6 +262,7 @@ export function solve(input: SolveInput): SolveOutput {
   const countAllConflicts = (): number => {
     let pairs = 0;
     for (let s = 0; s < seatCount; s += 1) {
+      if (seatRelaxed[s] === 1) continue;
       const u = studentAtSeat[s]!;
       if (u < 0) continue;
       const cls = model.classOfStudent[u]!;
@@ -430,10 +441,12 @@ export function solve(input: SolveInput): SolveOutput {
   };
 }
 
-/** 枚举所有相邻同班座位对。 */
+/** 枚举所有相邻同班座位对。放宽了「同班相邻」的考场跳过（那边本来就允许同班相邻）。 */
 export function collectConflicts(model: CompiledModel, studentAtSeat: Int32Array): Conflict[] {
   const out: Conflict[] = [];
   for (let s = 0; s < model.seatCount; s += 1) {
+    const room = model.rooms[model.seatRoom[s]!]!;
+    if (isSameClassRelaxed(room.spec)) continue;
     const u = studentAtSeat[s]!;
     if (u < 0) continue;
     const cls = model.classOfStudent[u]!;
@@ -445,7 +458,6 @@ export function collectConflicts(model: CompiledModel, studentAtSeat: Int32Array
       const v = studentAtSeat[t]!;
       if (v < 0) continue;
       if (model.classOfStudent[v] !== cls) continue;
-      const room = model.rooms[model.seatRoom[s]!]!;
       out.push({
         roomId: room.spec.id,
         seatA: model.seatNo[s]!,

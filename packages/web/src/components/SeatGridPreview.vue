@@ -2,7 +2,7 @@
 import { computed } from "vue";
 
 import { buildSeatGrid } from "@/lib/seat-grid";
-import type { SeatOccupant } from "@/lib/seat-grid";
+import type { SeatCell, SeatOccupant } from "@/lib/seat-grid";
 import { roomCapacity } from "@exam-seat/core";
 import type { RoomSpec } from "@exam-seat/core";
 
@@ -26,6 +26,8 @@ const props = withDefaults(
 const grid = computed(() => buildSeatGrid(props.room));
 const capacity = computed(() => roomCapacity(props.room));
 
+const extraCount = computed(() => grid.value.frontCells.filter((cell) => cell != null).length);
+
 const template = computed(() => {
   const width = props.compact ? "34px" : "52px";
   return `auto repeat(${grid.value.cols}, minmax(${width}, 1fr))`;
@@ -39,7 +41,12 @@ function isHighlighted(row: number, physicalCol: number): boolean {
 }
 
 function occupantOf(seatNo: number): SeatOccupant | undefined {
+  if (seatNo < 1) return undefined;
   return props.occupants.get(seatNo);
+}
+
+function frontCell(physicalCol: number): SeatCell | null {
+  return grid.value.frontCells[physicalCol - 1] ?? null;
 }
 
 function sideLabel(physicalCol: number): string {
@@ -54,9 +61,10 @@ function sideLabel(physicalCol: number): string {
     <div class="seat-preview__head">
       <strong>{{ room.name ?? room.id }}</strong>
       <span class="seat-preview__meta">
-        {{ grid.cols }} 列 × {{ grid.rows }} 排 = {{ capacity }} 座 ｜ 门靠{{
-          grid.doorSide === "right" ? "右" : "左"
-        }}
+        {{ grid.cols }} 列 × {{ grid.rows }} 排 = {{ capacity }} 座<template v-if="grid.hasExtra"
+          >（含 {{ extraCount }} 个讲台侧加座）</template
+        >
+        ｜ 门靠{{ grid.doorSide === "right" ? "右" : "左" }}
       </span>
     </div>
     <div class="seat-grid" :style="{ gridTemplateColumns: template }">
@@ -70,6 +78,27 @@ function sideLabel(physicalCol: number): string {
       >
         {{ sideLabel(physicalCol) || `第${physicalCol}列` }}
       </div>
+
+      <template v-if="grid.hasExtra">
+        <div class="seat-grid__rowhead seat-grid__rowhead--extra">加座</div>
+        <div
+          v-for="physicalCol in grid.cols"
+          :key="`x-${physicalCol}`"
+          class="seat-grid__cell"
+          :class="{
+            'seat-grid__cell--extra': frontCell(physicalCol) != null,
+            'seat-grid__cell--void': frontCell(physicalCol) == null,
+            'seat-grid__cell--hit': isHighlighted(0, physicalCol),
+          }"
+        >
+          <template v-if="frontCell(physicalCol)">
+            <span class="seat-grid__no">{{ frontCell(physicalCol)?.seatNo }}</span>
+            <span v-if="occupantOf(frontCell(physicalCol)?.seatNo ?? -1)" class="seat-grid__who">
+              {{ occupantOf(frontCell(physicalCol)?.seatNo ?? -1)?.name }}
+            </span>
+          </template>
+        </div>
+      </template>
 
       <template v-for="row in grid.rows" :key="`r-${row}`">
         <div class="seat-grid__rowhead">第{{ row }}排</div>
@@ -99,10 +128,10 @@ function sideLabel(physicalCol: number): string {
 
 <style scoped>
 .seat-preview {
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
-  background: var(--el-fill-color-blank);
+  background: var(--card);
   overflow-x: auto;
 }
 .seat-preview__head {
@@ -113,7 +142,7 @@ function sideLabel(physicalCol: number): string {
 }
 .seat-preview__meta {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--muted-foreground);
 }
 .seat-grid {
   display: grid;
@@ -125,8 +154,8 @@ function sideLabel(physicalCol: number): string {
   text-align: center;
   font-size: 12px;
   letter-spacing: 4px;
-  color: var(--el-text-color-secondary);
-  border-bottom: 1px dashed var(--el-border-color);
+  color: var(--muted-foreground);
+  border-bottom: 1px dashed var(--border);
   padding-bottom: 2px;
 }
 .seat-grid__corner {
@@ -135,23 +164,23 @@ function sideLabel(physicalCol: number): string {
 .seat-grid__head {
   font-size: 11px;
   text-align: center;
-  color: var(--el-text-color-secondary);
+  color: var(--muted-foreground);
 }
 .seat-grid__head--door {
-  color: var(--el-color-primary);
+  color: var(--primary);
   font-weight: 700;
 }
 .seat-grid__rowhead {
   font-size: 11px;
-  color: var(--el-text-color-secondary);
+  color: var(--muted-foreground);
   display: flex;
   align-items: center;
   white-space: nowrap;
 }
 .seat-grid__cell {
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--el-fill-color-light);
+  background: var(--muted);
   min-height: 34px;
   padding: 2px 4px;
   display: flex;
@@ -161,8 +190,20 @@ function sideLabel(physicalCol: number): string {
   line-height: 1.15;
 }
 .seat-grid__cell--hit {
-  background: var(--el-color-primary-light-7);
-  border-color: var(--el-color-primary-light-3);
+  background: var(--accent);
+  border-color: var(--primary);
+}
+.seat-grid__cell--extra {
+  border-color: var(--ring);
+  background: var(--accent);
+}
+.seat-grid__cell--void {
+  border-style: dashed;
+  background: transparent;
+}
+.seat-grid__rowhead--extra {
+  color: var(--primary);
+  font-weight: 700;
 }
 .seat-grid__no {
   font-weight: 700;
@@ -170,7 +211,7 @@ function sideLabel(physicalCol: number): string {
 }
 .seat-grid__who {
   font-size: 11px;
-  color: var(--el-text-color-regular);
+  color: var(--foreground);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -185,6 +226,6 @@ function sideLabel(physicalCol: number): string {
 .seat-preview__foot {
   margin-top: 6px;
   font-size: 11px;
-  color: var(--el-text-color-secondary);
+  color: var(--muted-foreground);
 }
 </style>

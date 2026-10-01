@@ -1,23 +1,60 @@
 <script setup lang="ts">
-import { ElMessage } from "element-plus";
 import { computed, ref, watch } from "vue";
+import { toast } from "vue-sonner";
 
+import MultiSelect from "@/components/MultiSelect.vue";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-  allowedCellsOnGrid,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  NumberField,
+  NumberFieldContent,
+  NumberFieldDecrement,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "@/components/ui/number-field";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
   absoluteRangeHint,
+  allowedCellsOnGrid,
   roomOptionLabel,
   semanticColHint,
   semanticRowHint,
   viewConstraintSeats,
 } from "@/lib/constraint-view";
 import type { ColRef, Constraint, RoomSpec, RowRef } from "@exam-seat/core";
+import { CircleAlertIcon, InfoIcon, TriangleAlertIcon, WandSparklesIcon } from "@lucide/vue";
 
 import SeatGridPreview from "./SeatGridPreview.vue";
 
 /**
  * 限定弹窗。这里刻意做了两层防线（对应设计文档 §10.4）：
  *
- * 1. 没选考场时，排/列下拉里**只有语义值**（首排/末排/靠门列/靠窗列），绝对号输入框整个隐藏—— 大小考场的行列数不同，同一个数字指向不同位置，填了没有意义。
+ * 1. 没选考场时，排/列里**只有语义值**（首排/末排/靠门列/靠窗列），绝对号输入框整个隐藏—— 大小考场的行列数不同，同一个数字指向不同位置，填了没有意义。
  * 2. 选了考场后，才展开绝对号输入框，`max` 直接绑该考场的行数/列数，越界填不进去。
  *
  * 「四角」预设一律用语义值，所以大小考场混排也通吃。
@@ -52,6 +89,11 @@ const rows = ref<RowRef[]>([]);
 const cols = ref<ColRef[]>([]);
 const absoluteRow = ref<number | undefined>(undefined);
 const absoluteCol = ref<number | undefined>(undefined);
+/** 「按组合」的 allow-create：名单里没有的组合可以手写（core 会规范化）。 */
+const customCombination = ref("");
+
+/** `Select` 的空值哨兵：选中它 = 不限考场。 */
+const NO_ROOM = "__none__";
 
 const selectedRoom = computed(() => props.rooms.find((room) => room.id === roomId.value));
 
@@ -65,6 +107,7 @@ function resetFrom(constraint: Constraint | null | undefined): void {
   cols.value = constraint?.cols ? [...constraint.cols] : [];
   absoluteRow.value = undefined;
   absoluteCol.value = undefined;
+  customCombination.value = "";
 }
 
 watch(
@@ -74,6 +117,72 @@ watch(
   },
   { immediate: true },
 );
+
+/** 「按组合」候选：名单里出现过的 + 已经手写进去的，保证自定义项也能取消。 */
+const combinationPool = computed(() => {
+  const known = props.combinationOptions ?? [];
+  const extra = combinationSelectors.value.filter((item) => !known.includes(item));
+  return [...known, ...extra];
+});
+
+const subjectLabelByValue = computed(
+  () => new Map((props.subjectOptions ?? []).map((option) => [option.value, option.label])),
+);
+const subjectValueByLabel = computed(
+  () => new Map((props.subjectOptions ?? []).map((option) => [option.label, option.value])),
+);
+const subjectLabels = computed<string[]>({
+  get: () => subjectSelectors.value.map((value) => subjectLabelByValue.value.get(value) ?? value),
+  set: (labels) => {
+    subjectSelectors.value = labels.map((label) => subjectValueByLabel.value.get(label) ?? label);
+  },
+});
+
+const roomSelect = computed<string>({
+  get: () => roomId.value ?? NO_ROOM,
+  set: (value) => {
+    roomId.value = value === NO_ROOM ? undefined : value;
+    onRoomChange();
+  },
+});
+/** 已经不存在（被删掉）的考场：也给一个选项，否则触发器会显示成没选。 */
+const missingRoomId = computed(() =>
+  roomId.value && !props.rooms.some((room) => room.id === roomId.value) ? roomId.value : undefined,
+);
+
+const toRowRef = (value: string): RowRef =>
+  /^\d+$/.test(value) ? Number(value) : (value as RowRef);
+const toColRef = (value: string): ColRef =>
+  /^\d+$/.test(value) ? Number(value) : (value as ColRef);
+
+const toRefs = <T>(value: unknown, convert: (item: string) => T): T[] => {
+  const list = Array.isArray(value) ? value : [value];
+  return list
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => convert(item));
+};
+
+const rowSelection = computed<string[]>({
+  get: () => rows.value.map((ref) => `${ref}`),
+  set: (value) => {
+    rows.value = toRefs(value, toRowRef);
+  },
+});
+
+const colSelection = computed<string[]>({
+  get: () => cols.value.map((ref) => `${ref}`),
+  set: (value) => {
+    cols.value = toRefs(value, toColRef);
+  },
+});
+
+function addCustomCombination(): void {
+  const value = customCombination.value.trim();
+  if (value && !combinationSelectors.value.includes(value)) {
+    combinationSelectors.value = [...combinationSelectors.value, value];
+  }
+  customCombination.value = "";
+}
 
 const rowOptions = computed(() => {
   const options: { value: RowRef; label: string }[] = [
@@ -186,7 +295,7 @@ const outOfRangeWarning = computed<string | null>(() => {
 
 function submit(): void {
   if (hitCount.value === 0) {
-    ElMessage.warning("先在列表里勾选学生，或至少写一个选择器（班级 / 组合 / 科目）");
+    toast.warning("先在列表里勾选学生，或至少写一个选择器（班级 / 组合 / 科目）");
     return;
   }
   const payload: Omit<Constraint, "id"> = {
@@ -207,223 +316,272 @@ function submit(): void {
 </script>
 
 <template>
-  <el-dialog
-    :model-value="modelValue"
-    :title="editing ? '编辑限定' : '添加限定'"
-    width="720px"
-    append-to-body
-    @update:model-value="emit('update:modelValue', $event)"
-  >
-    <el-form label-width="96px">
-      <el-form-item label="涉及学生">
-        <el-tag type="success" size="small">命中 {{ hitCount }} 人</el-tag>
-        <el-tag type="info" size="small">点名 {{ studentIds.length }} 人</el-tag>
-        <span class="dialog-hint">（在列表里勾选，或直接用下面的选择器）</span>
-      </el-form-item>
+  <Dialog :open="modelValue" @update:open="emit('update:modelValue', $event)">
+    <DialogContent class="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogHeader>
+        <DialogTitle>{{ editing ? "编辑限定" : "添加限定" }}</DialogTitle>
+        <DialogDescription>
+          学生的点名 / 班级 / 组合 / 科目取并集；考场是单选，排与列可以多选。
+        </DialogDescription>
+      </DialogHeader>
 
-      <el-form-item label="按班级">
-        <el-select
-          v-model="classNameSelectors"
-          multiple
-          clearable
-          filterable
-          placeholder="留空则不限班级"
-          style="width: 100%"
-        >
-          <el-option v-for="name in classNames ?? []" :key="name" :value="name" :label="name" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="按组合">
-        <el-select
-          v-model="combinationSelectors"
-          multiple
-          clearable
-          filterable
-          allow-create
-          placeholder="留空则不限组合，例如 物化政"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="name in combinationOptions ?? []"
-            :key="name"
-            :value="name"
-            :label="name"
-          />
-        </el-select>
-        <div class="dialog-hint">
-          组合写法随意（物化政 / 物理+化学+政治 都认），由 core 规范化。
-        </div>
-      </el-form-item>
-
-      <el-form-item label="按科目">
-        <el-select
-          v-model="subjectSelectors"
-          multiple
-          clearable
-          filterable
-          placeholder="留空则不限科目，例如 政治"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="option in subjectOptions ?? []"
-            :key="option.value"
-            :value="option.value"
-            :label="option.label"
-          />
-        </el-select>
-        <div class="dialog-hint">命中「选了其中任意一门」的学生。</div>
-      </el-form-item>
-
-      <el-form-item label="备注">
-        <el-input v-model="note" placeholder="例如：有作弊前科 / 班主任监考" clearable />
-      </el-form-item>
-
-      <el-form-item label="考场限定">
-        <el-select
-          v-model="roomId"
-          placeholder="不限考场"
-          clearable
-          style="width: 100%"
-          @change="onRoomChange"
-        >
-          <el-option
-            v-for="(room, index) in rooms"
-            :key="room.id"
-            :value="room.id"
-            :label="roomOptionLabel(room, index)"
-          />
-        </el-select>
-        <div class="dialog-hint">考场限定是单选：一个学生只能钉在一个考场。不选 = 任意考场。</div>
-      </el-form-item>
-
-      <el-form-item label="排限定">
-        <el-select v-model="rows" multiple clearable placeholder="任意排" style="width: 100%">
-          <el-option
-            v-for="option in rowOptions"
-            :key="`r-${option.value}`"
-            :value="option.value"
-            :label="option.label"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item v-if="selectedRoom" label="绝对排号">
-        <el-input-number
-          v-model="absoluteRow"
-          :min="1"
-          :max="selectedRoom.rows"
-          placeholder="第 N 排"
-        />
-        <el-button
-          style="margin-left: 8px"
-          :disabled="absoluteRow === undefined"
-          @click="addAbsoluteRow"
-        >
-          加入
-        </el-button>
-        <span class="dialog-hint">{{ absoluteRangeHint(selectedRoom) }}</span>
-      </el-form-item>
-
-      <el-form-item label="列限定">
-        <el-select v-model="cols" multiple clearable placeholder="任意列" style="width: 100%">
-          <el-option
-            v-for="option in colOptions"
-            :key="`c-${option.value}`"
-            :value="option.value"
-            :label="option.label"
-          />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item v-if="selectedRoom" label="绝对列号">
-        <el-input-number
-          v-model="absoluteCol"
-          :min="1"
-          :max="selectedRoom.cols"
-          placeholder="第 N 列"
-        />
-        <el-button
-          style="margin-left: 8px"
-          :disabled="absoluteCol === undefined"
-          @click="addAbsoluteCol"
-        >
-          加入
-        </el-button>
-        <span class="dialog-hint">列号从靠门侧起算：第 1 列 = 靠门列</span>
-      </el-form-item>
-
-      <el-form-item v-else label=" ">
-        <el-alert type="info" :closable="false" show-icon>
-          没选考场时只能用语义值（首排 / 末排 / 靠门列 / 靠窗列），绝对号输入框已隐藏： 大考场
-          6×7、小考场 5×6，「第 5 列」在两种考场里位置不同。
-        </el-alert>
-      </el-form-item>
-
-      <el-form-item label=" ">
-        <el-button @click="applyCorners">一键四角（首排+末排 × 靠门列+靠窗列）</el-button>
-      </el-form-item>
-
-      <el-form-item label="可用座位">
-        <div class="preview-box">
-          <div>
-            <el-tag :type="view.total > 0 ? 'success' : 'danger'"
-              >共 {{ view.total }} 个座位</el-tag
+      <FieldGroup class="gap-4">
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">涉及学生</FieldLabel>
+          <FieldContent class="flex-row flex-wrap items-center gap-1.5">
+            <Badge>命中 {{ hitCount }} 人</Badge>
+            <Badge variant="secondary">点名 {{ studentIds.length }} 人</Badge>
+            <span class="text-muted-foreground text-xs"
+              >（在列表里勾选，或直接用下面的选择器）</span
             >
-            <el-tag
-              v-for="item in view.perRoom"
-              :key="item.roomId"
-              style="margin-left: 6px"
-              :type="item.seats > 0 ? 'info' : 'warning'"
-            >
-              {{ item.roomName }}：{{ item.seats }}/{{ item.capacity }}
-            </el-tag>
-          </div>
-          <el-alert
-            v-if="previewWarning"
-            type="error"
-            :closable="false"
-            show-icon
-            :title="previewWarning"
-          />
-          <el-alert
-            v-if="outOfRangeWarning"
-            type="warning"
-            :closable="false"
-            show-icon
-            :title="outOfRangeWarning"
-          />
-          <div v-if="!selectedRoom && rows.length + cols.length > 0" class="dialog-hint">
-            <div v-for="(ref, i) in rows" :key="`hr-${i}`">{{ semanticRowHint(ref, rooms) }}</div>
-            <div v-for="(ref, i) in cols" :key="`hc-${i}`">{{ semanticColHint(ref, rooms) }}</div>
-          </div>
-          <SeatGridPreview
-            v-if="selectedRoom"
-            :room="selectedRoom"
-            :highlight="highlight"
-            compact
-          />
-        </div>
-      </el-form-item>
-    </el-form>
+          </FieldContent>
+        </Field>
 
-    <template #footer>
-      <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" @click="submit">{{ editing ? "保存" : "添加" }}</el-button>
-    </template>
-  </el-dialog>
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">按班级</FieldLabel>
+          <FieldContent>
+            <MultiSelect
+              v-model="classNameSelectors"
+              :options="classNames ?? []"
+              placeholder="留空则不限班级"
+              trigger-class="w-full"
+            />
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">按组合</FieldLabel>
+          <FieldContent>
+            <MultiSelect
+              v-model="combinationSelectors"
+              :options="combinationPool"
+              placeholder="留空则不限组合，例如 物化政"
+              trigger-class="w-full"
+            />
+            <div class="flex items-center gap-1.5">
+              <Input
+                v-model="customCombination"
+                class="h-7 w-56"
+                placeholder="自定义组合，例如 物化政"
+                @keyup.enter="addCustomCombination"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="customCombination.trim().length === 0"
+                @click="addCustomCombination"
+              >
+                加入
+              </Button>
+            </div>
+            <FieldDescription>
+              组合写法随意（物化政 / 物理+化学+政治 都认），由 core 规范化。
+            </FieldDescription>
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">按科目</FieldLabel>
+          <FieldContent>
+            <MultiSelect
+              v-model="subjectLabels"
+              :options="(subjectOptions ?? []).map((option) => option.label)"
+              placeholder="留空则不限科目，例如 政治"
+              trigger-class="w-full"
+            />
+            <FieldDescription>命中「选了其中任意一门」的学生。</FieldDescription>
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">备注</FieldLabel>
+          <FieldContent>
+            <Input v-model="note" placeholder="例如：有作弊前科 / 班主任监考" />
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">考场限定</FieldLabel>
+          <FieldContent>
+            <Select v-model="roomSelect">
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="不限考场" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem :value="NO_ROOM">不限考场</SelectItem>
+                  <SelectItem v-for="(room, index) in rooms" :key="room.id" :value="room.id">
+                    {{ roomOptionLabel(room, index) }}
+                  </SelectItem>
+                  <SelectItem v-if="missingRoomId" :value="missingRoomId">
+                    {{ missingRoomId }}（已不存在）
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription>
+              考场限定是单选：一个学生只能钉在一个考场。不选 = 任意考场。
+            </FieldDescription>
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">排限定</FieldLabel>
+          <FieldContent>
+            <ToggleGroup
+              type="multiple"
+              variant="outline"
+              size="sm"
+              :spacing="1"
+              class="max-w-full flex-wrap"
+              v-model="rowSelection"
+            >
+              <ToggleGroupItem
+                v-for="option in rowOptions"
+                :key="`r-${option.value}`"
+                :value="String(option.value)"
+              >
+                {{ option.label }}
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </FieldContent>
+        </Field>
+
+        <Field v-if="selectedRoom" orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">绝对排号</FieldLabel>
+          <FieldContent class="flex-row flex-wrap items-center gap-2">
+            <NumberField v-model="absoluteRow" :min="1" :max="selectedRoom.rows" class="w-32">
+              <NumberFieldContent>
+                <NumberFieldInput placeholder="第 N 排" />
+                <NumberFieldIncrement />
+                <NumberFieldDecrement />
+              </NumberFieldContent>
+            </NumberField>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="absoluteRow === undefined"
+              @click="addAbsoluteRow"
+            >
+              加入
+            </Button>
+            <span class="text-muted-foreground text-xs">{{ absoluteRangeHint(selectedRoom) }}</span>
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">列限定</FieldLabel>
+          <FieldContent>
+            <ToggleGroup
+              type="multiple"
+              variant="outline"
+              size="sm"
+              :spacing="1"
+              class="max-w-full flex-wrap"
+              v-model="colSelection"
+            >
+              <ToggleGroupItem
+                v-for="option in colOptions"
+                :key="`c-${option.value}`"
+                :value="String(option.value)"
+              >
+                {{ option.label }}
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </FieldContent>
+        </Field>
+
+        <Field v-if="selectedRoom" orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">绝对列号</FieldLabel>
+          <FieldContent class="flex-row flex-wrap items-center gap-2">
+            <NumberField v-model="absoluteCol" :min="1" :max="selectedRoom.cols" class="w-32">
+              <NumberFieldContent>
+                <NumberFieldInput placeholder="第 N 列" />
+                <NumberFieldIncrement />
+                <NumberFieldDecrement />
+              </NumberFieldContent>
+            </NumberField>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="absoluteCol === undefined"
+              @click="addAbsoluteCol"
+            >
+              加入
+            </Button>
+            <span class="text-muted-foreground text-xs">列号从靠门侧起算：第 1 列 = 靠门列</span>
+          </FieldContent>
+        </Field>
+
+        <Field v-else orientation="horizontal">
+          <FieldLabel class="sr-only">绝对号说明</FieldLabel>
+          <FieldContent>
+            <Alert>
+              <InfoIcon />
+              <AlertTitle>
+                没选考场时只能用语义值（首排 / 末排 / 靠门列 / 靠窗列），绝对号输入框已隐藏
+              </AlertTitle>
+              <AlertDescription>
+                大考场 6×7、小考场 5×6，「第 5 列」在两种考场里位置不同。
+              </AlertDescription>
+            </Alert>
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="sr-only">四角预设</FieldLabel>
+          <FieldContent class="flex-row flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" @click="applyCorners">
+              <WandSparklesIcon data-icon="inline-start" />
+              一键四角（首排+末排 × 靠门列+靠窗列）
+            </Button>
+          </FieldContent>
+        </Field>
+
+        <Field orientation="horizontal">
+          <FieldLabel class="w-24 shrink-0 justify-end">可用座位</FieldLabel>
+          <FieldContent class="gap-1.5">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <Badge :variant="view.total > 0 ? 'outline' : 'destructive'">
+                共 {{ view.total }} 个座位
+              </Badge>
+              <Badge
+                v-for="item in view.perRoom"
+                :key="item.roomId"
+                :variant="item.seats > 0 ? 'secondary' : 'destructive'"
+              >
+                {{ item.roomName }}：{{ item.seats }}/{{ item.capacity }}
+              </Badge>
+            </div>
+            <Alert v-if="previewWarning" variant="destructive">
+              <CircleAlertIcon />
+              <AlertTitle>{{ previewWarning }}</AlertTitle>
+            </Alert>
+            <Alert v-if="outOfRangeWarning">
+              <TriangleAlertIcon />
+              <AlertTitle>{{ outOfRangeWarning }}</AlertTitle>
+            </Alert>
+            <div
+              v-if="!selectedRoom && rows.length + cols.length > 0"
+              class="text-muted-foreground flex flex-col gap-0.5 text-xs"
+            >
+              <div v-for="(ref, i) in rows" :key="`hr-${i}`">{{ semanticRowHint(ref, rooms) }}</div>
+              <div v-for="(ref, i) in cols" :key="`hc-${i}`">{{ semanticColHint(ref, rooms) }}</div>
+            </div>
+            <SeatGridPreview
+              v-if="selectedRoom"
+              :room="selectedRoom"
+              :highlight="highlight"
+              compact
+            />
+          </FieldContent>
+        </Field>
+      </FieldGroup>
+
+      <DialogFooter>
+        <Button variant="outline" @click="emit('update:modelValue', false)">取消</Button>
+        <Button @click="submit">{{ editing ? "保存" : "添加" }}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>
-
-<style scoped>
-.dialog-hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.6;
-}
-.preview-box {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-</style>

@@ -237,7 +237,38 @@ describe("多场次导出剔除空置考场", () => {
     });
   });
 
-  it("一套座位方案都没有时不掏空 job.json", () => {
+  it("两份合并表之外，还落 按班级考场安排/ 与 考场监考表/ 两个子目录", () => {
+    withTempDir((dir) => {
+      const written = writeMultiPlanFiles(MULTI_RESULT, {
+        outDir: dir,
+        rooms: MULTI_JOB.rooms,
+        job: MULTI_JOB,
+      });
+
+      const files = readdirSync(dir);
+      expect(files).toContain("按班级考场安排");
+      expect(files).toContain("考场监考表");
+      const classFiles = readdirSync(nodePath.join(dir, "按班级考场安排"));
+      const roomFiles = readdirSync(nodePath.join(dir, "考场监考表"));
+      const classes = new Set(MULTI_RESULT.byStudent.map((student) => student.className));
+      expect(classFiles).toHaveLength(classes.size);
+      expect(classFiles.every((name) => name.endsWith(".xlsx"))).toBe(true);
+      expect(roomFiles).toHaveLength(MULTI_RESULT.seatings.length);
+      expect(roomFiles.some((name) => /^第.+考场（(?:.+)）\.xlsx$/.test(name))).toBe(true);
+      expect(written.directories.classDir).toBe(nodePath.join(dir, "按班级考场安排"));
+      expect(written.directories.roomDir).toBe(nodePath.join(dir, "考场监考表"));
+      expect(written.directories.classFiles).toBe(classFiles.length);
+      expect(written.directories.roomFiles).toBe(roomFiles.length);
+      // files 仍然列出全部路径（含子目录里的分表）
+      expect(written.files).toContain(nodePath.join(dir, "按班级考场安排", classFiles[0]!));
+      expect(written.files).toContain(nodePath.join(dir, "考场监考表", roomFiles[0]!));
+      expect(written.files).toHaveLength(
+        2 + classFiles.length + roomFiles.length + 2, // 两份合并表 + 分表 + plan.json + job.json
+      );
+    });
+  });
+
+  it("一套座位方案都没有时不掏空 job.json，也不写空的班级目录", () => {
     const nothingPlanned = { ...MULTI_RESULT, seatings: [], byStudent: [] };
     withTempDir((dir) => {
       const written = writeMultiPlanFiles(nothingPlanned, {
@@ -248,6 +279,33 @@ describe("多场次导出剔除空置考场", () => {
       const exportedJob = JSON.parse(readFileSync(nodePath.join(dir, "job.json"), "utf8")) as Job;
       expect(exportedJob.rooms).toHaveLength(MULTI_JOB.rooms.length);
       expect(written.removedRooms).toEqual([]);
+      expect(written.directories.classFiles).toBe(0);
+      expect(written.directories.classDir).toBeUndefined();
+      // 监考表兜底一张「无安排」，所以仍有一个考场文件
+      expect(written.directories.roomFiles).toBe(1);
+      expect(readdirSync(nodePath.join(dir, "考场监考表"))).toEqual(["无安排.xlsx"]);
+    });
+  });
+
+  it('文件名 sanitize：班级名里的 / : * ? " < > | 会换成 _', () => {
+    const weird: typeof MULTI_RESULT = {
+      ...MULTI_RESULT,
+      byStudent: MULTI_RESULT.byStudent.map((student) => ({
+        ...student,
+        className: '高三/1:2*3?4"5<6>7|8班',
+      })),
+    };
+    withTempDir((dir) => {
+      const written = writeMultiPlanFiles(weird, {
+        outDir: dir,
+        rooms: MULTI_JOB.rooms,
+        job: MULTI_JOB,
+      });
+      const classFiles = readdirSync(nodePath.join(dir, "按班级考场安排"));
+      expect(classFiles).toHaveLength(1);
+      expect(classFiles[0]).not.toMatch(/[/\\:*?"<>|]/);
+      expect(classFiles[0]!.endsWith(".xlsx")).toBe(true);
+      expect(written.directories.classFiles).toBe(1);
     });
   });
 
@@ -264,7 +322,10 @@ describe("多场次导出剔除空置考场", () => {
       expect(files).toContain("job.json");
       expect(files).not.toContain("按班级考场安排.xlsx");
       expect(files).not.toContain("考场监考表.xlsx");
+      expect(files).not.toContain("按班级考场安排");
+      expect(files).not.toContain("考场监考表");
       expect(written.files.some((path) => path.endsWith(".xlsx"))).toBe(false);
+      expect(written.directories).toEqual({ classFiles: 0, roomFiles: 0 });
     });
   });
 });

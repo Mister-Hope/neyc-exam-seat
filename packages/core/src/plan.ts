@@ -18,7 +18,7 @@ import type {
   Suggestion,
   UnmetConstraint,
 } from "./types";
-import { fingerprint } from "./util";
+import { fingerprint, isSameClassRelaxed } from "./util";
 import { validate } from "./validate";
 
 export const DEFAULT_SEED = 20260930;
@@ -45,6 +45,8 @@ export function normalizeOptions(options?: PlanOptions): Required<PlanOptions> {
     groupPreference: normalizeGroupPreference(options?.groupPreference),
     regularCombinations: options?.regularCombinations ?? [],
     maxRoomsPerStudent: options?.maxRoomsPerStudent ?? 3,
+    slots: options?.slots ?? [],
+    forbiddenSameSlot: options?.forbiddenSameSlot ?? [],
   };
 }
 
@@ -122,6 +124,13 @@ const BLOCKING_EXPORT_CODES: ReadonlySet<Diagnostic["code"]> = new Set<Diagnosti
   "CONSTRAINT_INDEX_OUT_OF_RANGE",
   "CONSTRAINT_OVERSATURATED",
   "RULE_INTERSECT_EMPTY",
+  // 本轮新增：借考/显式时段的硬性失败都必须拦住导出
+  "SUBJECT_ROOM_UNKNOWN_ROOM",
+  "SUBJECT_ROOM_UNKNOWN_SUBJECT",
+  "SUBJECT_ROOM_CLASH",
+  "SUBJECT_ROOM_NO_SEAT",
+  "SUBJECT_ROOM_NO_SLOT",
+  "SLOTS_CONFLICT",
 ]);
 
 /**
@@ -143,14 +152,18 @@ export function plan(job: Job, overrides?: PlanOptions): PlanResult {
   const { model, options, adjacency, downgraded } = pre;
   const diagnostics: Diagnostic[] = [...pre.diagnostics];
 
+  // 考场级放宽（`RoomSpec.relaxSameClass`）是一次真实放宽，级别高于「班级数不足自动退化」
+  const hasRelaxedRoom = model.rooms.some((room) => isSameClassRelaxed(room.spec));
   const level: PlanLevel =
     options.relax === "minConflicts"
       ? "minConflicts"
       : options.relax === "softConstraints"
         ? "softConstraints"
-        : downgraded
-          ? "orthogonal"
-          : "strict";
+        : hasRelaxedRoom
+          ? "roomRelaxed"
+          : downgraded
+            ? "orthogonal"
+            : "strict";
 
   const { fatal, softened } = isFatal(pre.diagnostics, options.relax);
 

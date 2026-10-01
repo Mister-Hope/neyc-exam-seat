@@ -2,7 +2,13 @@ import type { DomainBundle } from "./domain";
 import { checkSeatMatching, compileDomains } from "./domain";
 import type { CompiledModel } from "./model";
 import { describeCols, describeRows, seatId } from "./numbering";
-import type { Adjacency, Diagnostic, Job, RelaxMode, Suggestion } from "./types";
+import type { Adjacency, Diagnostic, Job, RelaxMode, RoomSpec, Suggestion } from "./types";
+import { isSameClassRelaxed, relaxedClassLimit } from "./util";
+
+/** 班级上限用的「本考场最多能容纳同一个班多少人」：放宽后按 `relaxSameClass` 取。 */
+function effectiveSameClassLimit(room: RoomSpec, fallback: number, capacity: number): number {
+  return relaxedClassLimit(room, fallback, capacity);
+}
 
 export interface PrecheckResult {
   diagnostics: Diagnostic[];
@@ -100,6 +106,29 @@ export function runPrecheck(
         .map((r) => r.spec.id)
         .join("、")}`,
       evidence: { roomIds: invalidRooms.map((r) => r.spec.id) },
+      suggestions: [],
+    });
+  }
+
+  // 加座列必须落在 [1, cols] 内（`docs/design.md` §5.8.4）：越界会被几何函数静默丢弃，
+  // 而老师以为多了座位 —— 这里明确报错，别让容量悄悄变小。
+  const invalidExtraSeats = rooms
+    .map((r) => ({
+      roomId: r.spec.id,
+      cols: r.spec.cols,
+      extraFrontSeats: (r.spec.extraFrontSeats ?? []).filter(
+        (col) => !Number.isInteger(col) || col < 1 || col > r.spec.cols,
+      ),
+    }))
+    .filter((item) => item.extraFrontSeats.length > 0);
+  if (invalidExtraSeats.length > 0) {
+    push({
+      code: "INVALID_ROOM_SIZE",
+      severity: "error",
+      message: `有 ${invalidExtraSeats.length} 个考场的加座列越界（必须在第 1 到第 ${
+        invalidExtraSeats[0]!.cols
+      } 列之间）：${invalidExtraSeats.map((item) => item.roomId).join("、")}`,
+      evidence: { rooms: invalidExtraSeats },
       suggestions: [],
     });
   }
@@ -215,7 +244,10 @@ export function runPrecheck(
 
   for (let cls = 0; cls < classCount; cls += 1) {
     const size = model.classSizes[cls]!;
-    const limit = rooms.reduce((sum, r) => sum + r.maxSameClass, 0);
+    const limit = rooms.reduce(
+      (sum, r) => sum + effectiveSameClassLimit(r.spec, r.maxSameClass, r.capacity),
+      0,
+    );
     if (size > limit) {
       push({
         code: "CLASS_LIMIT_EXCEEDED",
@@ -225,6 +257,25 @@ export function runPrecheck(
         suggestions: capacitySuggestions(job, size - limit),
       });
     }
+  }
+
+  // 考场级放宽「同班相邻」必须留痕（docs/design.md §5.8.1）：每条放宽一个 warning
+  for (const room of rooms) {
+    if (!isSameClassRelaxed(room.spec)) continue;
+    const limit = effectiveSameClassLimit(room.spec, room.maxSameClass, room.capacity);
+    push({
+      code: "ROOM_SAME_CLASS_RELAXED",
+      severity: "warning",
+      message: `${room.spec.name ?? room.spec.id} 已放宽「同班相邻」：本考场同班人数上限 ${limit}（正常上限 ${room.maxSameClass}），该考场内同班相邻不再算冲突`,
+      evidence: {
+        roomId: room.spec.id,
+        relaxSameClass: room.spec.relaxSameClass === true ? true : room.spec.relaxSameClass,
+        limit,
+        defaultLimit: room.maxSameClass,
+        capacity: room.capacity,
+      },
+      suggestions: [],
+    });
   }
 
   /* ---------------- 限定 ---------------- */
@@ -576,9 +627,10 @@ export function describeRoomLoad(model: CompiledModel, seatOwner: Int32Array): s
         worst = cls;
       }
     }
-    if (worst >= 0 && worstCount > room.maxSameClass) {
+    const limit = effectiveSameClassLimit(room.spec, room.maxSameClass, room.capacity);
+    if (worst >= 0 && worstCount > limit) {
       lines.push(
-        `${room.spec.name ?? room.spec.id}：${room.seatCount} 个座位里有 ${worstCount} 名${model.classNames[worst]}学生，上限是 ${room.maxSameClass}`,
+        `${room.spec.name ?? room.spec.id}：${room.seatCount} 个座位里有 ${worstCount} 名${model.classNames[worst]}学生，上限是 ${limit}`,
       );
     }
   }

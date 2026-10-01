@@ -1,5 +1,10 @@
-import { rcToSeatNo, roomCapacity } from "@exam-seat/core";
-import type { DoorSide, RoomSpec } from "@exam-seat/core";
+import {
+  columnSeatCounts as coreColumnSeatCounts,
+  rcToSeatNo as coreRcToSeatNo,
+  roomCapacity,
+  seatNoToRCIn as coreSeatNoToRCIn,
+} from "@exam-seat/core";
+import type { DoorSide, RoomGeometry, RoomSpec } from "@exam-seat/core";
 
 /**
  * 座位网格的数据推导（纯函数，无 DOM）。
@@ -36,6 +41,14 @@ export interface RoomSeatGrid {
   doorSide: DoorSide;
   /** `cells[row - 1][physicalCol - 1]` */
   cells: SeatCell[][];
+  /**
+   * 讲台侧加座（行号 0，第 1 排之前），按物理列序；没有加座的列是 `null`。
+   *
+   * 只有 `extraFrontSeats` 指向的业务列才有格子，其余列留空占位，网格才不会错位。
+   */
+  frontCells: (SeatCell | null)[];
+  /** 这个考场有加座（`extraFrontSeats` 非空且有效） */
+  hasExtra: boolean;
 }
 
 /** 物理列号 → 业务列号（靠门侧起算）。 */
@@ -48,7 +61,55 @@ export function physicalColOf(col: number, cols: number, doorSide: DoorSide): nu
   return businessColOf(col, cols, doorSide);
 }
 
-/** 按物理列序展开整个考场，`cells[row-1][physicalCol-1]`。所见即所得。 */
+/* ------------------------------------------------------------------ */
+/* 非矩形考场（讲台侧加座）的几何                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 有效加座列：整数、在 `1..cols` 内、去重、升序。
+ *
+ * 界面（多选列）与导入的 job 都可能给出越界值（例如 cols 从 5 改成 4），这里统一收口， 保证容量、编号、座位图三者用的是同一份加座集合。
+ */
+export function normalizeExtraFrontSeats(
+  room: Pick<RoomSpec, "cols" | "extraFrontSeats">,
+): number[] {
+  const raw = room.extraFrontSeats;
+  if (!raw || raw.length === 0) return [];
+  const seen = new Set<number>();
+  for (const col of raw) {
+    if (Number.isInteger(col) && col >= 1 && col <= room.cols) seen.add(col);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * 每列的座位数（业务列序）：`rows + 该列是否加座`。
+ *
+ * 直接委托 core 的 `columnSeatCounts`，网页不再自己算一遍几何。
+ */
+export function columnSeatCounts(room: RoomGeometry): number[] {
+  return coreColumnSeatCounts(room.rows, room.cols, normalizeExtraFrontSeats(room));
+}
+
+/**
+ * 座位号 → 行列（按列蛇形，支持加座）；越界返回 `null`。
+ *
+ * 委托 core 的 `seatNoToRCIn`（docs/design.md §4.5：加座永远是本列最后一个号，行号记 `0`）； 这里只补一个越界保护，座位图不会因为脏数据画出第 0
+ * 号格子。
+ */
+export function seatRCIn(room: RoomGeometry, seatNo: number): { row: number; col: number } | null {
+  const total = columnSeatCounts(room).reduce((sum, count) => sum + count, 0);
+  if (!Number.isInteger(seatNo) || seatNo < 1 || seatNo > total) return null;
+  return coreSeatNoToRCIn(room, seatNo);
+}
+
+/** 行列 → 座位号（`seatRCIn` 的逆运算）；`row = 0` 表示加座，越界/该列没加座返回 `null`。委托 core 的 `rcToSeatNo`。 */
+export function rcToSeatNoIn(room: RoomGeometry, row: number, col: number): number | null {
+  const seatNo = coreRcToSeatNo(row, col, room.rows, room.cols, normalizeExtraFrontSeats(room));
+  return seatNo < 1 ? null : seatNo;
+}
+
+/** 按物理列序展开整个考场，`cells[row-1][physicalCol-1]`；加座在 `frontCells[physicalCol-1]`。所见即所得。 */
 export function buildSeatGrid(room: RoomSpec): RoomSeatGrid {
   const doorSide: DoorSide = room.doorSide ?? "right";
   const cells: SeatCell[][] = [];
@@ -57,7 +118,7 @@ export function buildSeatGrid(room: RoomSpec): RoomSeatGrid {
     for (let physicalCol = 1; physicalCol <= room.cols; physicalCol += 1) {
       const col = businessColOf(physicalCol, room.cols, doorSide);
       line.push({
-        seatNo: rcToSeatNo(row, col, room.rows, room.cols),
+        seatNo: rcToSeatNoIn(room, row, col) ?? 0,
         row,
         col,
         physicalCol,
@@ -65,12 +126,31 @@ export function buildSeatGrid(room: RoomSpec): RoomSeatGrid {
     }
     cells.push(line);
   }
-  return { room, rows: room.rows, cols: room.cols, doorSide, cells };
+
+  const frontCells: (SeatCell | null)[] = [];
+  for (let physicalCol = 1; physicalCol <= room.cols; physicalCol += 1) {
+    const col = businessColOf(physicalCol, room.cols, doorSide);
+    const seatNo = rcToSeatNoIn(room, 0, col);
+    frontCells.push(seatNo == null ? null : { seatNo, row: 0, col, physicalCol });
+  }
+
+  return {
+    room,
+    rows: room.rows,
+    cols: room.cols,
+    doorSide,
+    cells,
+    frontCells,
+    hasExtra: frontCells.some((cell) => cell != null),
+  };
 }
 
-/** 网格里所有座位按「排 → 物理列」展开成一维。 */
+/** 网格里所有座位按「加座 → 排 → 物理列」展开成一维。 */
 export function flattenSeatGrid(grid: RoomSeatGrid): SeatCell[] {
-  return grid.cells.flat();
+  return [
+    ...grid.frontCells.filter((cell): cell is SeatCell => cell != null),
+    ...grid.cells.flat(),
+  ];
 }
 
 /** 排 × 列，纯位置占位（用于结果预览里叠加人名）。 */

@@ -1,16 +1,9 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { App, Ref } from "vue";
 import { createApp, h, nextTick, ref } from "vue";
 
 import VirtualTable from "@/components/VirtualTable.vue";
 import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
-
-/** 渲染冒烟：jsdom 缺 ResizeObserver，ElAutoResizer 会用到（与 app-smoke.test.ts 同一份最小 stub）。 */
-class ResizeObserverStub {
-  observe = (): void => {};
-  unobserve = (): void => {};
-  disconnect = (): void => {};
-}
 
 interface Row {
   id: string;
@@ -79,14 +72,18 @@ function mountVirtualTable(
   return { app, host, rows, selected, emitted, clicked };
 }
 
-const renderedRows = (host: HTMLElement): number =>
-  host.querySelectorAll(".el-table-v2__row").length;
+const renderedRows = (host: HTMLElement): number => host.querySelectorAll(".vt-row").length;
+const firstRowText = (host: HTMLElement): string =>
+  host.querySelector(".vt-row")?.textContent ?? "";
+
+/** Jsdom 不做布局，scrollTop 会被钳到 0；测试里直接给实例定义一个可写的 scrollTop。 */
+function scrollTo(host: HTMLElement, top: number): void {
+  const viewport = host.querySelector<HTMLElement>('[data-testid="vt-viewport"]')!;
+  Object.defineProperty(viewport, "scrollTop", { value: top, configurable: true });
+  viewport.dispatchEvent(new Event("scroll"));
+}
 
 describe("virtualTable 虚拟滚动", () => {
-  beforeAll(() => {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= ResizeObserverStub;
-  });
-
   afterEach(() => {
     document.body.innerHTML = "";
   });
@@ -97,10 +94,24 @@ describe("virtualTable 虚拟滚动", () => {
 
     const rendered = renderedRows(host);
     expect(rendered).toBeGreaterThan(0);
-    // 实测 24 行（可视 10 行 + cache 2 前后各一批）；离 1000 差两个数量级
+    // 可视 10 行 + 前后 overscan；离 1000 差两个数量级
     expect(rendered).toBeLessThan(50);
-    // 数据仍是 1000 行：滚动条总高度 = 1000 * 44
-    expect(host.querySelector(".el-table-v2__row")?.textContent).toContain("S0001");
+    expect(firstRowText(host)).toContain("S0001");
+    app.unmount();
+  });
+
+  it("滚动后渲染窗口跟着移动（不是只画第一屏）", async () => {
+    const { app, host } = mountVirtualTable(makeRows(1000));
+    await flush();
+    expect(firstRowText(host)).toContain("S0001");
+
+    scrollTo(host, 44 * 500);
+    await flush();
+
+    expect(renderedRows(host)).toBeLessThan(50);
+    // 窗口移动到 500 号附近，第一行不再是 S0001
+    expect(firstRowText(host)).not.toContain("S0001");
+    expect(host.textContent).toContain("S0501");
     app.unmount();
   });
 
@@ -109,9 +120,9 @@ describe("virtualTable 虚拟滚动", () => {
     await flush();
 
     const rendered = renderedRows(host);
-    const input = host.querySelector<HTMLInputElement>(".vt-select-all input");
-    expect(input).not.toBeNull();
-    input!.click();
+    const checkbox = host.querySelector<HTMLElement>(".vt-select-all");
+    expect(checkbox).not.toBeNull();
+    checkbox!.click();
     await flush();
 
     const keys = emitted.at(-1);
@@ -127,13 +138,11 @@ describe("virtualTable 虚拟滚动", () => {
 
     selected.value = rows.value.slice(0, 3).map((row) => row.id);
     await flush();
-    expect(host.querySelector(".el-checkbox__input.is-indeterminate")).not.toBeNull();
     expect(host.querySelector(".vt-select-all")?.getAttribute("aria-checked")).toBe("mixed");
 
     selected.value = rows.value.map((row) => row.id);
     await flush();
-    expect(host.querySelector(".el-checkbox__input.is-indeterminate")).toBeNull();
-    expect(host.querySelector<HTMLInputElement>(".vt-select-all input")?.checked).toBe(true);
+    expect(host.querySelector(".vt-select-all")?.getAttribute("aria-checked")).toBe("true");
     app.unmount();
   });
 
@@ -141,12 +150,12 @@ describe("virtualTable 虚拟滚动", () => {
     const { app, host, emitted, selected } = mountVirtualTable(makeRows(100));
     await flush();
 
-    host.querySelector<HTMLInputElement>(".vt-row-checkbox input")!.click();
+    host.querySelector<HTMLElement>(".vt-row-checkbox")!.click();
     await flush();
     expect(emitted.at(-1)).toEqual(["S0001"]);
     expect(selected.value).toEqual(["S0001"]);
 
-    host.querySelector<HTMLInputElement>(".vt-row-checkbox input")!.click();
+    host.querySelector<HTMLElement>(".vt-row-checkbox")!.click();
     await flush();
     expect(emitted.at(-1)).toEqual([]);
     app.unmount();
@@ -165,7 +174,7 @@ describe("virtualTable 虚拟滚动", () => {
 
     // S0009 是高三(9)班，已不在当前 rows 里
     expect(emitted.at(-1)).toEqual(["S0001"]);
-    expect(host.querySelector<HTMLInputElement>(".vt-row-checkbox input")).not.toBeNull();
+    expect(host.querySelector(".vt-row-checkbox")).not.toBeNull();
     app.unmount();
   });
 
@@ -179,7 +188,7 @@ describe("virtualTable 虚拟滚动", () => {
     const filtered = rows.value.length;
     expect(filtered).toBeGreaterThan(0);
 
-    host.querySelector<HTMLInputElement>(".vt-select-all input")!.click();
+    host.querySelector<HTMLElement>(".vt-select-all")!.click();
     await flush();
     expect(emitted.at(-1)).toHaveLength(filtered);
     app.unmount();
@@ -195,7 +204,7 @@ describe("virtualTable 虚拟滚动", () => {
     const custom = host.querySelector(".custom-name");
     expect(custom?.textContent).toBe("[学生1]");
     // id 列没有自定义插槽，走默认渲染
-    expect(host.querySelector(".el-table-v2__row")?.textContent).toContain("S0001");
+    expect(firstRowText(host)).toContain("S0001");
     app.unmount();
   });
 
@@ -211,7 +220,7 @@ describe("virtualTable 虚拟滚动", () => {
     const { app, host, clicked } = mountVirtualTable(rows);
     await flush();
 
-    host.querySelector<HTMLElement>(".el-table-v2__row")!.click();
+    host.querySelector<HTMLElement>(".vt-row")!.click();
     await flush();
 
     expect(clicked).toHaveLength(1);

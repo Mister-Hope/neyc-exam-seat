@@ -24,6 +24,7 @@ export type {
 } from "./subjects";
 
 export {
+  columnSeatCounts,
   describeCols,
   describeRows,
   maxSameClass,
@@ -34,13 +35,21 @@ export {
   roomCapacity,
   seatId,
   seatNoToRC,
+  seatNoToRCIn,
   toPhysicalCol,
 } from "./numbering";
+export type { RoomGeometry, SeatRC } from "./numbering";
 
 export { compileModel } from "./model";
 export type { CompiledModel, CompiledRoom } from "./model";
 
-export { buildConflictGraph, deriveTimeSlots, findSlotConflicts, subjectInSlot } from "./schedule";
+export {
+  buildConflictGraph,
+  deriveTimeSlots,
+  findSlotConflicts,
+  normalizeSlots,
+  subjectInSlot,
+} from "./schedule";
 export type { TimeSlot } from "./schedule";
 
 export {
@@ -54,6 +63,7 @@ export type { ConstraintSeatSet, DomainBundle, StudentDomain } from "./domain";
 
 export { findRoomSubjectClashes, planAll } from "./plan-all";
 export type {
+  BorrowedSeat,
   PlanAllResult,
   PlanAllUnmetConstraint,
   RoomSubjectClash,
@@ -84,4 +94,10 @@ export {
 } from "./plan";
 export type { PrecheckOutput } from "./plan";
 
-export { canonicalJson, fingerprint, mulberry32 } from "./util";
+export {
+  canonicalJson,
+  fingerprint,
+  isSameClassRelaxed,
+  mulberry32,
+  relaxedClassLimit,
+} from "./util";

@@ -12,7 +12,8 @@
 ```bash
 pnpm install
 pnpm build          # 构建 core / io / cli
-pnpm test           # 27 个单测
+pnpm test           # 单元测试
+pnpm verify         # 提交前全量门禁：lint + typecheck + build + test + 验收
 ```
 
 ### 命令行
@@ -33,11 +34,25 @@ node packages/cli/bin/exam-seat.mjs plan --job job.json --out-dir out
 
 `--json` 时 stdout 只输出一个 JSON 对象，日志走 stderr。退出码：`0` 完美 ｜ `2` 有冲突或限定没满足 ｜ `3` 根本没解 ｜ `1` 用法错误。
 
-其他命令：`numbering`（打印座位编号图）、`template`（job.json 模板）、`validate`（独立校验器重验）。
+其他命令：`numbering`（打印座位编号图，加座考场用 `--extra 2,4`）、`template`（job.json 模板）、`validate`（独立校验器重验）。
 
 ```bash
-node packages/cli/bin/exam-seat.mjs numbering --rows 6 --cols 5
+node packages/cli/bin/exam-seat.mjs numbering --rows 7 --cols 5 --extra 2,4
 ```
+
+**多场次（名单里带选科）导出什么**：`--out-dir out` 下会生成
+
+```
+out/按班级考场安排.xlsx      # 总表（全班 706 人）+ 每个班一张 sheet
+out/考场监考表.xlsx          # 每个考场一张 sheet，含座位号 / 班级 / 姓名 / 准考证号 / 备注
+out/按班级考场安排/2501.xlsx …   # 每个班一个单独文件（发给班主任）
+out/考场监考表/第一考场（语数外物化生）.xlsx …  # 每个考场一个单独文件（发给监考老师）
+out/plan.json  out/job.json
+```
+
+两张表都按 **A4 横向、缩放到一页宽** 排好版（字号 / 对齐 / 合并标题 / 自动列宽都设好了），
+冻结并每页重复打印表头，可以直接打印。班级表里**主考场不带括号**，只有要换考场的学生才会写
+「第十九考场（政治）」这样的一科一格。
 
 ### 网页
 
@@ -121,6 +136,41 @@ vendor/                           SheetJS tarball
 ```
 
 完整字段表见 `.agents/skills/exam-seating/reference.md`。
+
+### 个别考场加限制 / 放宽
+
+都是**考场级 / 学生级**的开关，互不影响；每一次放宽都会在 `plan.json` 里留一条诊断，并在监考表上标注。
+**红线不变：一个考场、一个时段、只能有一张卷子。**
+
+```jsonc
+{
+  "options": {
+    // 时段表可以直接填死（老师按考务表给），不再自动推导：
+    "slots": [{ "id": "T6", "name": "第6时段", "subjects": ["biology", "geography"] }],
+    // 或者只补「必须分开」的科目对：
+    "forbiddenSameSlot": [["chemistry", "biology"]],
+  },
+  "students": [
+    // 这个学生的「生物」去第十八考场借考（其它科目仍在自己的主考场）：
+    {
+      "id": "<借考生学号>",
+      "name": "某生",
+      "className": "2517",
+      "subjects": ["biology", "politics", "history"],
+      "subjectRoom": { "biology": "R18" },
+    },
+  ],
+  "rooms": [
+    // 只放宽这一个考场的「同班相邻」（true = 完全放开；数字 = 该考场同班人数上限）：
+    { "id": "R17", "name": "第十七考场", "rows": 7, "cols": 5, "relaxSameClass": true },
+    // 讲台一侧加座：5 列 × 7 排 + 第 2、4 列各加 1 张桌 = 37 座：
+    { "id": "R1", "name": "第一考场", "rows": 7, "cols": 5, "extraFrontSeats": [2, 4] },
+  ],
+}
+```
+
+借考只占目标考场**该时段的一个空位**，不产生第二张卷子；目标考场该时段若另有别的科目，会明确报
+`SUBJECT_ROOM_CLASH` 并且不导出名单。
 
 ## 开发
 

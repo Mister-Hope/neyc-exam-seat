@@ -1,1 +1,12 @@
+# ⚠️ 防呆闸门：真实名单（学生姓名 / 准考证号）绝不入库。
+# inputs/ 已在 .gitignore 里；这里再拦一道，防止 `git add -f` 或手工加入。
+staged_inputs=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^inputs/' || true)
+if [ -n "$staged_inputs" ]; then
+  echo "❌ 拒绝提交：inputs/ 里是含学生姓名与准考证号的真实名单，属于个人敏感信息。" >&2
+  echo "   需要公开样例请先脱敏（保留班级/选科，姓名与准考证号随机生成）。" >&2
+  echo "   被拦下的文件：" >&2
+  echo "$staged_inputs" >&2
+  exit 1
+fi
+
 pnpm exec nano-staged

@@ -197,6 +197,9 @@ function planAllFixture(): PlanAllResult {
     ],
     emptyRooms: ["第5考场"],
     overRoomLimit: [],
+    // 本轮新增的必填字段：没有放宽考场 / 没有借考时是空数组
+    relaxedRooms: [],
+    borrowings: [],
     diagnostics: [],
     unmetConstraints: [],
   } satisfies PlanAllResult;
@@ -249,6 +252,53 @@ describe("result store：多场次状态", () => {
     expect(byId.get("S3")!.distinctRooms).toBe(2);
     expect(byId.get("S4")!.distinctRooms).toBe(1);
     expect(store.planAll!.overRoomLimit).toEqual([]);
+  });
+
+  it("放宽考场与借考明细从 planAll 透出：主动放宽不算「降级」", () => {
+    const store = useResultStore();
+    const job = multiJob();
+    const all = planAllFixture();
+    all.relaxedRooms = ["R4"];
+    all.seatings[3]!.relaxedSameClass = true;
+    all.seatings[3]!.result.level = "roomRelaxed";
+    all.borrowings = [
+      {
+        studentId: "S3",
+        name: "王三",
+        className: "高三(2)班",
+        subject: "biology",
+        subjectLabel: "生物",
+        roomId: "R4",
+        roomName: "第4考场",
+        seatNo: 2,
+      },
+    ];
+    store.setAllResult(all, job);
+
+    expect(store.relaxedRoomIds).toEqual(["R4"]);
+    expect(store.relaxedRoomNames).toEqual(["第4考场"]);
+    expect(store.borrowings).toEqual(all.borrowings);
+    expect(store.isRoomRelaxed).toBe(true);
+    // roomRelaxed 是老师主动放宽，不是算法降级
+    expect(store.isDegraded).toBe(false);
+  });
+
+  it("没有放宽 / 借考时透出空数组，兼容旧的结果快照", () => {
+    const store = useResultStore();
+    store.setAllResult(planAllFixture(), multiJob());
+    expect(store.relaxedRoomIds).toEqual([]);
+    expect(store.relaxedRoomNames).toEqual([]);
+    expect(store.borrowings).toEqual([]);
+    expect(store.isRoomRelaxed).toBe(false);
+  });
+
+  it("真·降级（orthogonal）仍然被认出来", () => {
+    const store = useResultStore();
+    const all = planAllFixture();
+    all.seatings[0]!.result.level = "orthogonal";
+    store.setAllResult(all, multiJob());
+    expect(store.isDegraded).toBe(true);
+    expect(store.isRoomRelaxed).toBe(false);
   });
 
   it("setResult 默认单场：老调用方行为不变，多场次字段清空", () => {

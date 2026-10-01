@@ -1,10 +1,18 @@
-import { rcToSeatNo, subjectLabel, subjectListLabel } from "@exam-seat/core";
+import {
+  columnSeatCounts,
+  rcToSeatNo,
+  seatNoToRCIn,
+  subjectLabel,
+  subjectListLabel,
+} from "@exam-seat/core";
 import type {
+  BorrowedSeat,
   Diagnostic,
   DoorSide,
   PlanAllResult,
   PlanAllValidation,
   PlanResult,
+  RoomGeometry,
 } from "@exam-seat/core";
 
 const ICON: Record<Diagnostic["severity"], string> = {
@@ -32,10 +40,56 @@ export function renderDiagnostics(diagnostics: Diagnostic[], indent = "  "): str
   return lines.join("\n");
 }
 
-/** 按物理列序（面对讲台从左往右）画编号图，跟老师看到的一致。 */
-export function renderNumbering(rows: number, cols: number, doorSide: DoorSide = "right"): string {
-  const total = rows * cols;
-  const width = Math.max(4, String(total).length + 2);
+/**
+ * 按物理列序（面对讲台从左往右）画编号图，跟老师看到的一致。
+ *
+ * 传了 `extraFrontSeats`（讲台侧加座的业务列，例如 `[2, 4]`）时，网格上方多画一行 `r0` 加座，
+ * 只在加座列显示该列最后一个号；不给时输出与纯矩形完全一致（逐字符不变）。
+ */
+export function renderNumbering(
+  rows: number,
+  cols: number,
+  doorSide: DoorSide = "right",
+  extraFrontSeats: readonly number[] = [],
+): string {
+  const extra = [...new Set(extraFrontSeats)]
+    .filter((col) => Number.isInteger(col) && col >= 1 && col <= cols)
+    .sort((a, b) => a - b);
+
+  // 不加座：保持原有输出逐字符不变（列号来自 core 的 rcToSeatNo）
+  if (extra.length === 0) {
+    const total = rows * cols;
+    const plainWidth = Math.max(4, String(total).length + 2);
+    const plainPad = (s: string): string => s.padStart(plainWidth);
+    const plainLines: string[] = [`${" ".repeat(5)}讲台 / 黑板`];
+
+    const plainHead = [" ".repeat(5)];
+    for (let pc = 1; pc <= cols; pc += 1) plainHead.push(plainPad(`c${pc}`));
+    plainLines.push(plainHead.join(""));
+
+    for (let row = 1; row <= rows; row += 1) {
+      const cells = [plainPad(`r${row}`)];
+      for (let pc = 1; pc <= cols; pc += 1) {
+        const businessCol = doorSide === "right" ? cols - pc + 1 : pc;
+        const seatNo = rcToSeatNo(row, businessCol, rows, cols);
+        cells.push(plainPad(String(seatNo)));
+      }
+      plainLines.push(cells.join(""));
+    }
+
+    const plainDoorCol = doorSide === "right" ? cols : 1;
+    plainLines.push("");
+    plainLines.push(
+      `门在${doorSide === "right" ? "右" : "左"}侧，${"c" + plainDoorCol} 那一列就是靠门列（小号列）；` +
+        `c${doorSide === "right" ? 1 : cols} 是靠窗列（大号列）。`,
+    );
+    return plainLines.join("\n");
+  }
+
+  // 有加座：座位号 → 行列一律用 core 的编号函数摆回网格（加座行号 0）
+  const room: RoomGeometry = { rows, cols, extraFrontSeats: extra };
+  const capacity = columnSeatCounts(rows, cols, extra).reduce((sum, count) => sum + count, 0);
+  const width = Math.max(4, String(capacity).length + 2);
   const pad = (s: string): string => s.padStart(width);
   const lines: string[] = [`${" ".repeat(5)}讲台 / 黑板`];
 
@@ -43,12 +97,22 @@ export function renderNumbering(rows: number, cols: number, doorSide: DoorSide =
   for (let pc = 1; pc <= cols; pc += 1) head.push(pad(`c${pc}`));
   lines.push(head.join(""));
 
-  for (let row = 1; row <= rows; row += 1) {
+  // grid[row][业务列 - 1]；grid[0] = 加座行
+  const grid: (number | null)[][] = Array.from({ length: rows + 1 }, () =>
+    Array.from({ length: cols }, (): number | null => null),
+  );
+  for (let seatNo = 1; seatNo <= capacity; seatNo += 1) {
+    const { row, col } = seatNoToRCIn(room, seatNo);
+    const line = grid[row];
+    if (line && col >= 1 && col <= cols) line[col - 1] = seatNo;
+  }
+
+  for (let row = 0; row <= rows; row += 1) {
     const cells = [pad(`r${row}`)];
     for (let pc = 1; pc <= cols; pc += 1) {
       const businessCol = doorSide === "right" ? cols - pc + 1 : pc;
-      const seatNo = rcToSeatNo(row, businessCol, rows, cols);
-      cells.push(pad(String(seatNo)));
+      const seatNo = grid[row]?.[businessCol - 1] ?? null;
+      cells.push(seatNo == null ? " ".repeat(width) : pad(String(seatNo)));
     }
     lines.push(cells.join(""));
   }
@@ -59,6 +123,7 @@ export function renderNumbering(rows: number, cols: number, doorSide: DoorSide =
     `门在${doorSide === "right" ? "右" : "左"}侧，${"c" + doorCol} 那一列就是靠门列（小号列）；` +
       `c${doorSide === "right" ? 1 : cols} 是靠窗列（大号列）。`,
   );
+  lines.push(`本考场含 ${extra.length} 个讲台侧加座（第 ${extra.join("、")} 列）。`);
   return lines.join("\n");
 }
 
@@ -122,6 +187,17 @@ export function renderPlanAll(result: PlanAllResult): string {
   if (result.emptyRooms.length > 0) {
     lines.push(`可取消的空置考场：${result.emptyRooms.join("、")}`);
   }
+  // 老版本（本次改动之前）导出的 plan.json 里没有这两个字段，读进来也不能崩
+  const relaxedRooms = result.relaxedRooms ?? [];
+  const borrowings = result.borrowings ?? [];
+  if (relaxedRooms.length > 0) {
+    lines.push(`放宽同班相邻：${relaxedRooms.join("、")}`);
+  }
+  if (borrowings.length > 0) {
+    const detail = borrowings.map((b) => borrowLabel(result, b));
+    const shown = detail.slice(0, 5).join("；");
+    lines.push(`借考：${borrowings.length} 人（${shown}${detail.length > 5 ? "；…" : ""}）`);
+  }
   lines.push("");
 
   lines.push("时段划分：");
@@ -166,6 +242,30 @@ export function renderPlanAll(result: PlanAllResult): string {
 function subjectRoomLabel(subjects: readonly string[]): string {
   if (subjects.length === 1) return subjectLabel(subjects[0]!);
   return subjectListLabel(subjects);
+}
+
+/** 借考时段从 `byStudent[].slots` 反查（`BorrowedSeat` 本身不带 slotId）。 */
+function findBorrowSlotId(result: PlanAllResult, borrowing: BorrowedSeat): string | undefined {
+  const student = result.byStudent.find((item) => item.studentId === borrowing.studentId);
+  if (!student) return undefined;
+  for (const [slotId, assignment] of Object.entries(student.slots)) {
+    if (
+      assignment &&
+      assignment.roomId === borrowing.roomId &&
+      assignment.subject === borrowing.subject
+    ) {
+      return slotId;
+    }
+  }
+  return undefined;
+}
+
+/** 一条借考的人话：「某生 T6 生物 → 第十八考场」 */
+function borrowLabel(result: PlanAllResult, borrowing: BorrowedSeat): string {
+  const slotId = findBorrowSlotId(result, borrowing);
+  const subject = borrowing.subjectLabel || subjectLabel(borrowing.subject);
+  const where = borrowing.roomName || borrowing.roomId;
+  return `${borrowing.name || borrowing.studentId}${slotId ? ` ${slotId}` : ""} ${subject} → ${where}`;
 }
 
 /** 多场次独立校验结果（等价于 core 的 `PlanAllValidation`；保留此名方便 CLI 侧引用）。 */

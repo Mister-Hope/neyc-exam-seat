@@ -59,6 +59,49 @@ function multiJob(): Job {
   };
 }
 
+/**
+ * 考场级放宽 + 借考：物化生 12 人占 R1（R1 放宽同班相邻）；政史地的某生多考一科生物， 显式时段把生物单独放 T6，生物借考到 R1（R1 在 T6
+ * 本来就考生物），政治/历史/地理在主考场 R3。
+ */
+function relaxBorrowJob(): Job {
+  const science = Array.from({ length: 12 }, (_, i) => ({
+    id: `B${String(i + 1).padStart(2, "0")}`,
+    name: `理科${i + 1}`,
+    className: `高三(${(i % 6) + 1}班)`,
+    combination: "物化生",
+  }));
+  return {
+    jobVersion: 2,
+    options: {
+      slots: [
+        { id: "T1", subjects: ["chinese"] },
+        { id: "T2", subjects: ["math"] },
+        { id: "T3", subjects: ["english"] },
+        { id: "T4", subjects: ["physics"] },
+        { id: "T5", subjects: ["chemistry"] },
+        { id: "T6", subjects: ["biology"] },
+        { id: "T7", subjects: ["politics"] },
+        { id: "T8", subjects: ["geography"] },
+        { id: "T9", subjects: ["history"] },
+      ],
+    },
+    students: [
+      ...science,
+      {
+        id: "W01",
+        name: "某生",
+        className: "高三(9)班",
+        combination: "政史地",
+        subjects: ["politics", "history", "geography", "biology"],
+        subjectRoom: { biology: "R1" },
+      },
+      { id: "W02", name: "史地政二", className: "高三(9)班", combination: "政史地" },
+      { id: "W03", name: "史地政三", className: "高三(9)班", combination: "政史地" },
+    ],
+    rooms: [{ ...room(1), relaxSameClass: true }, room(2), room(3)],
+  };
+}
+
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(nodePath.join(tmpdir(), "exam-seat-cli-plan-"));
   try {
@@ -267,6 +310,36 @@ describe("plan --out-dir 导出", () => {
     });
   });
 
+  it("多场次：每班 / 每考场各一个文件，日志只给「导出 N 个文件」+ 目录摘要", async () => {
+    await withTempDir(async (dir) => {
+      const jobPath = nodePath.join(dir, "job.json");
+      const outDir = nodePath.join(dir, "out");
+      writeFileSync(jobPath, JSON.stringify(multiJob()));
+
+      const captured = captureOutput();
+      const code = await main(["node", "exam-seat", "plan", "--job", jobPath, "--out-dir", outDir]);
+
+      expect(code).toBe(EXIT_OK);
+      const files = readdirSync(outDir);
+      expect(files).toContain("按班级考场安排");
+      expect(files).toContain("考场监考表");
+
+      const classFiles = readdirSync(nodePath.join(outDir, "按班级考场安排"));
+      const roomFiles = readdirSync(nodePath.join(outDir, "考场监考表"));
+      expect(classFiles.length).toBeGreaterThan(0);
+      expect(classFiles.every((name) => name.endsWith(".xlsx"))).toBe(true);
+      expect(roomFiles.some((name) => /^第.+考场（(?:.+)）\.xlsx$/.test(name))).toBe(true);
+
+      // 日志是摘要而不是几十行逐条路径
+      const stderr = captured.stderr();
+      expect(stderr).toMatch(/已导出 \d+ 个文件/);
+      expect(stderr).toContain("按班级考场安排.xlsx（总表 + ");
+      expect(stderr).toContain("考场监考表.xlsx（");
+      expect(stderr).toContain("plan.json");
+      expect(stderr).toContain("job.json");
+    });
+  });
+
   it("多场次结果未通过校验时只导出 plan.json / job.json，不写工作簿", async () => {
     await withTempDir(async (dir) => {
       const jobPath = nodePath.join(dir, "job.json");
@@ -291,6 +364,8 @@ describe("plan --out-dir 导出", () => {
       expect(files).toContain("job.json");
       expect(files).not.toContain("按班级考场安排.xlsx");
       expect(files).not.toContain("考场监考表.xlsx");
+      expect(files).not.toContain("按班级考场安排");
+      expect(files).not.toContain("考场监考表");
 
       expect(captured.stderr()).toContain("结果未通过校验");
       expect(captured.stderr()).toContain("CAPACITY_INSUFFICIENT");
@@ -317,6 +392,8 @@ describe("plan --out-dir 导出", () => {
       expect(files).toContain("job.json");
       expect(files).not.toContain("按班级考场安排.xlsx");
       expect(files).not.toContain("考场监考表.xlsx");
+      expect(files).not.toContain("按班级考场安排");
+      expect(files).not.toContain("考场监考表");
     });
   });
 
@@ -436,6 +513,51 @@ describe("plan --out-dir 导出", () => {
 
       expect(code).toBe(EXIT_OK);
       expect(captured.stdout()).not.toContain("未满足的限定");
+    });
+  });
+
+  it("考场级放宽 + 借考：plan.json 落盘新字段，摘要给人话，validate 仍通过", async () => {
+    await withTempDir(async (dir) => {
+      const jobPath = nodePath.join(dir, "job.json");
+      const outDir = nodePath.join(dir, "out");
+      writeFileSync(jobPath, JSON.stringify(relaxBorrowJob()));
+
+      const captured = captureOutput();
+      const code = await main(["node", "exam-seat", "plan", "--job", jobPath, "--out-dir", outDir]);
+
+      expect(code).toBe(EXIT_OK);
+      expect(captured.stdout()).toContain("放宽同班相邻：R1");
+      expect(captured.stdout()).toContain("借考：1 人（某生 T6 生物 → 第1考场）");
+
+      const plan = JSON.parse(readFileSync(nodePath.join(outDir, "plan.json"), "utf8")) as {
+        relaxedRooms: string[];
+        borrowings: { name: string; subject: string; subjectLabel: string; roomId: string }[];
+      };
+      expect(plan.relaxedRooms).toEqual(["R1"]);
+      expect(plan.borrowings).toHaveLength(1);
+      expect(plan.borrowings[0]).toMatchObject({
+        name: "某生",
+        subject: "biology",
+        subjectLabel: "生物",
+        roomId: "R1",
+      });
+
+      // 独立校验器（validateAll）也要认这两个新字段。
+      // 注意：同一个测试里再 spyOn 一次会拿到同一个 spy，所以用「累计长度」切出 validate 的输出。
+      const beforeValidate = captured.stdout().length;
+      const validateCode = await main([
+        "node",
+        "exam-seat",
+        "--json",
+        "validate",
+        "--job",
+        nodePath.join(outDir, "job.json"),
+        "--plan",
+        nodePath.join(outDir, "plan.json"),
+      ]);
+      expect(validateCode).toBe(EXIT_OK);
+      const report = JSON.parse(captured.stdout().slice(beforeValidate)) as { ok: boolean };
+      expect(report.ok).toBe(true);
     });
   });
 });

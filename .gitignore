@@ -7,5 +7,19 @@ coverage/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+# ⚠️ 真实名单：含学生姓名与准考证号，属于个人敏感信息，**绝不入库**。
+# 需要公开样例时请用脱敏版本（保留班级/选科，姓名与准考证号随机生成）。
+inputs/
+
+# 真实名单/排场结果（plan.json、工作簿里都有学生姓名），同样不入库
 out/
 tmp/
+
+# 需求单**原件**里含真实学生姓名/学号（老师原话引用），不入库；
+# 入库的是脱敏版 `docs/需求-考场级限制与放宽.md`。
+docs/需求-*.原件.md
+
+# shadcn-vue skill 的其它 agent 副本（`.agents/skills/shadcn-vue` 与 skills-lock.json 入库，
+# 这三个目录由 `skills` CLI 为 Claude/Continue 等生成，属于本机副本）
+.claude/
+.continue/

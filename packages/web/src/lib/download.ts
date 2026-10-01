@@ -1,4 +1,5 @@
 export const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+export const ZIP_MIME = "application/zip";
 export const JSON_MIME = "application/json";
 
 /** `Uint8Array` → 独立 `ArrayBuffer`（Blob 需要 ArrayBuffer 视图，这里顺手复制一份更安全）。 */

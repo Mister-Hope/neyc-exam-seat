@@ -97,6 +97,44 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     expect(constraints.count).toBe(1);
   });
 
+  it("考场：讲台侧加座与放宽同班相邻，容量随加座变化、列数改小自动收口", () => {
+    const rooms = useRoomsStore();
+    rooms.replaceRooms([]);
+    rooms.addRoom("small");
+    expect(rooms.totalSeats).toBe(30);
+
+    rooms.setExtraFrontSeats("R1", [2, 4]);
+    expect(rooms.roomById("R1")?.extraFrontSeats).toEqual([2, 4]);
+    expect(rooms.totalSeats).toBe(32);
+    expect(rooms.extraSeatRooms).toBe(1);
+
+    // 重复 / 越界值被过滤
+    rooms.setExtraFrontSeats("R1", [4, 2, 4, 99]);
+    expect(rooms.roomById("R1")?.extraFrontSeats).toEqual([2, 4]);
+
+    // 列数改小：越界的第 4 列必须丢掉，容量按新列数算
+    rooms.updateRoom("R1", { cols: 3 });
+    expect(rooms.roomById("R1")?.extraFrontSeats).toEqual([2]);
+    expect(rooms.totalSeats).toBe(19);
+
+    rooms.setRelaxSameClass("R1", true);
+    expect(rooms.roomById("R1")?.relaxSameClass).toBe(true);
+    expect(rooms.relaxedRooms.map((room) => room.id)).toEqual(["R1"]);
+    rooms.setRelaxSameClass("R1", 30);
+    expect(rooms.roomById("R1")?.relaxSameClass).toBe(30);
+    // 非法上限按「完全放开」处理；false / undefined 回到原规则
+    rooms.setRelaxSameClass("R1", 0.5);
+    expect(rooms.roomById("R1")?.relaxSameClass).toBe(true);
+    rooms.setRelaxSameClass("R1", undefined);
+    expect(rooms.roomById("R1")?.relaxSameClass).toBeUndefined();
+    expect(rooms.relaxedRooms).toEqual([]);
+
+    // 加座取消后字段不残留
+    rooms.setExtraFrontSeats("R1", []);
+    expect(rooms.roomById("R1")?.extraFrontSeats).toBeUndefined();
+    expect(rooms.totalSeats).toBe(18);
+  });
+
   it("选项：默认值与三种降级设置都能改", () => {
     const options = useOptionsStore();
     options.reset();
@@ -111,5 +149,26 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     });
     options.setRelax("none");
     expect(options.options.relax).toBe("none");
+  });
+
+  it("选项：显式时段表 / forbiddenSameSlot 默认存在，导入导出不丢", () => {
+    const options = useOptionsStore();
+    options.reset();
+    expect(options.options.slots).toEqual([]);
+    expect(options.options.forbiddenSameSlot).toEqual([]);
+
+    options.replace({
+      title: "三模",
+      options: {
+        seed: 7,
+        slots: [{ id: "T1", name: "语文", subjects: ["chinese"] }, { subjects: ["math"] }],
+        forbiddenSameSlot: [["chemistry", "biology"]],
+      },
+    });
+    expect(options.options.seed).toBe(7);
+    expect(options.options.slots).toHaveLength(2);
+    expect(options.options.forbiddenSameSlot).toEqual([["chemistry", "biology"]]);
+    // 已知字段以外的默认值仍然补齐
+    expect(options.options.adjacency).toBe("king");
   });
 });

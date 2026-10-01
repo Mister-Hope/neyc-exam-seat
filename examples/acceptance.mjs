@@ -2112,6 +2112,949 @@ check(
   `座位方案 ${constraintResult.seatings?.length ?? 0} 套；硬规则违规 ${hardRuleViolations(constraintResult).length} 处`,
 );
 
+/* ---------- 19. 考场级放宽 / 按科目借考 / 加座考场 / 显式时段（docs/需求-考场级限制与放宽.md） ---------- */
+
+/** 跑一次 plan 并把 plan.json 读回来（第 19 节自己的小工具）。 */
+const runPlanJob = (label, job, extraArgs = []) => {
+  const jobPath = path.join(work, `${label}.json`);
+  const outDir = path.join(work, `${label}-out`);
+  writeFileSync(jobPath, JSON.stringify(job, null, 2));
+  const run = runFull(["--json", "plan", "--job", jobPath, "--out-dir", outDir, ...extraArgs]);
+  let result = {};
+  try {
+    result = JSON.parse(run.stdout || "{}");
+  } catch {
+    result = {};
+  }
+  return {
+    job,
+    jobPath,
+    outDir,
+    run,
+    result,
+    plan: readJsonIfExists(path.join(outDir, "plan.json")),
+  };
+};
+
+/** 工作簿里全部单元格文本拼起来，用于断言「借考」「已放宽同班相邻」这类标注。 */
+const workbookText = (file) => {
+  try {
+    const wb = readWorkbook(readFileSync(file), { type: "buffer" });
+    const parts = [];
+    for (const name of wb.SheetNames) {
+      const rows = xlsxUtils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false });
+      parts.push(`${name} ${rows.flat().join(" ")}`);
+    }
+    return parts.join(" ");
+  } catch {
+    return "";
+  }
+};
+
+/** 给指定学生加 `subjectRoom`（第 19 节借考场景用；用副本，不改原数组）。 */
+const withBorrowRoom = (roster, subjectRoom) => {
+  const out = [];
+  for (const student of roster) {
+    out.push(student.id === "BORROW01" ? { ...student, subjectRoom } : student);
+  }
+  return out;
+};
+
+/** 递归剔掉 generatedAt / elapsedMs，用于「同 seed 结果一致」比较。 */
+const pruneTimestamps = (node) => {
+  if (node == null || typeof node !== "object") return;
+  delete node.generatedAt;
+  if (node.stats) delete node.stats.elapsedMs;
+  for (const value of Object.values(node)) {
+    if (typeof value === "object") pruneTimestamps(value);
+  }
+};
+
+/** 独立重算加座考场的座位号（不 import core）：列座位数 = rows + 该列是否加座； 列内蛇形（奇数列从前往后、偶数列从后往前），加座永远是该列最后一个号、行号 0。 */
+const seatNoInRoom = (rows, cols, extraCols, row, col) => {
+  let base = 0;
+  for (let c = 1; c < col; c += 1) base += rows + (extraCols.includes(c) ? 1 : 0);
+  const count = rows + (extraCols.includes(col) ? 1 : 0);
+  if (row === 0) return count > rows ? base + count : -1;
+  return base + (col % 2 === 1 ? row : rows - row + 1);
+};
+
+/** 多场次结果里每套座位自带 generatedAt / elapsedMs，只剔顶层会误判成「结果不一致」。 */
+const stablePlan = (plan) => {
+  if (!plan) return null;
+  const copy = JSON.parse(JSON.stringify(plan));
+  pruneTimestamps(copy);
+  return JSON.stringify(copy);
+};
+
+// 本节自成一块作用域，避免与前面各节的变量重名
+{
+  // 19a. 考场级放宽「同班相邻」：不放宽必须判死，放开后必须排得下且留痕
+  const relaxStudents = [];
+  for (let i = 0; i < 25; i += 1)
+    relaxStudents.push({ id: `2026RA${i}`, name: `一班${i}`, className: "高三(1)班" });
+  for (let i = 0; i < 5; i += 1)
+    relaxStudents.push({ id: `2026RB${i}`, name: `二班${i}`, className: "高三(2)班" });
+  const relaxRoomBase = { id: "R1", name: "第1考场", rows: 7, cols: 5 };
+  const relaxMake = (relaxSameClass) => ({
+    jobVersion: 2,
+    meta: { title: `放宽同班相邻（${relaxSameClass ?? "不放宽"}）` },
+    options: { seed: 20260930 },
+    students: relaxStudents,
+    rooms: [relaxSameClass === undefined ? relaxRoomBase : { ...relaxRoomBase, relaxSameClass }],
+  });
+  const relaxStrict = runPlanJob("accept-relax-strict", relaxMake());
+  const relaxTrue = runPlanJob("accept-relax-true", relaxMake(true));
+  const relaxNumber = runPlanJob("accept-relax-number", relaxMake(30));
+  const relaxTooSmall = runPlanJob("accept-relax-small", relaxMake(20));
+
+  check(
+    "放宽同班相邻：默认（不放宽）25 人同班进 35 座考场 → CLASS_LIMIT_EXCEEDED 且不导出",
+    relaxStrict.run.status === 3 &&
+      diagnosticCodes(relaxStrict.result).includes("CLASS_LIMIT_EXCEEDED") &&
+      (relaxStrict.plan?.entries ?? []).length === 0,
+    `exit=${relaxStrict.run.status}；诊断=${[...new Set(diagnosticCodes(relaxStrict.result))].join(",")}`,
+  );
+
+  check(
+    "放宽同班相邻：relaxSameClass=true → 30 人全部有座、零冲突、留痕、level=roomRelaxed",
+    relaxTrue.result.ok === true &&
+      (relaxTrue.plan?.entries ?? []).length === 30 &&
+      (relaxTrue.plan?.stats?.conflicts ?? -1) === 0 &&
+      relaxTrue.plan?.level === "roomRelaxed" &&
+      diagnosticCodes(relaxTrue.result).includes("ROOM_SAME_CLASS_RELAXED"),
+    `ok=${relaxTrue.result.ok} 人数=${(relaxTrue.plan?.entries ?? []).length} 冲突=${relaxTrue.plan?.stats?.conflicts} level=${relaxTrue.plan?.level}`,
+  );
+
+  check(
+    "放宽同班相邻：数字上限 30 够用 → 同样通过；上限 20 不够 → 仍然 CLASS_LIMIT_EXCEEDED",
+    relaxNumber.result.ok === true &&
+      relaxTooSmall.run.status === 3 &&
+      diagnosticCodes(relaxTooSmall.result).includes("CLASS_LIMIT_EXCEEDED"),
+    `30→ok=${relaxNumber.result.ok}；20→exit=${relaxTooSmall.run.status}`,
+  );
+
+  // 19b. 非矩形加座考场：37 座编号与容量
+  const nonRectStudents = Array.from({ length: 37 }, (_, i) => ({
+    id: `2026N${String(i).padStart(2, "0")}`,
+    name: `加座生${i}`,
+    className: `高三(${(i % 10) + 1})班`,
+  }));
+  const nonRect = runPlanJob("accept-nonrect", {
+    jobVersion: 2,
+    meta: { title: "非矩形加座考场 37 座" },
+    options: { seed: 20260930 },
+    students: nonRectStudents,
+    rooms: [{ id: "R1", name: "第1考场", rows: 7, cols: 5, extraFrontSeats: [2, 4] }],
+  });
+  const nonRectEntries = nonRect.plan?.entries ?? [];
+  const extraSeat15 = nonRectEntries.find((entry) => entry.seatNo === 15);
+  const extraSeat30 = nonRectEntries.find((entry) => entry.seatNo === 30);
+  const nonRectSeatNos = new Set(nonRectEntries.map((entry) => entry.seatNo));
+  check(
+    "加座考场：5×7+[2,4] → 容量 37、37 人全有座、15/30 号是讲台侧加座（row=0）",
+    nonRect.result.ok === true &&
+      (nonRect.plan?.stats?.seatsTotal ?? 0) === 37 &&
+      nonRectEntries.length === 37 &&
+      nonRectSeatNos.size === 37 &&
+      extraSeat15?.row === 0 &&
+      extraSeat15?.col === 2 &&
+      extraSeat30?.row === 0 &&
+      extraSeat30?.col === 4,
+    `总座位=${nonRect.plan?.stats?.seatsTotal} 人数=${nonRectEntries.length} 15号=${JSON.stringify(extraSeat15)} 30号=${JSON.stringify(extraSeat30)}`,
+  );
+
+  // 19c. 按科目借考：史生政学生 T6 到物化生的考场借考生物
+  const borrowCombos = {
+    物化生: ["physics", "chemistry", "biology"],
+    物化政: ["physics", "chemistry", "politics"],
+    物化地: ["physics", "chemistry", "geography"],
+    史地政: ["history", "politics", "geography"],
+    史生政: ["history", "biology", "politics"],
+  };
+  const borrowStudents = [];
+  const borrowPush = (combo, count, classBase) => {
+    for (let i = 0; i < count; i += 1)
+      borrowStudents.push({
+        id: `${combo}-${i}`,
+        name: `${combo}${i}`,
+        className: `高三(${classBase + (i % 3)})班`,
+        combination: combo,
+        subjects: borrowCombos[combo],
+      });
+  };
+  borrowPush("物化生", 10, 1);
+  borrowPush("物化政", 5, 4);
+  borrowPush("物化地", 5, 6);
+  borrowPush("史地政", 6, 8);
+  const borrowee = {
+    id: "BORROW01",
+    name: "借考生",
+    className: "高三(9)班",
+    combination: "史生政",
+    subjects: borrowCombos["史生政"],
+    subjectRoom: { biology: "R1" },
+  };
+  borrowStudents.push(borrowee);
+  const borrowRooms = [
+    { id: "R1", name: "第1考场", rows: 7, cols: 6 },
+    { id: "R2", name: "第2考场", rows: 7, cols: 6 },
+    {
+      id: "R3",
+      name: "第3考场",
+      rows: 6,
+      cols: 5,
+      dedicatedSubjects: ["politics", "geography"],
+    },
+    { id: "R4", name: "第4考场", rows: 7, cols: 5 },
+  ];
+  const borrowJobBase = (subjectRoom) => ({
+    jobVersion: 2,
+    meta: { title: "按科目借考" },
+    options: { seed: 20260930, groupPreference: "fillRooms" },
+    students: withBorrowRoom(borrowStudents, subjectRoom),
+    rooms: borrowRooms,
+    constraints: [
+      { id: "B1-史地政在R4", combinations: ["史地政"], roomId: "R4" },
+      { id: "B2-借考生主考场R4", studentIds: ["BORROW01"], roomId: "R4" },
+    ],
+  });
+  const borrowRun = runPlanJob("accept-borrow", borrowJobBase({ biology: "R1" }));
+  const borrowResult = borrowRun.result;
+  const borrowStudent = (borrowResult.byStudent ?? []).find((s) => s.studentId === "BORROW01");
+  const borrowSlot6 = borrowStudent?.slots?.T6 ?? null;
+  const borrowSlot4 = borrowStudent?.slots?.T4 ?? null;
+  const [borrowInfo] = borrowResult.borrowings ?? [];
+  const politicsInR3 = (borrowResult.byStudent ?? []).filter(
+    (s) => s.slots?.T7?.roomId === "R3",
+  ).length;
+  check(
+    "按科目借考：T6 生物落在目标考场（R1）并与主考场（R4）分开，其它时段仍在主考场",
+    borrowResult.ok === true &&
+      borrowInfo?.studentId === "BORROW01" &&
+      borrowInfo?.subject === "biology" &&
+      borrowInfo?.roomId === "R1" &&
+      borrowSlot6?.roomId === "R1" &&
+      borrowSlot6?.subject === "biology" &&
+      borrowSlot4?.roomId === "R4" &&
+      borrowStudent?.distinctRooms === 2,
+    `ok=${borrowResult.ok} T6=${JSON.stringify(borrowSlot6)} T4=${JSON.stringify(borrowSlot4)} borrowings=${(borrowResult.borrowings ?? []).length}`,
+  );
+
+  check(
+    "按科目借考：目标考场该时段仍只开一科（硬规则独立复核 0 违规）、座位不冲突",
+    hardRuleViolations(borrowResult).length === 0 &&
+      seatCollisions(borrowResult).length === 0 &&
+      seatingSubjectViolations(borrowResult).length === 0 &&
+      !diagnosticCodes(borrowResult).includes("ROOM_SUBJECT_CLASH"),
+    `硬规则违规=${hardRuleViolations(borrowResult).length} 座位冲突=${seatCollisions(borrowResult).length}`,
+  );
+
+  check(
+    "按科目借考：主考场本来就考这一科时留在主考场（政治不进专用考场）",
+    politicsInR3 === 5,
+    `R3 政治人数=${politicsInR3}（期望 5 = 物化政，借考生政治留在 R4）`,
+  );
+
+  const borrowValidate = runFull([
+    "--json",
+    "validate",
+    "--job",
+    borrowRun.jobPath,
+    "--plan",
+    path.join(borrowRun.outDir, "plan.json"),
+  ]);
+  let borrowValidateJson = {};
+  try {
+    borrowValidateJson = JSON.parse(borrowValidate.stdout || "{}");
+  } catch {
+    borrowValidateJson = {};
+  }
+  check(
+    "按科目借考：validate 独立复核通过（exit 0）",
+    borrowValidate.status === 0 && borrowValidateJson.ok === true,
+    `exit=${borrowValidate.status} ok=${borrowValidateJson.ok} issues=${(borrowValidateJson.issues ?? []).map((i) => i.code).join(",") || "无"}`,
+  );
+
+  const borrowWb = readWorkbook(readFileSync(path.join(borrowRun.outDir, "考场监考表.xlsx")), {
+    type: "buffer",
+  });
+  const borrowSheetName = borrowWb.SheetNames.find((name) => name.startsWith("第1考场"));
+  const borrowRemarkRows = borrowSheetName
+    ? xlsxUtils
+        .sheet_to_json(borrowWb.Sheets[borrowSheetName], { header: 1, raw: false, defval: "" })
+        .slice(3)
+        .filter((row) => String(row[4] ?? "").trim() !== "")
+    : [];
+  check(
+    "按科目借考：监考表只有借考那一行带备注，且写明「借考（第6时段 生物）」",
+    borrowRemarkRows.length === 1 &&
+      /^借考（第\d+时段 生物）$/.test(String(borrowRemarkRows[0][4])),
+    `sheet=${borrowSheetName}；备注行=${borrowRemarkRows.length}：${borrowRemarkRows.map((row) => row[4]).join("、")}`,
+  );
+
+  // 19d. 借考目标考场该时段另有别的科目 → 必须报错、不导出
+  const borrowClash = runPlanJob("accept-borrow-clash", borrowJobBase({ biology: "R3" }));
+  check(
+    "按科目借考：目标考场该时段已考别的科目 → SUBJECT_ROOM_CLASH 且不导出名单",
+    borrowClash.run.status === 3 &&
+      diagnosticCodes(borrowClash.result).includes("SUBJECT_ROOM_CLASH"),
+    `exit=${borrowClash.run.status}；诊断=${[...new Set(diagnosticCodes(borrowClash.result))].join(",")}`,
+  );
+
+  // 19e. 显式时段：名单剔除文科生后自动推导会塌陷，显式给时段表就不塌
+  const explicitSubjects = {
+    物化生: ["physics", "chemistry", "biology"],
+    物化政: ["physics", "chemistry", "politics"],
+    物化地: ["physics", "chemistry", "geography"],
+  };
+  const explicitStudents = [];
+  for (let i = 0; i < 10; i += 1)
+    explicitStudents.push({
+      id: `EX-生${i}`,
+      name: `物化生${i}`,
+      className: `高三(${1 + (i % 4)})班`,
+      combination: "物化生",
+      subjects: explicitSubjects["物化生"],
+    });
+  for (let i = 0; i < 6; i += 1)
+    explicitStudents.push({
+      id: `EX-政${i}`,
+      name: `物化政${i}`,
+      className: `高三(${5 + (i % 3)})班`,
+      combination: "物化政",
+      subjects: explicitSubjects["物化政"],
+    });
+  for (let i = 0; i < 6; i += 1)
+    explicitStudents.push({
+      id: `EX-地${i}`,
+      name: `物化地${i}`,
+      className: `高三(${8 + (i % 3)})班`,
+      combination: "物化地",
+      subjects: explicitSubjects["物化地"],
+    });
+  const explicitRooms = [
+    { id: "R1", name: "第1考场", rows: 7, cols: 6 },
+    { id: "R2", name: "第2考场", rows: 6, cols: 5, dedicatedSubjects: ["politics", "geography"] },
+  ];
+  const explicitSlots = [
+    { id: "T1", name: "第1时段", subjects: ["chinese"] },
+    { id: "T2", name: "第2时段", subjects: ["math"] },
+    { id: "T3", name: "第3时段", subjects: ["english"] },
+    { id: "T4", name: "第4时段", subjects: ["physics"] },
+    { id: "T5", name: "第5时段", subjects: ["chemistry"] },
+    { id: "T6", name: "第6时段", subjects: ["biology"] },
+    { id: "T7", name: "第7时段", subjects: ["politics"] },
+    { id: "T8", name: "第8时段", subjects: ["geography"] },
+  ];
+  const collapsed = runPlanJob("accept-slots-collapse", {
+    jobVersion: 2,
+    meta: { title: "时段塌陷（不给时段表）" },
+    options: { seed: 20260930, groupPreference: "fillRooms" },
+    students: explicitStudents,
+    rooms: explicitRooms,
+  });
+  const explicit = runPlanJob("accept-slots-explicit", {
+    jobVersion: 2,
+    meta: { title: "显式时段表" },
+    options: { seed: 20260930, groupPreference: "fillRooms", slots: explicitSlots },
+    students: explicitStudents,
+    rooms: explicitRooms,
+  });
+  const derivedSubjects = (collapsed.plan?.slots ?? []).map((s) => s.subjects.join("+"));
+  check(
+    "时段塌陷：政治/地理/生物被并进同一时段时，专用考场报 ROOM_SUBJECT_CLASH（不导出）",
+    collapsed.run.status === 3 &&
+      diagnosticCodes(collapsed.result).includes("ROOM_SUBJECT_CLASH") &&
+      derivedSubjects.some((s) => s.includes("politics") && s.includes("geography")),
+    `exit=${collapsed.run.status}；推导时段=${derivedSubjects.join(" | ")}`,
+  );
+
+  check(
+    "显式时段：options.slots 原样生效、不再 ROOM_SUBJECT_CLASH、留有 SLOTS_PROVIDED",
+    explicit.result.ok === true &&
+      (explicit.plan?.slots ?? []).length === explicitSlots.length &&
+      (explicit.plan?.slots ?? []).every((slot, i) => slot.id === explicitSlots[i].id) &&
+      !diagnosticCodes(explicit.result).includes("ROOM_SUBJECT_CLASH") &&
+      diagnosticCodes(explicit.result).includes("SLOTS_PROVIDED"),
+    `ok=${explicit.result.ok} 时段数=${(explicit.plan?.slots ?? []).length} 诊断=${[...new Set(diagnosticCodes(explicit.result))].join(",")}`,
+  );
+
+  // 19f. 分房游标回卷：整批钉考场拆出的「未钉住」部分要能回到本批次已占用的考场
+  // 注意：被钉的班（高三(1)班）不能再出现在物化生名单里，否则物化生的钉住批次会先占掉 R3
+  const wrapClasses = ["高三(2)班", "高三(3)班", "高三(4)班", "高三(5)班", "高三(6)班"];
+  const wrapHistory = ["history", "politics", "geography"];
+  const wrapStudents = [];
+  for (let i = 0; i < 12; i += 1)
+    wrapStudents.push({
+      id: `WRAP-A${i}`,
+      name: `史地政A${i}`,
+      className: "高三(1)班",
+      combination: "史地政",
+      subjects: wrapHistory,
+    });
+  for (let i = 0; i < 6; i += 1)
+    wrapStudents.push({
+      id: `WRAP-B${i}`,
+      name: `史地政B${i}`,
+      className: "高三(7)班",
+      combination: "史地政",
+      subjects: wrapHistory,
+    });
+  for (let i = 0; i < 119; i += 1)
+    wrapStudents.push({
+      id: `WRAP-P${i}`,
+      name: `物化生${i}`,
+      className: wrapClasses[i % wrapClasses.length],
+      combination: "物化生",
+      subjects: ["physics", "chemistry", "biology"],
+    });
+  const wrapJob = {
+    jobVersion: 2,
+    meta: { title: "整批钉考场 + 未钉住部分回卷" },
+    options: { seed: 20260930, groupPreference: "fillRooms" },
+    students: wrapStudents,
+    rooms: [
+      { id: "R1", name: "第1考场", rows: 7, cols: 6 },
+      { id: "R2", name: "第2考场", rows: 7, cols: 6 },
+      { id: "R3", name: "第3考场", rows: 7, cols: 5, relaxSameClass: true },
+      { id: "R4", name: "第4考场", rows: 7, cols: 5 },
+    ],
+    constraints: [{ id: "W1-1班钉R3", classes: ["高三(1)班"], roomId: "R3" }],
+  };
+  const wrapRun = runPlanJob("accept-wrap", wrapJob);
+  const wrapBIds = new Set(Array.from({ length: 6 }, (_, i) => `WRAP-B${i}`));
+  const wrapBStudents = (wrapRun.result.byStudent ?? []).filter((s) => wrapBIds.has(s.studentId));
+  const wrapBInR3 = wrapBStudents.filter((s) =>
+    Object.values(s.slots ?? {}).some((item) => item?.roomId === "R3"),
+  ).length;
+  check(
+    "分房游标回卷：整批钉考场后未钉住的 6 人回到本批次考场（不再 CAPACITY_INSUFFICIENT）",
+    wrapRun.result.ok === true &&
+      !diagnosticCodes(wrapRun.result).includes("CAPACITY_INSUFFICIENT") &&
+      (wrapRun.result.byStudent ?? []).length === wrapStudents.length &&
+      wrapBInR3 === 6,
+    `ok=${wrapRun.result.ok} 诊断=${[...new Set(diagnosticCodes(wrapRun.result))].join(",")} 未钉住 6 人落在 R3 的有 ${wrapBInR3} 人`,
+  );
+
+  const wrapInvigilatorText = workbookText(path.join(wrapRun.outDir, "考场监考表.xlsx"));
+  check("放宽留痕：监考表标注「已放宽同班相邻」", /已放宽同班相邻/.test(wrapInvigilatorText), "");
+
+  // 19g. 复现性：同 job 同 seed 跑两次，plan.json 完全一致（排除时间戳/耗时）
+  const borrowAgain = runPlanJob("accept-borrow-again", borrowJobBase({ biology: "R1" }));
+  check(
+    "借考场景可复现：同 job 同 seed 两次 plan.json 一致",
+    stablePlan(borrowRun.plan) != null &&
+      stablePlan(borrowRun.plan) === stablePlan(borrowAgain.plan),
+    `首次大小=${JSON.stringify(borrowRun.plan ?? {}).length} 二次大小=${JSON.stringify(borrowAgain.plan ?? {}).length}`,
+  );
+
+  // 19h. 显式时段把同一学生的两科排进同一时段 → SLOTS_CONFLICT，不导出名单
+  const slotConflict = runPlanJob("accept-slots-conflict", {
+    jobVersion: 2,
+    meta: { title: "显式时段：同一学生同段两科" },
+    options: {
+      seed: 20260930,
+      slots: [
+        { id: "T1", name: "第1时段", subjects: ["chinese"] },
+        { id: "T2", name: "第2时段", subjects: ["math"] },
+        { id: "T3", name: "第3时段", subjects: ["english"] },
+        { id: "T4", name: "第4时段", subjects: ["physics", "chemistry", "biology"] },
+      ],
+    },
+    students: Array.from({ length: 6 }, (_, i) => ({
+      id: `SLOT-${i}`,
+      name: `物化生${i}`,
+      className: `高三(${1 + (i % 3)})班`,
+      combination: "物化生",
+      subjects: ["physics", "chemistry", "biology"],
+    })),
+    rooms: [{ id: "R1", name: "第1考场", rows: 7, cols: 6 }],
+  });
+  check(
+    "显式时段：同一学生在同一时段被排两科 → SLOTS_CONFLICT 且不导出名单",
+    slotConflict.run.status === 3 &&
+      diagnosticCodes(slotConflict.result).includes("SLOTS_CONFLICT") &&
+      fileSize(path.join(slotConflict.outDir, "按班级考场安排.xlsx")) < 0 &&
+      fileSize(path.join(slotConflict.outDir, "考场监考表.xlsx")) < 0,
+    `exit=${slotConflict.run.status}；诊断=${[...new Set(diagnosticCodes(slotConflict.result))].join(",")}；名单文件=${fileSize(path.join(slotConflict.outDir, "按班级考场安排.xlsx"))}`,
+  );
+
+  // 19i. 借考目标考场该时段满座 → SUBJECT_ROOM_NO_SEAT，不导出名单
+  const fullBorrowStudents = Array.from({ length: 42 }, (_, i) => ({
+    id: `FULL-P${i}`,
+    name: `物化生${i}`,
+    className: `高三(${1 + (i % 5)})班`,
+    combination: "物化生",
+    subjects: ["physics", "chemistry", "biology"],
+  }));
+  for (let i = 0; i < 6; i += 1)
+    fullBorrowStudents.push({
+      id: `FULL-H${i}`,
+      name: `史地政${i}`,
+      className: "高三(7)班",
+      combination: "史地政",
+      subjects: ["history", "politics", "geography"],
+    });
+  fullBorrowStudents.push({
+    id: "FULL-BORROW",
+    name: "满座借考生",
+    className: "高三(8)班",
+    combination: "史生政",
+    subjects: ["history", "biology", "politics"],
+    subjectRoom: { biology: "R1" },
+  });
+  const fullBorrow = runPlanJob("accept-borrow-full", {
+    jobVersion: 2,
+    meta: { title: "借考目标考场满座" },
+    options: { seed: 20260930, groupPreference: "fillRooms" },
+    students: fullBorrowStudents,
+    rooms: [
+      { id: "R1", name: "第1考场", rows: 7, cols: 6 },
+      { id: "R2", name: "第2考场", rows: 7, cols: 5 },
+    ],
+    constraints: [
+      { id: "F1-史地政在R2", combinations: ["史地政"], roomId: "R2" },
+      { id: "F2-借考生主考场R2", studentIds: ["FULL-BORROW"], roomId: "R2" },
+    ],
+  });
+  check(
+    "按科目借考：目标考场该时段满座 → SUBJECT_ROOM_NO_SEAT 且不导出名单",
+    fullBorrow.run.status === 3 &&
+      diagnosticCodes(fullBorrow.result).includes("SUBJECT_ROOM_NO_SEAT") &&
+      fileSize(path.join(fullBorrow.outDir, "按班级考场安排.xlsx")) < 0 &&
+      fileSize(path.join(fullBorrow.outDir, "考场监考表.xlsx")) < 0,
+    `exit=${fullBorrow.run.status}；诊断=${[...new Set(diagnosticCodes(fullBorrow.result))].join(",")}；名单文件=${fileSize(path.join(fullBorrow.outDir, "按班级考场安排.xlsx"))}`,
+  );
+
+  // 19j. 编号图：加座考场按 §4.5 逐座对齐（CLI 级，不给 --extra 时行为不变）
+  // 座号只在 preview 文本里，所以拿**脚本自己重算的公式**去核对 CLI 打印的每一排数字（不是拿常量验公式）。
+  const extraNumbering = runJson(["numbering", "--rows", "7", "--cols", "5", "--extra", "2,4"]);
+  const extraSeats = extraNumbering.seats ?? [];
+  const frontRow = extraSeats.filter((seat) => seat.row === 0);
+  const plainNumbering = runJson(["numbering", "--rows", "7", "--cols", "5"]);
+  const previewRow = (prefix) => {
+    const line = String(extraNumbering.preview ?? "")
+      .split("\n")
+      .find((text) => text.trim().startsWith(prefix));
+    // 去掉行首的 `r0` / `r1` 标签，只取这一排的座位号
+    return (line ?? "").trim().replace(/^r\d+/, "").match(/\d+/g)?.map(Number) ?? [];
+  };
+  // 物理列 pc → 业务列 = cols - pc + 1（doorSide: right，门在右）；纯矩形/加座都按 §4.5 的列内蛇形
+  const expectedRow = (row) =>
+    Array.from({ length: 5 }, (_, index) => seatNoInRoom(7, 5, [2, 4], row, 5 - index)).filter(
+      (seatNo) => seatNo > 0,
+    );
+  const previewMatches = [0, 1, 3, 7].every(
+    (row) => JSON.stringify(previewRow(`r${row}`)) === JSON.stringify(expectedRow(row)),
+  );
+  check(
+    "加座编号图：--extra 2,4 → preview 每排数字与脚本独立重算一致（r0 只有 15/30、第 3 列从 16 开始）",
+    extraNumbering.extraFrontSeats?.join(",") === "2,4" &&
+      extraSeats.length === 37 &&
+      frontRow.length === 2 &&
+      frontRow.every((seat) => seat.businessCol === 2 || seat.businessCol === 4) &&
+      previewMatches &&
+      JSON.stringify(previewRow("r1")) === JSON.stringify([31, 29, 16, 14, 1]) &&
+      JSON.stringify(previewRow("r7")) === JSON.stringify([37, 23, 22, 8, 7]) &&
+      plainNumbering.extraFrontSeats === undefined &&
+      (plainNumbering.seats ?? []).length === 35 &&
+      (plainNumbering.seats ?? []).every((seat) => seat.row >= 1),
+    `加座座位数=${extraSeats.length}（r0=${frontRow.length}，列=${frontRow.map((s) => s.businessCol).join("/")}）；preview r0=${JSON.stringify(previewRow("r0"))} r1=${JSON.stringify(previewRow("r1"))} r7=${JSON.stringify(previewRow("r7"))}；自算 r0=${JSON.stringify(expectedRow(0))} r1=${JSON.stringify(expectedRow(1))}；纯矩形座位数=${(plainNumbering.seats ?? []).length}`,
+  );
+}
+
+/** 正则命中次数（与既有 countOf 区分开）。 */
+const countMatches = (text, pattern) => (text.match(pattern) ?? []).length;
+/** 一张 worksheet XML 里用到的样式序号集合。 */
+const styleIdsOf = (xml) =>
+  new Set([...xml.matchAll(/ s="(?<id>\d+)"/g)].map((m) => Number(m.groups.id)));
+/** 考场/科目文本的基础名：去掉「（…）」后缀。 */
+const baseNameOf = (text) =>
+  String(text)
+    .split(/[（(]/)[0]
+    .trim();
+/** 数据行（第 4 行起）用到的样式下标集合。 */
+const dataStyleIdsOf = (sheetXml) =>
+  new Set(
+    [...sheetXml.matchAll(/<row r="(?<row>\d+)"[^>]*>(?<cells>[\s\S]*?)<\/row>/g)]
+      .filter((m) => Number(m.groups.row) >= 4)
+      .flatMap((m) =>
+        [...m.groups.cells.matchAll(/ s="(?<id>\d+)"/g)].map((s2) => Number(s2.groups.id)),
+      ),
+  );
+/** 正文样式是否都是水平居中（解析 styles.xml 的 cellXfs 下标）。 */
+const bodyCellsCentered = (stylesXml, sheetXml) => {
+  const xfs = stylesXml.match(/<cellXfs[^>]*>(?<body>[\s\S]*?)<\/cellXfs>/)?.groups?.body ?? "";
+  // 要连子元素一起取：居中写在 <xf> 里的 <alignment> 上（自闭合 <xf/> 与嵌套两种都要正确处理）
+  const entries = [];
+  const openTag = /<xf\b[^>]*?(?<self>\/)?>/g;
+  for (let match = openTag.exec(xfs); match != null; match = openTag.exec(xfs)) {
+    if (match.groups.self === "/") {
+      entries.push(match[0]);
+      continue;
+    }
+    const close = xfs.indexOf("</xf>", openTag.lastIndex);
+    if (close === -1) break;
+    entries.push(xfs.slice(match.index, close + 5));
+    openTag.lastIndex = close + 5;
+  }
+  const dataStyles = dataStyleIdsOf(sheetXml);
+  return (
+    dataStyles.size > 0 &&
+    [...dataStyles].every((index) => /horizontal="center"/.test(entries[index] ?? ""))
+  );
+};
+
+/** 两个 sheet 的行内容是否逐格一致。 */
+const sameRows = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/** 考场基础名：去掉 job 里那些「（语史政数英地）」后缀。 */
+const roomBaseName = (room) =>
+  String(room.name ?? room.id)
+    .split(/[（(]/)[0]
+    .trim();
+
+/** 列出 xlsx（zip）里的条目名。 */
+const zipEntries = (file) =>
+  execFileSync("unzip", ["-Z1", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+    .trim()
+    .split("\n")
+    .filter((name) => name !== "");
+
+/** 从 xlsx 里取一段 XML（本轮产物是 stored zip，直接解压即可）。 */
+const unzipText = (file, member) =>
+  execFileSync("unzip", ["-p", file, member], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+const sheetNamesOf = (file) => readWorkbook(readFileSync(file), { type: "buffer" }).SheetNames;
+const sheetRowsOf = (file, name) => {
+  const wb = readWorkbook(readFileSync(file), { type: "buffer" });
+  return xlsxUtils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: "" });
+};
+/** Xlsx 是否有「A4 横向 + 缩放到一页宽 + 冻结 + 合并标题」这套打印设置。 */
+const hasPrintSetup = (xml) =>
+  xml.includes('paperSize="9"') &&
+  xml.includes('orientation="landscape"') &&
+  xml.includes('fitToWidth="1"') &&
+  xml.includes('fitToPage="1"') &&
+  xml.includes("<mergeCells") &&
+  xml.includes('state="frozen"');
+/** 列宽总宽（厘米）：1 字符宽 ≈ 0.185cm。 */
+const columnWidthCm = (xml) => {
+  const widths = [...xml.matchAll(/<col [^>]*width="(?<w>[\d.]+)"/g)].map((m) =>
+    Number(m.groups.w),
+  );
+  return widths.reduce((sum, width) => sum + width * 0.185, 0);
+};
+
+/* ---------- 20. 可直接打印的 Excel 交付物（老师反馈：准考证号 / 标题 / 字号 / A4 横向） ---------- */
+{
+  const classBookPath = path.join(outDir, "按班级考场安排.xlsx");
+  const invigilatorBookPath = path.join(outDir, "考场监考表.xlsx");
+  const classSheets = sheetNamesOf(classBookPath);
+  const invigilatorSheets = sheetNamesOf(invigilatorBookPath);
+  const classNames = [...new Set(job.students.map((s) => s.className))];
+  const worksheetXmls = (file) =>
+    zipEntries(file)
+      .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/.test(name))
+      .map((name) => unzipText(file, name));
+
+  // 20a. 合并工作簿结构：总表第一 + 每班一张；每考场一张
+  check(
+    "班级表：第一张是「总表」，之后每班一张 sheet",
+    classSheets[0] === "总表" &&
+      classSheets.length === classNames.length + 1 &&
+      classNames.every((name) => classSheets.includes(name)),
+    `${classSheets.length} 张：${classSheets.slice(0, 4).join(",")}…`,
+  );
+  check(
+    "监考表：每个考场一张 sheet，名字是「第N考场（科目单字）」",
+    invigilatorSheets.length === result.seatings.length &&
+      invigilatorSheets.every((name) => /^第.+考场（[^（）]+）$/.test(name)),
+    `${invigilatorSheets.length} 张：${invigilatorSheets.slice(0, 3).join(" | ")}`,
+  );
+
+  // 20b. 总表：三样基本信息 + 班级每行都填 + 主考场不带括号
+  const totalRows = sheetRowsOf(classBookPath, "总表");
+  const totalHeader = (totalRows[2] ?? []).map(String);
+  const totalBody = totalRows.slice(3).filter((row) => row.some((cell) => String(cell) !== ""));
+  const roomCols = totalHeader
+    .map((h, index) => (/^主考场$|^单科考场\d+$/.test(h) ? index : -1))
+    .filter((index) => index >= 0);
+  const bodyIds = new Set(totalBody.map((row) => String(row[2])));
+  const expectedIds = new Set(job.students.filter((s) => s.included !== false).map((s) => s.id));
+  check(
+    "总表：列含班级/姓名/准考证号，且准考证号与名单一一对应",
+    totalHeader[0] === "班级" &&
+      totalHeader[1] === "姓名" &&
+      totalHeader[2] === "准考证号" &&
+      roomCols.length >= 1 &&
+      bodyIds.size === expectedIds.size &&
+      [...expectedIds].every((id) => bodyIds.has(id)),
+    `表头=${totalHeader.join(" | ")}；人数=${bodyIds.size}/${expectedIds.size}`,
+  );
+  check(
+    "总表：班级列每行都填（不是只写第一行）",
+    totalBody.length === expectedIds.size && totalBody.every((row) => String(row[0]).trim() !== ""),
+    `${totalBody.length} 行，空班级 ${totalBody.filter((row) => String(row[0]).trim() === "").length} 行`,
+  );
+  const primaryCells = totalBody.map((row) => String(row[roomCols[0]] ?? "")).filter(Boolean);
+  const specialCells = totalBody
+    .flatMap((row) => roomCols.slice(1).map((index) => String(row[index] ?? "")))
+    .filter(Boolean);
+  check(
+    "总表：主考场不带括号，只有换考场才在考场后标科目",
+    primaryCells.length > 0 &&
+      primaryCells.every((cell) => !cell.includes("（")) &&
+      specialCells.length > 0 &&
+      specialCells.every((cell) => /^.+（[^（）]+）$/.test(cell)),
+    `主考场样例=${primaryCells[0]}；换考场样例=${specialCells.slice(0, 3).join("、")}`,
+  );
+  // 每个考场列后面必须紧跟同名的「…地点」列，且地点与 job 里的教室对得上
+  const locationOfRoom = new Map(
+    job.rooms.map((room) => [baseNameOf(room.name ?? room.id), room.location ?? ""]),
+  );
+  const locationProblems = [];
+  for (const index of roomCols) {
+    const label = totalHeader[index];
+    if (totalHeader[index + 1] !== `${label}地点`) {
+      locationProblems.push(`${label}:缺地点列`);
+      continue;
+    }
+    for (const row of totalBody) {
+      const roomCell = String(row[index] ?? "").trim();
+      const placeCell = String(row[index + 1] ?? "").trim();
+      if (roomCell === "") {
+        if (placeCell !== "") locationProblems.push(`${label}:空考场却有地点`);
+        continue;
+      }
+      const expected = locationOfRoom.get(baseNameOf(roomCell));
+      if (expected === undefined) locationProblems.push(`${label}:认不出考场 ${roomCell}`);
+      else if (placeCell !== expected)
+        locationProblems.push(`${label}:${roomCell} 地点=${placeCell}≠${expected}`);
+    }
+  }
+  check(
+    "总表：每个考场列后面紧跟「…地点」列，且地点与考务表的教室一致",
+    roomCols.length > 0 && locationProblems.length === 0,
+    locationProblems.length === 0
+      ? `${totalHeader.join(" | ")}`
+      : locationProblems.slice(0, 3).join("；"),
+  );
+  check(
+    "总表：不再出现旧的「考场①/②」列名",
+    !totalHeader.some((h) => /^考场[①②③④⑤]/.test(h)),
+    totalHeader.join(" | "),
+  );
+
+  // 20c. 每班 sheet 都自成一张表（标题、班级列、准考证号）
+  const classSheetProblems = classNames.filter((name) => {
+    const rows = sheetRowsOf(classBookPath, name);
+    const header = (rows[2] ?? []).map(String);
+    const body = rows.slice(3).filter((row) => row.some((cell) => String(cell) !== ""));
+    return !(
+      String(rows[0]?.[0] ?? "").includes(`${name} 考场安排`) &&
+      /^本班 \d+ 人 ｜ 需换考场 \d+ 人$/.test(String(rows[1]?.[0] ?? "")) &&
+      header[0] === "班级" &&
+      header[1] === "姓名" &&
+      header[2] === "准考证号" &&
+      body.length > 0 &&
+      body.every((row) => String(row[0]) === name && String(row[2]).length > 0)
+    );
+  });
+  check(
+    "每班 sheet：标题带班级、小字写本班人数、班级列每行都填、准考证号不空",
+    classSheetProblems.length === 0,
+    classSheetProblems.length === 0
+      ? `${classNames.length} 张全部合规`
+      : classSheetProblems.join("、"),
+  );
+
+  // 20d. 监考表：逐张核对标题 / 小字 / 表头
+  const invigilatorProblems = [];
+  const remarkRows = [];
+  const remarkPairs = new Set();
+  const sheetPairs = new Set();
+  for (const name of invigilatorSheets) {
+    const rows = sheetRowsOf(invigilatorBookPath, name);
+    const header = (rows[2] ?? []).map(String);
+    const meta = String(rows[1]?.[0] ?? "");
+    const room = job.rooms.find((r) => name.startsWith(roomBaseName(r)));
+    if (String(rows[0]?.[0] ?? "") !== name) invigilatorProblems.push(`${name}:标题`);
+    if (!/^地点：.+ ｜ 考场人数：\d+(?<relax> ｜ 本考场已放宽同班相邻)?$/.test(meta))
+      invigilatorProblems.push(`${name}:小字`);
+    if (header.join("|") !== "座位号|班级|姓名|准考证号|备注")
+      invigilatorProblems.push(`${name}:表头`);
+    if (!room) {
+      invigilatorProblems.push(`${name}:认不出考场`);
+      continue;
+    }
+    const body = rows.slice(3).filter((row) => row.some((cell) => String(cell) !== ""));
+    const declared = meta.match(/考场人数：(?<n>\d+)/)?.groups?.n;
+    if (declared === undefined || Number(declared) !== body.length)
+      invigilatorProblems.push(`${name}:人数(${declared}≠${body.length})`);
+    for (const row of body) {
+      sheetPairs.add(`${room.id}|${row[0]}|${row[3]}`);
+      if (String(row[4] ?? "").trim() !== "") {
+        remarkRows.push(String(row[4]));
+        remarkPairs.add(`${room.id}|${row[3]}`);
+      }
+    }
+  }
+  const invigilatorText = invigilatorSheets
+    .map((name) => sheetRowsOf(invigilatorBookPath, name).flat().join(" "))
+    .join(" ");
+  check(
+    "监考表：逐张 sheet 的标题=sheet 名、小字人数与表内行数一致、表头五列齐全",
+    invigilatorProblems.length === 0 && !invigilatorText.includes("监考："),
+    invigilatorProblems.length === 0
+      ? `${invigilatorSheets.length} 张全部合规，且全簿无「监考：」`
+      : invigilatorProblems.slice(0, 3).join("；"),
+  );
+
+  // 20e. 座位号 → 准考证号 必须与 plan 逐条一致（多一张、少一张、张冠李戴都要抓）
+  const expectedPairs = new Set();
+  for (const student of result.byStudent) {
+    for (const item of Object.values(student.slots ?? {})) {
+      if (item) expectedPairs.add(`${item.roomId}|${item.seatNo}|${student.studentId}`);
+    }
+  }
+  const pairDiff =
+    [...expectedPairs].filter((key) => !sheetPairs.has(key)).length +
+    [...sheetPairs].filter((key) => !expectedPairs.has(key)).length;
+  check(
+    "监考表：每张表的座位号→准考证号与 plan 逐条一致",
+    pairDiff === 0 && sheetPairs.size === expectedPairs.size && expectedPairs.size > 0,
+    `表内 ${sheetPairs.size} 条 / plan ${expectedPairs.size} 条，差异 ${pairDiff} 条`,
+  );
+  const borrowKeys = new Set((result.borrowings ?? []).map((b) => `${b.roomId}|${b.studentId}`));
+  const borrowMiss = [...borrowKeys].filter((key) => !remarkPairs.has(key)).length;
+  const borrowExtra = [...remarkPairs].filter((key) => !borrowKeys.has(key)).length;
+  check(
+    "监考表：备注只出现在借考人那一行（座位号→准考证号张冠李戴也算错），格式是「借考（第N时段 科目）」",
+    remarkRows.length === borrowKeys.size &&
+      borrowMiss === 0 &&
+      borrowExtra === 0 &&
+      remarkRows.every((remark) => /^借考（第\d+时段 .+）$/.test(remark)),
+    `备注行=${remarkRows.length}（借考 ${borrowKeys.size} 处）；漏标 ${borrowMiss}、错挂 ${borrowExtra}${remarkRows.length > 0 ? `：${remarkRows.slice(0, 2).join("、")}` : ""}`,
+  );
+
+  // 20f. 打印设置与字号：逐张 worksheet 都要有
+  const classWorksheetXmls = worksheetXmls(classBookPath);
+  const roomWorksheetXmls = worksheetXmls(invigilatorBookPath);
+  const allXml = [...classWorksheetXmls, ...roomWorksheetXmls];
+  const classStylesXml = unzipText(classBookPath, "xl/styles.xml");
+  const classWorkbookXml = unzipText(classBookPath, "xl/workbook.xml");
+  const printBad = allXml.filter((xml) => !hasPrintSetup(xml)).length;
+  // 每张表都要有 title(1) / meta(3) / header(4) 三档样式
+  const styledBad = allXml.filter((xml) => {
+    const ids = styleIdsOf(xml);
+    return ![1, 3, 4].every((id) => ids.has(id));
+  }).length;
+  const printTitleCounts = countMatches(classWorkbookXml, /_xlnm\.Print_Titles/g);
+  const roomWorkbookXml = unzipText(invigilatorBookPath, "xl/workbook.xml");
+  const roomPrintTitleCounts = countMatches(roomWorkbookXml, /_xlnm\.Print_Titles/g);
+  check(
+    "打印设置：每一张 sheet 都是 A4 横向 + 缩放到一页宽 + 冻结表头 + 合并标题，且每张都登记了重复打印 1–3 行",
+    printBad === 0 &&
+      styledBad === 0 &&
+      printTitleCounts === classSheets.length &&
+      roomPrintTitleCounts === invigilatorSheets.length &&
+      allXml.length === classSheets.length + invigilatorSheets.length,
+    `${allXml.length} 张表，缺打印设置 ${printBad} 张，缺标题/表头样式 ${styledBad} 张；Print_Titles ${printTitleCounts}/${classSheets.length} + ${roomPrintTitleCounts}/${invigilatorSheets.length}`,
+  );
+  check(
+    "字号与字体：标题 16pt / 小字 9pt / 等线，且单元格带样式引用",
+    classStylesXml.includes('<sz val="16"') &&
+      classStylesXml.includes('<sz val="9"') &&
+      classStylesXml.includes("等线") &&
+      classWorksheetXmls[0].includes('s="1"'),
+    `styles.xml 含 16pt=${classStylesXml.includes('<sz val="16"')} / 9pt=${classStylesXml.includes('<sz val="9"')} / 等线=${classStylesXml.includes("等线")}`,
+  );
+
+  check(
+    "两张表的正文单元格都居中（标题/表头居中，meta 小字左对齐）",
+    bodyCellsCentered(classStylesXml, classWorksheetXmls[0]) &&
+      bodyCellsCentered(unzipText(invigilatorBookPath, "xl/styles.xml"), roomWorksheetXmls[0]),
+    `班级表正文样式=${JSON.stringify([...dataStyleIdsOf(classWorksheetXmls[0])])} ｜ 监考表正文样式=${JSON.stringify([...dataStyleIdsOf(roomWorksheetXmls[0])])}`,
+  );
+
+  // 20g. 列宽总宽不超过 A4 横向可用宽度（1 字符宽 ≈ 0.185cm，A4 横向可用 ≈ 27.8cm）
+  const widthReport = allXml.map((xml) => columnWidthCm(xml));
+  const widthBad = widthReport.filter((cm) => !(cm > 0 && cm <= 27.8)).length;
+  check(
+    "列宽自适应且每张表总宽都不超过 A4 横向（27.8cm）",
+    widthBad === 0 && widthReport.length > 0,
+    `${widthReport.length} 张表，最大 ${Math.max(...widthReport).toFixed(2)}cm，超宽 ${widthBad} 张`,
+  );
+
+  // 20h. 每班 / 每考场单独文件
+  const classDir = path.join(outDir, "按班级考场安排");
+  const roomDir = path.join(outDir, "考场监考表");
+  const classFiles = readdirSync(classDir).filter((name) => name.endsWith(".xlsx"));
+  const roomFiles = readdirSync(roomDir).filter((name) => name.endsWith(".xlsx"));
+  check(
+    "落盘：每班一个文件、每考场一个文件（文件名 = sheet 名）",
+    classFiles.length === classNames.length &&
+      classNames.every((name) => classFiles.includes(`${name}.xlsx`)) &&
+      roomFiles.length === invigilatorSheets.length &&
+      invigilatorSheets.every((name) => roomFiles.includes(`${name}.xlsx`)),
+    `按班级考场安排/${classFiles.length} 个；考场监考表/${roomFiles.length} 个`,
+  );
+  const singleClassSheets = sheetNamesOf(path.join(classDir, `${classNames[0]}.xlsx`));
+  const singleRoomSheets = sheetNamesOf(path.join(roomDir, `${invigilatorSheets[0]}.xlsx`));
+  check(
+    "单班 / 单考场文件都只有一张 sheet（可直接发给班主任 / 监考老师）",
+    singleClassSheets.length === 1 &&
+      singleClassSheets[0] === classNames[0] &&
+      singleRoomSheets.length === 1 &&
+      singleRoomSheets[0] === invigilatorSheets[0],
+    `${classNames[0]}.xlsx → ${singleClassSheets.join(",")}；${invigilatorSheets[0]}.xlsx → ${singleRoomSheets.join(",")}`,
+  );
+  const classFileMismatch = classNames.filter(
+    (name) =>
+      !sameRows(
+        sheetRowsOf(path.join(classDir, `${name}.xlsx`), name),
+        sheetRowsOf(classBookPath, name),
+      ),
+  );
+  const roomFileMismatch = invigilatorSheets.filter(
+    (name) =>
+      !sameRows(
+        sheetRowsOf(path.join(roomDir, `${name}.xlsx`), name),
+        sheetRowsOf(invigilatorBookPath, name),
+      ),
+  );
+  // 20i. 姓名：整表不超 A4 时完整显示（截断只在超宽时发生，算法另由 io 单测覆盖）
+  const longName = "阿依古丽娜尔古丽米热买买提";
+  const longNameRun = runPlanJob("accept-longname", {
+    jobVersion: 2,
+    meta: { title: "长姓名不截断" },
+    options: { seed: 20260930 },
+    students: Array.from({ length: 5 }, (_, i) => ({
+      id: `LN-${i}`,
+      name: i === 0 ? longName : `同学${i}`,
+      className: "2501",
+      combination: "物化生",
+      subjects: ["physics", "chemistry", "biology"],
+    })),
+    rooms: [{ id: "R1", name: "第一考场", location: "高一·一班", rows: 7, cols: 6 }],
+  });
+  const longNameCells = longNameRun.plan
+    ? sheetRowsOf(path.join(longNameRun.outDir, "按班级考场安排.xlsx"), "总表").flat()
+    : [];
+  check(
+    "姓名：整表不超 A4 时 13 字姓名完整保留（不截断）",
+    longNameRun.result.ok === true && longNameCells.some((cell) => String(cell) === longName),
+    `ok=${longNameRun.result.ok}；姓名列=${JSON.stringify(longNameCells.filter((cell) => /穆海|同学/.test(String(cell))))}`,
+  );
+
+  check(
+    "单班 / 单考场文件的内容与合并版对应 sheet 逐格一致",
+    classFileMismatch.length === 0 && roomFileMismatch.length === 0,
+    `比对 ${classNames.length} 个班文件 + ${invigilatorSheets.length} 个考场文件；不一致 ${classFileMismatch.length + roomFileMismatch.length} 个`,
+  );
+}
+
 /* ---------- 汇总 ---------- */
 const failed = results.filter((r) => !r.ok);
 console.log();

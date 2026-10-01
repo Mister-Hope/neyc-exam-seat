@@ -205,3 +205,124 @@ describe("job.json v2：选科 / 地点 / 专用考场 / 选择器都必须无�
     expect(pre.diagnostics.some((d) => d.code === "CONSTRAINT_NO_SELECTOR")).toBe(true);
   });
 });
+
+describe("job.json v3：加座 / 放宽同班相邻 / 借考 / 显式时段必须无损往返", () => {
+  const v3: Job = {
+    jobVersion: 3,
+    meta: { title: "2026届高三三模" },
+    options: {
+      seed: 11,
+      slots: [{ id: "T1", name: "语文", subjects: ["chinese"] }, { subjects: ["math", "physics"] }],
+      forbiddenSameSlot: [["chemistry", "biology"]],
+    },
+    students: [
+      {
+        id: "2026010001",
+        name: "某生",
+        className: "高三(1)班",
+        subjects: ["biology", "politics", "history"],
+        subjectRoom: { biology: "R18" },
+      },
+      { id: "2026010002", name: "李娜", className: "高三(2)班", subjects: ["biology"] },
+    ],
+    rooms: [
+      {
+        id: "R18",
+        name: "第十八考场",
+        rows: 7,
+        cols: 5,
+        extraFrontSeats: [2, 4],
+        relaxSameClass: true,
+      },
+      { id: "R17", name: "第十七考场", rows: 7, cols: 5, relaxSameClass: 30 },
+    ],
+    constraints: [],
+  };
+
+  it("导出 → 导入逐字段相等（含加座 / 放宽 / 借考 / 时段）", () => {
+    const roundTrip = parseJobText(serializeJob(v3));
+    expect(roundTrip).toEqual(v3);
+    expect(roundTrip.students[0]?.subjectRoom).toEqual({ biology: "R18" });
+    expect(roundTrip.rooms[0]?.extraFrontSeats).toEqual([2, 4]);
+    expect(roundTrip.rooms[0]?.relaxSameClass).toBe(true);
+    expect(roundTrip.rooms[1]?.relaxSameClass).toBe(30);
+    expect(roundTrip.options?.slots).toEqual(v3.options?.slots);
+    expect(roundTrip.options?.forbiddenSameSlot).toEqual([["chemistry", "biology"]]);
+  });
+
+  it("草稿往返同样不丢字段，且草稿与 job 不共享数组 / 对象", () => {
+    const draft = draftFromJob(v3);
+    const rebuilt = buildJob(draft);
+    expect(rebuilt.students).toEqual(v3.students);
+    expect(rebuilt.rooms).toEqual(v3.rooms);
+    expect(rebuilt.options?.slots).toEqual(v3.options?.slots);
+    expect(rebuilt.options?.forbiddenSameSlot).toEqual(v3.options?.forbiddenSameSlot);
+
+    // 深拷贝：改草稿里的加座列 / 借考映射不会污染原 job
+    draft.rooms[0]!.extraFrontSeats!.push(1);
+    draft.students[0]!.subjectRoom!.biology = "R99";
+    expect(v3.rooms[0]?.extraFrontSeats).toEqual([2, 4]);
+    expect(v3.students[0]?.subjectRoom).toEqual({ biology: "R18" });
+  });
+
+  it("默认 options 补齐 slots / forbiddenSameSlot（Required<PlanOptions> 的运行时兜底）", () => {
+    expect(DEFAULT_OPTIONS.slots).toEqual([]);
+    expect(DEFAULT_OPTIONS.forbiddenSameSlot).toEqual([]);
+    const job = buildJob(createEmptyDraft());
+    expect(job.options?.slots).toEqual([]);
+    expect(job.options?.forbiddenSameSlot).toEqual([]);
+  });
+
+  it("非法值被过滤：越界加座 / 非法放宽 / 空借考 / 不成对科目", () => {
+    const parsed = parseJob({
+      students: [
+        {
+          id: "A",
+          name: "张三",
+          className: "一班",
+          subjectRoom: { biology: "R1", chemistry: "", "": "R2", math: 42 },
+        },
+        { id: "B", name: "李四", className: "一班", subjectRoom: {} },
+      ],
+      rooms: [
+        { id: "R1", rows: 7, cols: 5, extraFrontSeats: [4, 2, 2, 9, 0, -3], relaxSameClass: 0 },
+        { id: "R2", rows: 6, cols: 5, relaxSameClass: 1.5 },
+        { id: "R3", rows: 6, cols: 5, extraFrontSeats: [] },
+      ],
+      options: {
+        slots: [{ subjects: [] }, { id: "T1", subjects: ["chinese"] }],
+        forbiddenSameSlot: [["chemistry"], ["biology", "physics", " "]],
+      },
+    });
+    // 越界 / 重复 / 非整数加座被过滤，只剩 1..cols 内的两列并升序
+    expect(parsed.rooms[0]?.extraFrontSeats).toEqual([2, 4]);
+    // 0 / 小数不是合法的放宽取值，丢掉
+    expect(parsed.rooms[0]?.relaxSameClass).toBeUndefined();
+    expect(parsed.rooms[1]?.relaxSameClass).toBeUndefined();
+    // 空加座数组不保留字段（与 dedicatedSubjects 的写法一致）
+    expect(parsed.rooms[2]?.extraFrontSeats).toBeUndefined();
+    // 借考：空值 / 非字符串条目丢掉
+    expect(parsed.students[0]?.subjectRoom).toEqual({ biology: "R1" });
+    expect(parsed.students[1]?.subjectRoom).toBeUndefined();
+    // 时段：没有科目的条目丢掉；科目对：少于两科丢掉
+    expect(parsed.options?.slots).toEqual([{ id: "T1", subjects: ["chinese"] }]);
+    expect(parsed.options?.forbiddenSameSlot).toEqual([["biology", "physics"]]);
+  });
+
+  it("slots / forbiddenSameSlot / subjectRoom 形状不对时抛中文错误", () => {
+    const base = { students: [], rooms: [] };
+    expect(() => parseJob({ ...base, options: { slots: "T1" } })).toThrow(/options\.slots/);
+    expect(() => parseJob({ ...base, options: { forbiddenSameSlot: "x" } })).toThrow(
+      /forbiddenSameSlot/,
+    );
+    expect(() =>
+      parseJob({
+        ...base,
+        students: [{ id: "A", name: "张三", className: "一班", subjectRoom: ["biology"] }],
+      }),
+    ).toThrow(/subjectRoom/);
+    expect(() =>
+      parseJob({ students: [], rooms: [{ id: "R1", rows: 6, cols: 5, extraFrontSeats: 2 }] }),
+    ).toThrow(/extraFrontSeats/);
+  });
+});

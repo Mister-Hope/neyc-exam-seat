@@ -44,8 +44,20 @@ export type RelaxMode = "none" | "softConstraints" | "minConflicts";
  */
 export type GroupPreference = "sameCombination" | "fillRooms";
 
-/** 结果采用的级别。`strict` 为完全满足。 */
-export type PlanLevel = "strict" | "orthogonal" | "softConstraints" | "minConflicts";
+/**
+ * 结果采用的级别。
+ *
+ * - `strict`：完全满足（默认）
+ * - `orthogonal`：班级数不足自动退化为 4 邻域
+ * - `softConstraints` / `minConflicts`：`--relax` 降级
+ * - `roomRelaxed`：考场级放宽过「同班相邻」（`RoomSpec.relaxSameClass`），该结果仍然可用， 但要显式告警并在监考表上标注
+ */
+export type PlanLevel =
+  | "strict"
+  | "orthogonal"
+  | "softConstraints"
+  | "minConflicts"
+  | "roomRelaxed";
 
 export interface Student {
   id: string;
@@ -58,6 +70,13 @@ export interface Student {
   combination?: string;
   /** 解析后的选科科目 id，例如 ['physics','chemistry','politics'] */
   subjects?: string[];
+  /**
+   * 借考：某科目去指定考场考（科目 id → 考场 id），例如 `{ "biology": "R18" }`。
+   *
+   * 该时段只占用目标考场的一个**空位**，不改变目标考场该时段的卷子（仍然只有一科）； 其余科目留在自己的主考场。目标考场该时段若另有别的科目，报
+   * `SUBJECT_ROOM_CLASH`，不静默混排。
+   */
+  subjectRoom?: Record<string, string>;
   tags?: string[];
   meta?: Record<string, unknown>;
 }
@@ -81,6 +100,29 @@ export interface RoomSpec {
    * 专用考场只接收**非常规组合**（跨文理）中考了该科目的学生。 一个考场可以承担多个学科——例如政治在 T6、地理在 T7，时间不冲突， 同一个房间可以既当政治专用又当地理专用。
    */
   dedicatedSubjects?: string[];
+  /**
+   * 讲台一侧的加座所在业务列（从靠门侧起算），例如 `[2, 4]`。
+   *
+   * 每个这类列在讲台前面多 1 张桌子，因此该列的座位数 = `rows + 1`；座位号沿用按列蛇形， 加座永远排在该列最后一个号，行号记 `0`（第 1 排之前）。缺省 = 纯矩形
+   * `rows × cols`。 详见 `docs/design.md` §4.5（5 列 × 7 排 + 2 个加座 = 37 座）。
+   */
+  extraFrontSeats?: number[];
+  /**
+   * 本考场放宽「同班相邻」：`true` = 完全放开；数字 = 该考场同班学生数上限。
+   *
+   * 只影响本考场：该考场内同班学生相邻不再算冲突（仍会留一条 `ROOM_SAME_CLASS_RELAXED` warning， 并在监考表表头标注）；其余考场规则不变。
+   */
+  relaxSameClass?: boolean | number;
+}
+
+/** 显式时段表的单个时段（`PlanOptions.slots`）。 */
+export interface PlanSlotSpec {
+  /** 缺省按顺序生成 `T1`、`T2`… */
+  id?: string;
+  /** 缺省按顺序生成「第N时段」 */
+  name?: string;
+  /** 本时段并行开考的科目 id */
+  subjects: string[];
 }
 
 export interface Constraint {
@@ -125,6 +167,14 @@ export interface PlanOptions {
   regularCombinations?: string[];
   /** 一个学生最多允许用几个考场，超过就报警。默认 3。 */
   maxRoomsPerStudent?: number;
+  /**
+   * 显式时段表：一旦给定就**不再自动推导**时段（老师按考务表把 7 个时段填死）。
+   *
+   * 用在名单被手工剔除、自动推导会塌陷的场合（`docs/design.md` §5.3）。时段 id / 名称缺省时按顺序补齐。 同一学生在同一时段被排两科 → 报错，不静默合并。
+   */
+  slots?: PlanSlotSpec[];
+  /** 只补「必须分开考」的科目对，例如 `[["chemistry","biology"]]`：它们会被并进冲突图再着色， 其余时段仍自动推导。用在不方便整张时段表填死的场合。 */
+  forbiddenSameSlot?: string[][];
 }
 
 export interface Job {
@@ -161,6 +211,16 @@ export type DiagnosticCode =
   | "CONSTRAINTS_IGNORED_MULTI"
   | "TOO_FEW_CLASSES"
   | "CLASS_LIMIT_EXCEEDED"
+  // 考场级放宽 / 借考 / 显式时段（本轮新增，见 docs/design.md §5.8）
+  | "ROOM_SAME_CLASS_RELAXED"
+  | "SUBJECT_ROOM_APPLIED"
+  | "SUBJECT_ROOM_UNKNOWN_ROOM"
+  | "SUBJECT_ROOM_UNKNOWN_SUBJECT"
+  | "SUBJECT_ROOM_CLASH"
+  | "SUBJECT_ROOM_NO_SEAT"
+  | "SUBJECT_ROOM_NO_SLOT"
+  | "SLOTS_PROVIDED"
+  | "SLOTS_CONFLICT"
   // 限定
   | "CONSTRAINT_EMPTY_DOMAIN"
   | "CONSTRAINT_INDEX_OUT_OF_RANGE"
