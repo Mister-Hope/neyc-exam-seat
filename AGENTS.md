@@ -75,9 +75,9 @@ vendor/                           SheetJS tarball
 1. `packages/core` **保持零运行时依赖**，不 import `node:*`、不碰 DOM。
 2. 求解结果**同输入同 seed 必须完全一致**，这是可复现性的底线。
 3. 求解器只用 `PlanResult.diagnostics` 表达业务失败，**不用抛异常**。
-4. 导出前必须跑 `validate()`——校验器与求解器分开实现，不许自证。
-   ⚠️ **当前实现还没把校验结论用于导出决策**（自校验失败被包装成 `SEARCH_FAILED`，而导出闸门不拦该码，
-   已知缺陷 **R-1**，见 `docs/design.md` §18）——修好之前别默认这条已经成立。
+4. 导出前必须跑 `validate()`——校验器与求解器分开实现，不许自证；**导出层必须消费 core 的 `delivery`**：
+   `plan()` / `planAll()` 已经算好（`blocked` / `ready` / `ready-with-warnings`），对**可能被改动过**的结果要调
+   `evaluateDelivery(job, result)` / `evaluateDeliveryAll(job, result)` 重算（R-1 修复后的契约，见 `docs/design.md` §8.1 与 §16 v8.4）。
 5. **新增 `@exam-seat/*` 的子路径导出时（例如 `@exam-seat/io/node`），必须同时改三处**：
    根 `tsconfig.json` 的 `paths`、`vitest.config.ts` 的 alias、以及该包的 `package.json#exports`。
    漏掉前两处的话，**干净检出（还没 build）时 `pnpm typecheck` 会因为找不到 `dist/*.d.ts` 而失败**——
@@ -86,5 +86,6 @@ vendor/                           SheetJS tarball
 
 ## 已知缺陷登记
 
-外部 review 的独立复核结论登记在 `docs/design.md` **§18 已知缺陷登记**（R-1 导出门禁 / R-2 输出目录残留 /
-R-3 缺考重名 / R-4 JSON Patch 原型污染 / R-5 桌面版下载·CSP·导航）。动手修之前先读那一节；改完把条目移入 §16 变更记录。
+外部 review 的独立复核结论登记在 `docs/design.md` **§18 已知缺陷登记**。**R-1 导出门禁 / R-2 输出目录残留 /
+R-3 缺考重名（§16 v8.4）、R-4 JSON Patch / R-5 桌面版下载·CSP·导航 / F-1 `--relax` 交付通道（§16 v8.5）均已修复并复验**；
+动手前先读 §18（含两条口径备忘：strict 下真·排不满判 `ready-with-warnings` 是有意契约、`ROOM_SAME_CLASS_RELAXED` 保持 warning）。

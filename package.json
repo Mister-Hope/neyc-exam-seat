@@ -16,7 +16,7 @@
     "lint:check": "oxlint && oxfmt --check",
     "prepare": "husky",
     "smoke": "node examples/smoke.mjs",
-    "test": "vitest run",
+    "test": "vitest run && pnpm --filter @exam-seat/desktop test",
     "test:watch": "vitest",
     "typecheck": "pnpm -r --filter './packages/*' --filter '!./packages/desktop' typecheck",
     "typecheck:all": "pnpm typecheck && pnpm typecheck:desktop && pnpm typecheck:scripts",
