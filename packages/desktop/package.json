@@ -12,6 +12,7 @@
     "dev": "node scripts/dev.mjs",
     "prepare-web": "node scripts/prepare-web.mjs",
     "smoke": "node scripts/smoke.mjs",
+    "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

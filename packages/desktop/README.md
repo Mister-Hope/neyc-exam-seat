@@ -1,7 +1,11 @@
 # packages/desktop · 「考场排布」桌面版
 
-Electron 外壳，加载 `packages/web` 的构建产物。**不属于**根 `pnpm verify` 的范围（在 `apps/*` 而不是
-`packages/*`），所以日常验证与 CI 的 verify job 不会连带安装 / 打包 Electron。
+Electron 外壳，加载 `packages/web` 的构建产物。**不属于**根 `pnpm verify` 的构建 / 类型检查范围
+（根 `build` 与 `typecheck` 用 `--filter '!./packages/desktop'` 显式排除），所以日常验证与 CI 的
+verify job 不会连带安装 / 打包 Electron。
+
+不过它的**类型**仍然有门禁：`pnpm typecheck:desktop`（`tsc --checkJs`，见 `tsconfig.json`），
+CI 里单独跑一步（纯 `tsc`，不需要 Electron 二进制）；单测用 `pnpm --filter @exam-seat/desktop test`。
 
 ## 为什么用 `app://` 而不是 `file://`
 
@@ -42,13 +46,38 @@ pnpm --filter @exam-seat/desktop smoke -- --no-sandbox   # 受限 shell 里 Chro
 ## 目录
 
 ```
-src/main.mjs            主进程：app:// 协议、窗口、下载落盘
+src/main.mjs            主进程：app:// 协议（含 CSP）、窗口、导航拦截、下载落盘
+src/download-path.mjs   下载去重的纯逻辑（`nextAvailablePath`，可单测）
+test/download-dedup.test.mjs  下载去重单测（`node --test`）
 scripts/prepare-web.mjs 同步 packages/web/dist → packages/desktop/web-dist
 scripts/build.mjs       electron-builder 封装（版本注入 / 不签名 / --target）
 scripts/smoke.mjs       CDP 驱动的端到端验收（协议 / 六步 / 真求解 / 导出）
 build/icon.svg          图标源文件（icon.png / icon.icns / icon.ico 由它导出）
 electron-builder.yml    打包配置（productName「考场排布」，产物名 exam-seat-desktop-…）
 ```
+
+## 首次打开的放行步骤（未签名产物）
+
+产物**不做代码签名 / 公证**（没有开发者证书），所以两个系统都会拦一下——这是预期行为，不是文件坏了：
+
+**macOS（Gatekeeper）**
+
+- 双击若提示「无法打开，因为 Apple 无法检查其是否包含恶意软件」：到「访达」里**右键（或 Control + 点击）图标 → 打开**，
+  在弹窗里再点一次「打开」即可（此后该应用不再询问）；
+- 若已被系统隔离、右键打开仍不放行，去掉隔离属性再开：
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/考场排布.app     # 或 dmg 里拖出来的路径
+  ```
+
+- 仍然提示损坏时，先在「系统设置 → 隐私与安全性」里点「仍要打开」，再重试。
+
+**Windows（SmartScreen）**
+
+- 运行安装包或 exe 时出现蓝色「Windows 已保护你的电脑」：点「**更多信息**」→「**仍要运行**」；
+- 若被浏览器标记（Edge 下载栏显示「不常下载」），在下载项上选「保留」即可。
+
+> 想彻底免掉这些提示，需要购买代码签名证书并做公证（macOS 还要 notarization）——属于发布流程的后续工作。
 
 ## 图标
 

@@ -9,6 +9,7 @@
   // （全是「参数/变量缺 JSDoc 注解」的**注解缺失**，不是 bug），补齐属于后续增量工作。
   // 除此之外**全部按仓库最严档**（`strict` + `noUncheckedIndexedAccess` + `noUnusedParameters` +
   // `noUnusedLocals`）——实测 0 error。注解补齐后可把最后这一项也打开。
+
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],
@@ -29,8 +30,7 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["src/**/*.mjs", "scripts/**/*.mjs"],
-  // 这些目录是构建产物 / 本机缓存（已被 .gitignore 忽略），不能进类型检查
+  "include": ["src/**/*.mjs", "scripts/**/*.mjs", "test/**/*.mjs"],
   "exclude": [
     "node_modules/**",
     ".cache/**",

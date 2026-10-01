@@ -11,6 +11,8 @@ import path from "node:path";
 
 import { BrowserWindow, Menu, app, protocol, session, shell } from "electron";
 
+import { nextAvailablePath } from "./download-path.mjs";
+
 const APP_DIR = path.resolve(import.meta.dirname, "..");
 const log = (message) => process.stdout.write(`${message}\n`);
 const logError = (message) => process.stderr.write(`${message}\n`);
@@ -95,6 +97,39 @@ function mimeType(filePath) {
 }
 
 /**
+ * `app://` 响应的 CSP。
+ *
+ * 之前**完全没有 CSP**：一旦渲染进程被注入（例如某天引入了带 XSS 的依赖），就能加载远程脚本 或把数据外发。这里把来源收紧到应用自身。
+ *
+ * 逐项说明（**不要**随手删）：
+ *
+ * - `script-src 'self'`：只用打包产物里的脚本，不允许内联 / 远程脚本；
+ * - `style-src 'self' 'unsafe-inline'`：Vue / Tailwind 运行时会写内联 style，必须放开 inline；
+ * - `img-src 'self' data: blob:`：导出预览与图标会用到 data:/blob:；
+ * - **`worker-src 'self' blob:`：求解器是 ES module Web Worker，缺了它求解直接不可用**；
+ * - `connect-src 'self'`：worker / fetch 只连应用自身来源；
+ * - `object-src` / `base-uri` / `frame-ancestors` 全禁，堵住插件、`<base>` 劫持与套框。
+ */
+export const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+/** 自定义协议的响应头：CSP + 类型 + 不缓存。 */
+const APP_RESPONSE_HEADERS = {
+  "cache-control": "no-cache",
+  "content-security-policy": APP_CSP,
+};
+
+/**
  * 把 `app://bundle/<相对路径>` 映射到 `WEB_ROOT` 下的文件。
  *
  * - 只允许 `WEB_ROOT` 内部的文件（`path.resolve` 后越界一律 403），避免自定义协议变成任意文件读取；
@@ -114,14 +149,14 @@ async function handleAppRequest(request) {
     const body = await readFile(filePath);
     return new Response(body, {
       status: 200,
-      headers: { "content-type": mimeType(filePath), "cache-control": "no-cache" },
+      headers: { ...APP_RESPONSE_HEADERS, "content-type": mimeType(filePath) },
     });
   } catch {
     if (path.extname(filePath) === "") {
       const fallback = await readFile(path.join(WEB_ROOT, "index.html"));
       return new Response(fallback, {
         status: 200,
-        headers: { "content-type": MIME_TYPES[".html"] },
+        headers: { ...APP_RESPONSE_HEADERS, "content-type": MIME_TYPES[".html"] },
       });
     }
     return new Response("Not Found", { status: 404 });
@@ -154,7 +189,8 @@ function configureDownloads() {
   const dir = DOWNLOAD_DIR;
   mkdirSync(dir, { recursive: true });
   session.defaultSession.on("will-download", (_event, item) => {
-    const target = path.join(dir, item.getFilename());
+    // 同名不覆盖：自动找 `(2)`、`(3)`…（见 nextAvailablePath）
+    const target = nextAvailablePath(dir, item.getFilename());
     item.setSavePath(target);
     item.once("done", (_event, state) => {
       log(`[download] ${state} ${target}`);
@@ -189,6 +225,13 @@ async function createWindow() {
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http://") || url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  // 同窗口导航也要拦：否则注入脚本能把窗口导到远程页（标题还会被强制改回「考场排布」，更难察觉）。
+  // 只放行自己的 app://bundle/ 来源（hash 路由的 URL 前缀不变，天然放行）。
+  window.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith(`${SCHEME}://${HOST}/`)) return;
+    event.preventDefault();
+    logError(`[exam-seat] 已拦截窗口内导航：${url}`);
   });
 
   forwardConsole(window);
