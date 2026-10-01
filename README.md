@@ -9,9 +9,12 @@
 
 ## 快速开始
 
+需要 **Node ≥ 22.18** 与 **pnpm 12**（22.18 是下限：`.husky/commit-msg` 用 `node` 直接跑
+`scripts/verifyCommit.ts`，依赖 Node 的 TypeScript type stripping，该能力 22.18 起默认开启）。
+
 ```bash
 pnpm install
-pnpm build          # 构建 core / io / cli
+pnpm build          # 构建 core / io / cli / web
 pnpm test           # 单元测试
 pnpm verify         # 提交前全量门禁：lint + typecheck + build + test + 验收
 ```
@@ -44,6 +47,10 @@ node packages/cli/bin/exam-seat.mjs numbering --rows 7 --cols 5 --extra 2,4
 
 ```
 out/按班级考场安排.xlsx      # 总表（全班 706 人）+ 每个班一张 sheet
+                             # 列：班级 / 姓名 / 准考证号 / 主考场 / 主座位号 /
+                             #     单科考场1 / 座位号1 / 单科考场2 / 座位号2 …
+                             # 考场列写「第N考场·地点」（地点为空就不带「·」）；
+                             # 座位号是该生在那间考场各时段的号（去重升序，数字单元格可排序）
 out/考场监考表.xlsx          # 每个考场一张 sheet：座位号 / 班级 / 姓名 / 准考证号 / 备注
                              # 备注只写两种：「不考：生物」（他的主考场在这里、但这场他不考）
                              #            「只考：生物」（他只是来这间单科借考）；其余留空
@@ -53,8 +60,11 @@ out/plan.json  out/job.json
 ```
 
 两张表都按 **A4 横向、缩放到一页宽** 排好版（字号 / 对齐 / 合并标题 / 自动列宽都设好了），
-冻结并每页重复打印表头，可以直接打印。班级表里**主考场不带括号**，只有要换考场的学生才会写
-「第十九考场（政治）」这样的一科一格。
+冻结并每页重复打印表头，可以直接打印。
+
+班级表里**每个考场占两列**：考场列 + 座位号列。**主考场列不带科目括号**，只有要换考场的学生才会写
+「第十九考场（政治）」这样带科目的一格；考场列后面用「·」接地点（`第1考场·高二1班`）。
+地点里的中点字符只在这个拼接处清理，`job.json` / `plan.json` 里的 `location` 原样不动。
 
 ### 网页
 
@@ -95,18 +105,22 @@ vendor/                           SheetJS tarball
 
 **1. 座位是蛇形编号的。** 1 号在靠门前角，沿本列向后排到底，左移一列，从后往前，再左移一列，从前往后，依次蛇形。
 
-小考场（5 列 × 6 排 = 30），按物理列序显示：
+小考场（网页 / CLI 预设 `small` = **5 列 × 7 排 = 35 座**），按物理列序显示：
 
 ```
      讲台 / 黑板
       c1  c2  c3  c4  c5
- r1  25  24  13  12   1
- r2  26  23  14  11   2
- r3  27  22  15  10   3
- r4  28  21  16   9   4
- r5  29  20  17   8   5
- r6  30  19  18   7   6
+ r1  29  28  15  14   1
+ r2  30  27  16  13   2
+ r3  31  26  17  12   3
+ r4  32  25  18  11   4
+ r5  33  24  19  10   5
+ r6  34  23  20   9   6
+ r7  35  22  21   8   7
 ```
+
+大考场预设 `large` = **6 列 × 7 排 = 42 座**（`large`）。用
+`node packages/cli/bin/exam-seat.mjs numbering --rows 7 --cols 5` 可以自己核对这张图。
 
 **2. 列号从靠门侧起算。** 第 1 列 = 靠门列 = 小号列；最后一列 = 靠窗列 = 大号列。行号从讲台起算，第 1 排 = 首排。
 
@@ -185,21 +199,21 @@ pnpm lint:check    # 只检查，不改文件（CI 用这个）
 pnpm typecheck     # 类型检查（core/io/cli 用 tsc，web 用 vue-tsc）
 pnpm test          # 单元测试
 pnpm build         # 全部构建
-pnpm acceptance     # 一键验收：140 项硬指标（990 人端到端 + 独立暴力复核 + 专属组合/放宽/借考/加座）
+pnpm acceptance     # 一键验收：143 项硬指标（990 人端到端 + 独立暴力复核 + 专属组合/放宽/借考/加座）
 node examples/smoke.mjs      # 990 人 / 33 考场 冒烟测试
 node examples/make-roster.mjs /tmp/roster.xlsx 18 55   # 造一份假名单
 ```
 
 ### 工具链
 
-| 用途       | 用什么                                                             |
-| ---------- | ------------------------------------------------------------------ |
-| 代码检查   | **oxlint**（配置 `oxlint.config.ts`，基于 `oxc-config-hope` 预设） |
-| 代码格式化 | **oxfmt**（配置 `oxfmt.config.ts`）                                |
-| 提交前     | husky + nano-staged：只对改动的文件跑 oxfmt / oxlint               |
-| 提交信息   | `scripts/verifyCommit.ts`，由 `.husky/commit-msg` 调用             |
-| CI         | `.github/workflows/ci.yml`（Node 22 / 24 矩阵）、`codeql.yml`      |
-| 依赖更新   | `.github/renovate.json`                                            |
+| 用途       | 用什么                                                                 |
+| ---------- | ---------------------------------------------------------------------- |
+| 代码检查   | **oxlint**（配置 `oxlint.config.ts`，基于 `oxc-config-hope` 预设）     |
+| 代码格式化 | **oxfmt**（配置 `oxfmt.config.ts`）                                    |
+| 提交前     | husky + nano-staged：只对改动的文件跑 oxfmt / oxlint                   |
+| 提交信息   | `scripts/verifyCommit.ts`，由 `.husky/commit-msg` 调用                 |
+| CI         | `.github/workflows/ci.yml`（Node **22 / 24 / 26** 矩阵）、`codeql.yml` |
+| 依赖更新   | `.github/renovate.json`                                                |
 
 ### 提交信息规范
 
@@ -208,11 +222,30 @@ node examples/make-roster.mjs /tmp/roster.xlsx 18 55   # 造一份假名单
 ```
 
 - `type`：`feat` / `fix` / `docs` / `style` / `refactor` / `perf` / `test` / `workflow` / `build` / `ci` / `chore` / `types` / `release`
-- `scope`：可选；给了就必须是包名（`core` / `io` / `cli` / `web`）或 `deps` / `release`
+- `scope`：可选；给了就必须是包名（`core` / `io` / `cli` / `web` / `desktop`）或 `deps` / `release`
+  （`desktop` 在 `scripts/verifyCommit.ts` 的 `extraScopes` 里显式列出，所以 `feat(desktop): …` 能过）
 - `subject`：1–50 字符，只校验第一行，正文随意
 
 例：`feat(core): 支持把 4 个学生放进同考场四角`
 
 本地可用 `pnpm commit:verify .git/COMMIT_EDITMSG` 手动校验。
+
+## 授权（请先读）
+
+**本项目源码公开，但不是开源软件**：允许非商业使用，**禁止商用**，**未经授权禁止二次开发与对外发布修改版**。
+
+| 你可以（无需申请）                              | 你不可以（需书面授权）                               |
+| ----------------------------------------------- | ---------------------------------------------------- |
+| 学校 / 教育机构 / 非营利组织**非商业**使用      | **商业使用**（出售、出租、收费服务、集成进商业产品） |
+| 复制分发**原始未修改**副本（保留版权与条款）    | **二次开发**后对外发布、分发修改版或衍生作品         |
+| 修改 `job.json`、考场配置、名单等**数据与配置** | 移除版权声明，或声称本项目为你所有                   |
+| 为**自身非商业使用**修改源码（不对外发布）      | 以本项目为基础提供**收费服务**（含 SaaS）            |
+
+- 校内使用、教学、个人学习、公益考试组织 —— 全部允许；
+- 学校**内部**改源码自用可以，只是**不能对外发布**；
+- 商业使用或想获得二次开发授权 → 通过 [GitHub](https://github.com/Mister-Hope) 联系作者。
+
+完整条款见 [LICENSE](./LICENSE)（自定义许可，SPDX 标记 `LicenseRef-Proprietary-NonCommercial`）。
+排考结果仅供考务参考，**使用前请自行核对**。
 
 版本约定写在 [AGENTS.md](./AGENTS.md)：TypeScript 必须 6.x（不要升 7）、构建用 tsdown（不要用 tsup）、SheetJS 用 vendored 的 0.20.3（不要用 npm 上那个停在 0.18.5 的）。
