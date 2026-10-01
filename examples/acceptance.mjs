@@ -2387,10 +2387,12 @@ const stablePlan = (plan) => {
         .filter((row) => String(row[4] ?? "").trim() !== "")
     : [];
   check(
-    "按科目借考：监考表只有借考那一行带备注，且写明「借考（第6时段 生物）」",
-    borrowRemarkRows.length === 1 &&
-      /^借考（第\d+时段 生物）$/.test(String(borrowRemarkRows[0][4])),
-    `sheet=${borrowSheetName}；备注行=${borrowRemarkRows.length}：${borrowRemarkRows.map((row) => row[4]).join("、")}`,
+    "按科目借考：借考行写「只考：生物」、主考场里缺生物的人写「不考：生物」（都不带时段）",
+    borrowRemarkRows.length === 11 &&
+      borrowRemarkRows.filter((row) => String(row[4]) === "只考：生物").length === 1 &&
+      borrowRemarkRows.filter((row) => String(row[4]) === "不考：生物").length === 10 &&
+      borrowRemarkRows.every((row) => !/时段|借考|（/.test(String(row[4]))),
+    `sheet=${borrowSheetName}；备注行=${borrowRemarkRows.length}：只考=${borrowRemarkRows.filter((row) => String(row[4]) === "只考：生物").length} 不考=${borrowRemarkRows.filter((row) => String(row[4]) === "不考：生物").length}`,
   );
 
   // 19d. 借考目标考场该时段另有别的科目 → 必须报错、不导出
@@ -2669,6 +2671,39 @@ const countMatches = (text, pattern) => (text.match(pattern) ?? []).length;
 /** 一张 worksheet XML 里用到的样式序号集合。 */
 const styleIdsOf = (xml) =>
   new Set([...xml.matchAll(/ s="(?<id>\d+)"/g)].map((m) => Number(m.groups.id)));
+/** 专属组合验收用：两间标准考场（第一间可覆盖，例如加 combination）。 */
+const standardRooms = (first = {}) => [
+  { id: "R1", name: "第十七考场", location: "高二·十八班", rows: 7, cols: 5, ...first },
+  { id: "R2", name: "第一考场", location: "高二·四班", rows: 7, cols: 6 },
+];
+/** 某个学生的主考场（语数外所在考场）。 */
+const mainRoomOf = (result, id) =>
+  (result.byStudent ?? []).find((student) => student.studentId === id)?.rooms?.[0]?.roomId;
+/** Plan.json 的「座位分配负载」（不含诊断/时间戳）：用于两种写法等价性比对。 */
+const seatingPayload = (plan) =>
+  JSON.stringify(
+    (plan?.seatings ?? []).map((seating) => [
+      seating.roomId,
+      seating.studentIds,
+      seating.seatNoById,
+      seating.subjects,
+    ]),
+  );
+/** Plan.json 的「学生视角负载」：按人对比考场与座位。 */
+const studentPayload = (plan) =>
+  JSON.stringify([
+    (plan?.byStudent ?? []).map((student) => [
+      student.studentId,
+      student.rooms?.map((room) => [room.roomId, room.subjects]),
+      student.distinctRooms,
+      student.slots,
+    ]),
+    plan?.emptyRooms,
+    plan?.borrowings,
+    plan?.relaxedRooms,
+    plan?.unmetConstraints,
+  ]);
+
 /** 考场/科目文本的基础名：去掉「（…）」后缀。 */
 const baseNameOf = (text) =>
   String(text)
@@ -2704,6 +2739,27 @@ const bodyCellsCentered = (stylesXml, sheetXml) => {
     dataStyles.size > 0 &&
     [...dataStyles].every((index) => /horizontal="center"/.test(entries[index] ?? ""))
   );
+};
+
+/** 从考场名里取序号：中文数字或阿拉伯数字，取不到返回 Infinity（排到最后）。 */
+const orderKey = (name) => {
+  const matched = String(name).match(/第(?<number>\d+|[一二两三四五六七八九十百零]+)考场/);
+  if (!matched) return Number.POSITIVE_INFINITY;
+  const text = matched.groups.number;
+  if (/^\d+$/.test(text)) return Number(text);
+  const digits = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 零: 0 };
+  const unit = { 十: 10, 百: 100 };
+  let total = 0;
+  let current = 0;
+  for (const char of text) {
+    if (digits[char] === undefined) {
+      const weight = unit[char];
+      if (weight === undefined) return Number.POSITIVE_INFINITY;
+      total += (current === 0 ? 1 : current) * weight;
+      current = 0;
+    } else current = digits[char];
+  }
+  return total + current;
 };
 
 /** 两个 sheet 的行内容是否逐格一致。 */
@@ -2771,6 +2827,19 @@ const columnWidthCm = (xml) => {
     invigilatorSheets.length === result.seatings.length &&
       invigilatorSheets.every((name) => /^第.+考场（[^（）]+）$/.test(name)),
     `${invigilatorSheets.length} 张：${invigilatorSheets.slice(0, 3).join(" | ")}`,
+  );
+
+  // 20a-2. 监考表 sheet 必须按考场序号自然排序（中文数字要解析成数字，不能按字符串排）
+  const sheetKeys = invigilatorSheets.map((name) => orderKey(name));
+  const sortedSheetKeys = [...sheetKeys].sort((a, b) => a - b);
+  check(
+    "监考表：sheet 顺序按考场序号递增排（第1 → 第2 → …，不再出现十七/十八跑到最前）",
+    sheetKeys.every((key) => Number.isFinite(key)) &&
+      JSON.stringify(sheetKeys) === JSON.stringify(sortedSheetKeys) &&
+      sheetKeys[0] === 1 &&
+      sheetKeys.includes(sheetKeys.length) &&
+      /^第(?:1|一)考场/.test(String(invigilatorSheets[0])),
+    `顺序=${invigilatorSheets.slice(0, 4).join(" → ")} … ${invigilatorSheets.slice(-2).join(" / ")}（共 ${invigilatorSheets.length} 张）`,
   );
 
   // 20b. 总表：三样基本信息 + 班级每行都填 + 主考场不带括号
@@ -2930,11 +2999,11 @@ const columnWidthCm = (xml) => {
   const borrowMiss = [...borrowKeys].filter((key) => !remarkPairs.has(key)).length;
   const borrowExtra = [...remarkPairs].filter((key) => !borrowKeys.has(key)).length;
   check(
-    "监考表：备注只出现在借考人那一行（座位号→准考证号张冠李戴也算错），格式是「借考（第N时段 科目）」",
+    "监考表：备注列与 plan 的借考记录一一对应（张冠李戴也算错）",
     remarkRows.length === borrowKeys.size &&
       borrowMiss === 0 &&
       borrowExtra === 0 &&
-      remarkRows.every((remark) => /^借考（第\d+时段 .+）$/.test(remark)),
+      remarkRows.every((remark) => /^(?<kind>只考|不考)：.+$/.test(remark)),
     `备注行=${remarkRows.length}（借考 ${borrowKeys.size} 处）；漏标 ${borrowMiss}、错挂 ${borrowExtra}${remarkRows.length > 0 ? `：${remarkRows.slice(0, 2).join("、")}` : ""}`,
   );
 
@@ -3052,6 +3121,231 @@ const columnWidthCm = (xml) => {
     "单班 / 单考场文件的内容与合并版对应 sheet 逐格一致",
     classFileMismatch.length === 0 && roomFileMismatch.length === 0,
     `比对 ${classNames.length} 个班文件 + ${invigilatorSheets.length} 个考场文件；不一致 ${classFileMismatch.length + roomFileMismatch.length} 个`,
+  );
+}
+
+/* ---------- 21. 专属组合考场（RoomSpec.combination） ---------- */
+{
+  const comboStudents = [
+    ...Array.from({ length: 6 }, (_, index) => ({
+      id: `H${index}`,
+      name: `文${index}`,
+      className: `250${index + 1}`,
+      combination: "政史地",
+      subjects: ["history", "politics", "geography"],
+    })),
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `W${index}`,
+      name: `理${index}`,
+      className: `251${index + 1}`,
+      combination: "物化生",
+      subjects: ["physics", "chemistry", "biology"],
+    })),
+  ];
+  const comboJob = (rooms, extra = {}) => ({
+    jobVersion: 2,
+    meta: { title: "专属组合" },
+    options: { seed: 20261001, ...extra.options },
+    students: comboStudents,
+    rooms,
+    ...(extra.constraints ? { constraints: extra.constraints } : {}),
+  });
+  // 21a. 钉住的考场只收该组合，其它组合不受影响
+  const pinned = runPlanJob(
+    "accept-combination",
+    comboJob(standardRooms({ combination: "政史地" })),
+  );
+  const pinnedResult = pinned.result;
+  const pinnedIds = new Set(
+    (pinnedResult.seatings ?? [])
+      .filter((seating) => seating.roomId === "R1")
+      .flatMap((seating) => seating.studentIds ?? []),
+  );
+  check(
+    "专属组合考场：钉住的考场只收该组合（整批），其它组合不受影响、零冲突",
+    pinnedResult.ok === true &&
+      mainRoomOf(pinnedResult, "H0") === "R1" &&
+      mainRoomOf(pinnedResult, "H5") === "R1" &&
+      mainRoomOf(pinnedResult, "W0") === "R2" &&
+      pinnedIds.size === 6 &&
+      [...pinnedIds].every((id) => id.startsWith("H")) &&
+      hardRuleViolations(pinnedResult).length === 0 &&
+      seatCollisions(pinnedResult).length === 0,
+    `exit=${pinned.run.status} ok=${pinnedResult.ok} R1 学生=${[...pinnedIds].join(",")} 理0 考场=${mainRoomOf(pinnedResult, "W0")}`,
+  );
+  check(
+    "专属组合考场：诊断用中文说明「哪个考场专属哪个组合、多少人」",
+    (pinnedResult.diagnostics ?? []).some(
+      (diagnostic) =>
+        diagnostic.code === "ROOM_COMBINATION_APPLIED" &&
+        diagnostic.severity === "info" &&
+        /第十七考场/.test(String(diagnostic.message)) &&
+        /政史地/.test(String(diagnostic.message)),
+    ),
+    (pinnedResult.diagnostics ?? [])
+      .map((diagnostic) => `${diagnostic.severity}:${diagnostic.code}`)
+      .join(" | "),
+  );
+  const pinnedValidate = runFull([
+    "--json",
+    "validate",
+    "--job",
+    pinned.jobPath,
+    "--plan",
+    path.join(pinned.outDir, "plan.json"),
+  ]);
+  check(
+    "专属组合考场：独立校验器 validate 也通过（exit 0）",
+    pinnedValidate.status === 0,
+    `exit=${pinnedValidate.status} stdout=${(pinnedValidate.stdout ?? "").slice(0, 120)}`,
+  );
+
+  // 21b. 等价性：新字段写法 == 既有「限定把该组合钉到同一考场」写法
+  const byConstraint = runPlanJob(
+    "accept-combination-constraint",
+    comboJob(standardRooms(), {
+      constraints: [{ id: "C-文科在R1", combinations: ["政史地"], roomId: "R1" }],
+    }),
+  );
+  // 诊断里多一条 info（ROOM_COMBINATION_APPLIED）是预期的，所以只比「结果负载」
+  check(
+    "专属组合考场：与「限定把该组合钉到同一考场」的写法结果完全一致（含座位号）",
+    pinned.plan != null &&
+      byConstraint.plan != null &&
+      byConstraint.run.status === 0 &&
+      seatingPayload(pinned.plan) === seatingPayload(byConstraint.plan) &&
+      studentPayload(pinned.plan) === studentPayload(byConstraint.plan),
+    `新字段 exit=${pinned.run.status} ／ 限定写法 exit=${byConstraint.run.status}`,
+  );
+
+  // 21c. 名单里没有这个组合 → 警告 + 空置，但不阻断导出
+  const unknownCombo = runPlanJob(
+    "accept-combination-unknown",
+    comboJob([
+      ...standardRooms({ combination: "不存在的组合" }),
+      { id: "R3", name: "第二考场", location: "高二·五班", rows: 7, cols: 6 },
+    ]),
+  );
+  check(
+    "专属组合考场：名单里没有该组合 → 中文警告 + 该考场空置，结果仍可导出",
+    unknownCombo.result.ok === true &&
+      (unknownCombo.result.diagnostics ?? []).some(
+        (diagnostic) =>
+          diagnostic.code === "ROOM_COMBINATION_UNKNOWN" && diagnostic.severity === "warning",
+      ) &&
+      (unknownCombo.result.emptyRooms ?? []).includes("第十七考场"),
+    `ok=${unknownCombo.result.ok} 空置=${JSON.stringify(unknownCombo.result.emptyRooms ?? [])}`,
+  );
+
+  // 21d. 同时设专属组合与专用科目 → 组合优先 + 警告
+  const bothWays = runPlanJob(
+    "accept-combination-dedicated",
+    comboJob(standardRooms({ combination: "政史地", dedicatedSubjects: ["history"] })),
+  );
+  check(
+    "专属组合考场：同一考场又设了专用科目 → 按专属组合处理并给出警告",
+    bothWays.result.ok === true &&
+      (bothWays.result.diagnostics ?? []).some(
+        (diagnostic) =>
+          diagnostic.code === "ROOM_COMBINATION_IGNORED_DEDICATED" &&
+          diagnostic.severity === "warning",
+      ) &&
+      mainRoomOf(bothWays.result, "H0") === "R1",
+    `ok=${bothWays.result.ok} 诊断=${diagnosticCodes(bothWays.result).join(",")}`,
+  );
+
+  // 21e. 多个考场钉同一组合：按顺序分流
+  const splitRooms = [
+    {
+      id: "R1",
+      name: "第十七考场",
+      location: "高二·十八班",
+      rows: 2,
+      cols: 2,
+      combination: "政史地",
+    },
+    {
+      id: "R3",
+      name: "第十八考场",
+      location: "高二·十七班",
+      rows: 2,
+      cols: 2,
+      combination: "政史地",
+    },
+    { id: "R2", name: "第一考场", location: "高二·四班", rows: 7, cols: 6 },
+  ];
+  const split = runPlanJob("accept-combination-split", comboJob(splitRooms));
+  const splitSeats = (split.result.seatings ?? []).filter((seating) => seating.roomId !== "R2");
+  check(
+    "专属组合考场：多间考场钉同一组合 → 按顺序分流，不混进别的考场",
+    split.result.ok === true &&
+      splitSeats.reduce((sum, seating) => sum + (seating.studentIds ?? []).length, 0) === 6 &&
+      splitSeats.length >= 2 &&
+      [...new Set(splitSeats.flatMap((seating) => seating.studentIds ?? []))].every((id) =>
+        String(id).startsWith("H"),
+      ),
+    `ok=${split.result.ok} 专属考场座位方案=${splitSeats.length} 套 / ${splitSeats.reduce((sum, s) => sum + (s.studentIds ?? []).length, 0)} 人`,
+  );
+
+  // 21f. 装不下 → 失败且不导出名单
+  const tooSmall = runPlanJob(
+    "accept-combination-capacity",
+    comboJob(standardRooms({ combination: "政史地", rows: 2, cols: 2 })),
+  );
+  check(
+    "专属组合考场：钉住的考场装不下该组合 → 报缺座且不导出名单（绝不混排到别的考场）",
+    tooSmall.result.ok === false &&
+      diagnosticCodes(tooSmall.result).some(
+        (code) => code === "CAPACITY_INSUFFICIENT" || code === "SEARCH_FAILED",
+      ) &&
+      fileSize(path.join(tooSmall.outDir, "按班级考场安排.xlsx")) < 0,
+    `ok=${tooSmall.result.ok} 诊断=${diagnosticCodes(tooSmall.result).join(",")} 名单大小=${fileSize(path.join(tooSmall.outDir, "按班级考场安排.xlsx"))}`,
+  );
+
+  // 21h. 组合必须「完全相等」才算匹配：房钉「史地」不该把「史地政」的人收进来
+  const prefixOnly = runPlanJob(
+    "accept-combination-prefix",
+    comboJob([
+      ...standardRooms({ combination: "史地" }),
+      { id: "R3", name: "第二考场", location: "高二·五班", rows: 7, cols: 6 },
+    ]),
+  );
+  check(
+    "专属组合考场：只匹配「完全相等」的组合（房写「史地」不会把「史地政」的人收进来）",
+    prefixOnly.result.ok === true &&
+      (prefixOnly.result.diagnostics ?? []).some(
+        (diagnostic) => diagnostic.code === "ROOM_COMBINATION_UNKNOWN",
+      ) &&
+      mainRoomOf(prefixOnly.result, "H0") === "R2" &&
+      (prefixOnly.result.emptyRooms ?? []).includes("第十七考场"),
+    `ok=${prefixOnly.result.ok} H0 考场=${mainRoomOf(prefixOnly.result, "H0")} 诊断=${diagnosticCodes(prefixOnly.result).join(",")} 空置=${JSON.stringify(prefixOnly.result.emptyRooms ?? [])}`,
+  );
+
+  // 21g. 预检建议：小考场改大不再写死 30 座，按本 job 最大考场动态算
+  const upgradeJob = comboJob([
+    { id: "R1", name: "第一考场", location: "高二·四班", rows: 7, cols: 5 },
+    { id: "R2", name: "第二考场", location: "高二·五班", rows: 7, cols: 6 },
+  ]);
+  upgradeJob.students = Array.from({ length: 80 }, (_, index) => ({
+    id: `U${index}`,
+    name: `学${index}`,
+    className: "2501",
+    combination: "物化生",
+    subjects: ["physics", "chemistry", "biology"],
+  }));
+  const upgradePath = path.join(work, "accept-upgrade.json");
+  writeFileSync(upgradePath, JSON.stringify(upgradeJob, null, 2));
+  // precheck 在「座位不够」时本身就以非 0 退出，所以用 runFull 自己解析 stdout
+  const upgradeRun = runFull(["--json", "precheck", "--job", upgradePath]);
+  const upgrade = JSON.parse(upgradeRun.stdout || "{}");
+  const upgradeLabels = (upgrade.diagnostics ?? []).flatMap((diagnostic) =>
+    (diagnostic.suggestions ?? []).map((suggestion) => String(suggestion.label)),
+  );
+  check(
+    "预检建议：35 座考场可建议改成 42 座（gain 7），不再写死 30 座",
+    (upgrade.diagnostics ?? []).some((diagnostic) => diagnostic.code === "CAPACITY_INSUFFICIENT") &&
+      upgradeLabels.some((label) => /35 座 → 改成 42 座/.test(label) && /多放 7 人/.test(label)),
+    `建议=${upgradeLabels.join("；")}`,
   );
 }
 
