@@ -1,6 +1,6 @@
 {
   "name": "@exam-seat/desktop",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "description": "「考场排布」桌面版：Electron 外壳，用 app:// 自定义协议加载 packages/web 的构建产物（保证 Web Worker 求解器可用）。",
   "type": "module",

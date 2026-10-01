@@ -1,6 +1,6 @@
 {
   "name": "@exam-seat/io",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "考试名单的 Excel 读写。浏览器与 Node 通用；Node 专属的文件封装在 ./node 子路径。",
   "files": [
     "dist"
