@@ -127,6 +127,12 @@ export function renderNumbering(
   return lines.join("\n");
 }
 
+/**
+ * 单场结果的终端摘要。
+ *
+ * 单场成功时也要把 warning 级诊断列出来（例如 `ROOM_COMBINATION_IGNORED_SINGLE`、考场级放宽）， 否则它们只躺在 plan.json / `--json`
+ * 里，老师在终端上看不到；info 级照旧不列。
+ */
 export function renderPlan(result: PlanResult, limit = 0): string {
   const s = result.stats;
   const lines: string[] = [
@@ -141,7 +147,16 @@ export function renderPlan(result: PlanResult, limit = 0): string {
   if (s.emptyRooms.length > 0) lines.push(`空置考场：${s.emptyRooms.join("、")}`);
   lines.push("");
 
-  if (!result.ok) {
+  if (result.ok) {
+    // 成功：warning / error 也要能看到；info 照旧不列
+    const noteworthy = result.diagnostics.filter((d) => d.severity !== "info");
+    if (noteworthy.length > 0) {
+      lines.push("诊断：");
+      lines.push(renderDiagnostics(noteworthy));
+      lines.push("");
+    }
+  } else {
+    // 失败：全部诊断（含 info）都要看到
     lines.push("诊断：");
     lines.push(renderDiagnostics(result.diagnostics));
     lines.push("");

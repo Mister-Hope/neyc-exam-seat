@@ -10,10 +10,11 @@ import { EXIT_INFEASIBLE, EXIT_OK, main } from "../src/cli";
 import type { PlanAllValidationView } from "../src/render";
 import { renderPlanAllValidation } from "../src/render";
 
-const SMALL: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
+// 测试夹具：显式 6 排 × 5 列 = 30 座，与 CLI `small` 预设（5 列 × 7 排 = 35 座）无关
+const ROOM_6X5: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
 
 function room(n: number): RoomSpec {
-  return { id: `R${n}`, name: `第${n}考场`, ...SMALL };
+  return { id: `R${n}`, name: `第${n}考场`, ...ROOM_6X5 };
 }
 
 /** 4 种组合、36 人：严格路径下 5 套座位（3 普通 + 政治/地理专用各 1）。 */

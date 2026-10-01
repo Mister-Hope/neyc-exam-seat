@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { planAll } from "@exam-seat/core";
@@ -7,12 +11,13 @@ import { EXIT_OK, main, parseRoomSpec } from "../src/cli";
 import { renderNumbering, renderPlanAll } from "../src/render";
 
 describe("考场规格解析", () => {
-  it("small / large 展开成 30 人与 42 人的考场", () => {
+  it("small / large 展开成 35 人与 42 人的考场", () => {
     const rooms = parseRoomSpec("1-3:small,4:large");
     expect(rooms).toHaveLength(4);
-    expect(rooms[0]).toMatchObject({ id: "R1", rows: 6, cols: 5 });
-    expect(rooms[2]).toMatchObject({ id: "R3", rows: 6, cols: 5 });
+    expect(rooms[0]).toMatchObject({ id: "R1", rows: 7, cols: 5 });
+    expect(rooms[2]).toMatchObject({ id: "R3", rows: 7, cols: 5 });
     expect(rooms[3]).toMatchObject({ id: "R4", rows: 7, cols: 6 });
+    expect(rooms[0]!.rows * rooms[0]!.cols).toBe(35);
   });
 
   it("自定义 NxM 按「N 排 × M 列」解析", () => {
@@ -23,7 +28,7 @@ describe("考场规格解析", () => {
   });
 
   it("中文别名和别的乘号也能认", () => {
-    expect(parseRoomSpec("1:小")[0]).toMatchObject({ rows: 6, cols: 5 });
+    expect(parseRoomSpec("1:小")[0]).toMatchObject({ rows: 7, cols: 5 });
     expect(parseRoomSpec("1:大")[0]).toMatchObject({ rows: 7, cols: 6 });
     expect(parseRoomSpec("1:6×4")[0]).toMatchObject({ rows: 6, cols: 4 });
     expect(parseRoomSpec("1:6*4")[0]).toMatchObject({ rows: 6, cols: 4 });
@@ -44,7 +49,7 @@ describe("考场规格解析", () => {
     const rooms = parseRoomSpec("1-20:small,21-25:large,26:6x4");
     const total = rooms.reduce((sum, r) => sum + r.rows * r.cols, 0);
     expect(rooms).toHaveLength(26);
-    expect(total).toBe(20 * 30 + 5 * 42 + 24);
+    expect(total).toBe(20 * 35 + 5 * 42 + 24);
   });
 });
 
@@ -287,6 +292,40 @@ describe("编号图：讲台侧加座", () => {
       expect(out).toContain("r0");
     } finally {
       spy.mockRestore();
+    }
+  });
+});
+
+describe("单场摘要：成功时 warning 也要可见", () => {
+  it("带 combination 的考场在单场成功时，终端能看到 ROOM_COMBINATION_IGNORED_SINGLE", async () => {
+    const dir = mkdtempSync(nodePath.join(tmpdir(), "exam-seat-cli-single-"));
+    try {
+      const jobPath = nodePath.join(dir, "job.json");
+      const job: Job = {
+        jobVersion: 2,
+        students: Array.from({ length: 6 }, (_, i) => ({
+          id: `S${i + 1}`,
+          name: `学生${i + 1}`,
+          className: `高三(${i + 1}班)`,
+        })),
+        // 单场模式下专属组合不生效 → core 会报 warning
+        rooms: [{ id: "R1", name: "第1考场", rows: 7, cols: 5, combination: "政史地" }],
+      };
+      writeFileSync(jobPath, JSON.stringify(job));
+
+      const spy = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      try {
+        const code = await main(["node", "exam-seat", "plan", "--job", jobPath]);
+        expect(code).toBe(EXIT_OK);
+        const out = spy.mock.calls.map((call) => String(call[0])).join("");
+        expect(out).toContain("✅ 排考场完成");
+        expect(out).toContain("诊断：");
+        expect(out).toContain("专属组合「政史地」不生效");
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

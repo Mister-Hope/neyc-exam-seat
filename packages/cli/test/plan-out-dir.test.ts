@@ -8,10 +8,11 @@ import type { Job, RoomSpec } from "@exam-seat/core";
 
 import { EXIT_DEGRADED, EXIT_INFEASIBLE, EXIT_OK, main } from "../src/cli";
 
-const SMALL: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
+// 测试夹具：显式 6 排 × 5 列 = 30 座，与 CLI `small` 预设（5 列 × 7 排 = 35 座）无关
+const ROOM_6X5: Omit<RoomSpec, "id" | "name"> = { rows: 6, cols: 5 };
 
 function room(n: number): RoomSpec {
-  return { id: `R${n}`, name: `第${n}考场`, ...SMALL };
+  return { id: `R${n}`, name: `第${n}考场`, ...ROOM_6X5 };
 }
 
 /** 单场：9 个学生、12 个考场 → 必然有空置考场。 */

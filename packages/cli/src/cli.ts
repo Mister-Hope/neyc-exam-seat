@@ -88,7 +88,12 @@ function log(message = ""): void {
   process.stderr.write(`${message}\n`);
 }
 
-/** `1-20:small,21-25:large,26:6x4` → RoomSpec[]。`NxM` 表示 N 排 × M 列。 */
+/**
+ * `1-20:small,21-25:large,26:6x4` → RoomSpec[]。`NxM` 表示 N 排 × M 列。
+ *
+ * `small` = 5 列 × 7 排 = 35 座，与网页预设 `ROOM_PRESETS.small` 完全一致（同一本考务表两端必须同义）； `large` = 6 列 × 7 排 =
+ * 42 座。
+ */
 export function parseRoomSpec(spec: string): RoomSpec[] {
   const rooms: RoomSpec[] = [];
   const segments = spec
@@ -117,7 +122,7 @@ export function parseRoomSpec(spec: string): RoomSpec[] {
     let cols: number, rows: number;
     const kind = kindPart.toLowerCase();
     if (kind === "small" || kind === "小") {
-      rows = 6;
+      rows = 7;
       cols = 5;
     } else if (kind === "large" || kind === "大") {
       rows = 7;
@@ -125,7 +130,9 @@ export function parseRoomSpec(spec: string): RoomSpec[] {
     } else {
       const m = /^(?<rows>\d+)\s*[x×*]\s*(?<cols>\d+)$/.exec(kind);
       if (!m)
-        throw new Error(`看不懂的考场类型「${kindPart}」，可用 small / large / 6x4（6 排 × 4 列）`);
+        throw new Error(
+          `看不懂的考场类型「${kindPart}」，可用 small（5 列 × 7 排）/ large（6 列 × 7 排）/ 6x4（6 排 × 4 列）`,
+        );
       rows = Number(m.groups?.rows);
       cols = Number(m.groups?.cols);
     }
@@ -148,7 +155,8 @@ function buildTemplate(): Job {
       { id: "20240201", name: "王五", className: "高三(2)班" },
     ],
     rooms: [
-      { id: "R1", name: "第1考场", rows: 6, cols: 5, doorSide: "right", note: "张老师" },
+      // R1 跟 CLI `small` / 网页小考场预设一致：5 列 × 7 排 = 35 座；R2 = large 6 列 × 7 排 = 42 座
+      { id: "R1", name: "第1考场", rows: 7, cols: 5, doorSide: "right", note: "张老师" },
       { id: "R2", name: "第2考场", rows: 7, cols: 6, doorSide: "right", note: "李老师" },
     ],
     constraints: [
@@ -305,9 +313,12 @@ export async function main(argv: string[]): Promise<number> {
   program
     .command("rooms")
     .description(
-      '按紧凑语法生成考场配置，例如 "1-20:small,21-25:large,26:6x4"（NxM = N 排 × M 列）',
+      '按紧凑语法生成考场配置，例如 "1-20:small,21-25:large,26:6x4"（NxM = N 排 × M 列；small = 5 列 × 7 排 = 35 座，large = 6 列 × 7 排 = 42 座）',
     )
-    .requiredOption("--spec <spec>", "考场规格")
+    .requiredOption(
+      "--spec <spec>",
+      "考场规格，例如 1-20:small 或 26:6x4（small = 5 列 7 排，large = 6 列 7 排）",
+    )
     .action((options: { spec: string }) => {
       let rooms: RoomSpec[];
       try {
