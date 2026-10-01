@@ -54,7 +54,7 @@ import {
 } from "@/lib/session-export";
 import type { ScheduleColumn } from "@/lib/session-export";
 import { useResultStore } from "@/stores/result";
-import { fingerprint } from "@exam-seat/core";
+import { compareText, fingerprint } from "@exam-seat/core";
 import type { PlanEntry } from "@exam-seat/core";
 import {
   buildClassScheduleWorkbook,
@@ -240,9 +240,7 @@ const multiRows = computed(() =>
   }),
 );
 const multiClassNames = computed(() =>
-  [...new Set(resultStore.scheduleByStudent.map((student) => student.className))].sort((a, b) =>
-    a.localeCompare(b, "zh"),
-  ),
+  [...new Set(resultStore.scheduleByStudent.map((student) => student.className))].sort(compareText),
 );
 const seatingOverview = computed(() => buildSeatingOverview(resultStore.seatings));
 const seatingChecks = computed(() => buildSeatingChecks(resultStore.seatings));

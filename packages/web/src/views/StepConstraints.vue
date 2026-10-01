@@ -53,6 +53,7 @@ import {
   PREFERRED_SUBJECTS,
   SECONDARY_SUBJECTS,
   SUBJECT_LABELS,
+  compareText,
   describeCols,
   describeRows,
 } from "@exam-seat/core";
@@ -98,7 +99,7 @@ const nameById = computed(() => new Map(roster.students.map((s) => [s.id, s.name
 const combinationOptions = computed(() =>
   [
     ...new Set(participants.value.map((s) => s.combination).filter((c): c is string => Boolean(c))),
-  ].sort((a, b) => a.localeCompare(b, "zh")),
+  ].sort(compareText),
 );
 
 /** 可选的科目：语数外 + 首选 + 再选，统一给中文名 */

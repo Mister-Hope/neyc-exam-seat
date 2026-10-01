@@ -1,6 +1,6 @@
 import { matchToken, parseQuery } from "@/lib/search";
 import type { StudentQuery } from "@/lib/search";
-import { subjectLabel, subjectListLabel } from "@exam-seat/core";
+import { compareText, subjectLabel, subjectListLabel } from "@exam-seat/core";
 import type {
   Conflict,
   Diagnostic,
@@ -88,10 +88,7 @@ export function buildScheduleTable(
   ];
 
   const rows = [...students]
-    .sort(
-      (a, b) =>
-        a.className.localeCompare(b.className, "zh") || a.studentId.localeCompare(b.studentId),
-    )
+    .sort((a, b) => compareText(a.className, b.className) || compareText(a.studentId, b.studentId))
     .map<ScheduleRow>((student) => {
       const cells: Record<string, string> = {};
       const keywords: string[] = [];
@@ -210,7 +207,7 @@ export function buildBorrowingRows(result: PlanAllResult | null): BorrowingRow[]
       const rb = roomOrder.get(b.roomId) ?? Number.MAX_SAFE_INTEGER;
       if (ra !== rb) return ra - rb;
       if (a.seatNo !== b.seatNo) return a.seatNo - b.seatNo;
-      return a.studentId.localeCompare(b.studentId);
+      return compareText(a.studentId, b.studentId);
     })
     .map((item) => {
       const schedule = scheduleById.get(item.studentId);
@@ -366,7 +363,7 @@ export function changedByClass(
   }
   return [...map.entries()]
     .map(([className, count]) => ({ className, count }))
-    .sort((a, b) => a.className.localeCompare(b.className, "zh"));
+    .sort((a, b) => compareText(a.className, b.className));
 }
 
 /**

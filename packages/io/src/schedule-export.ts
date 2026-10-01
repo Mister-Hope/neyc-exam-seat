@@ -5,7 +5,7 @@
  * `./xlsx` 一起再导出，网页与 Node 共用同一套实现。
  */
 
-import { subjectLabel, subjectListLabel } from "@exam-seat/core";
+import { compareText, subjectLabel, subjectListLabel } from "@exam-seat/core";
 import type {
   PlanAllResult,
   RoomSpec,
@@ -102,8 +102,7 @@ export interface ClassScheduleOptions {
 
 function sortByClassAndId(students: readonly StudentSchedule[]): StudentSchedule[] {
   return [...students].sort(
-    (a, b) =>
-      a.className.localeCompare(b.className, "zh") || a.studentId.localeCompare(b.studentId),
+    (a, b) => compareText(a.className, b.className) || compareText(a.studentId, b.studentId),
   );
 }
 

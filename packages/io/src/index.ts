@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 
-import { parseCombination, seatNoToRCIn, validateSelection } from "@exam-seat/core";
+import { compareText, parseCombination, seatNoToRCIn, validateSelection } from "@exam-seat/core";
 import type { PlanAllResult, PlanResult, RoomSpec, Student } from "@exam-seat/core";
 
 /** 带样式的极小 xlsx 写出器（`buildXlsx` / `buildZip` / `planColumnWidths` / `fitToA4Landscape`）。 */
@@ -583,8 +583,7 @@ export function planToRows(result: PlanResult): (string | number)[][] {
 export function classRows(result: PlanResult): (string | number)[][] {
   const rows: (string | number)[][] = [["班级", "学号", "姓名", "考场", "座位号"]];
   const sorted = [...result.entries].sort(
-    (a, b) =>
-      a.className.localeCompare(b.className, "zh") || a.studentId.localeCompare(b.studentId),
+    (a, b) => compareText(a.className, b.className) || compareText(a.studentId, b.studentId),
   );
   for (const e of sorted) rows.push([e.className, e.studentId, e.name, e.roomName, e.seatNo]);
   return rows;

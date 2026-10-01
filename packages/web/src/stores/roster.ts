@@ -11,6 +11,7 @@ import {
   toRosterMapping,
 } from "@/lib/roster-import";
 import type { AbsentImportReport, RosterAnalysis } from "@/lib/roster-import";
+import { compareText } from "@exam-seat/core";
 import type { Student } from "@exam-seat/core";
 import { readWorkbook, suggestMapping } from "@exam-seat/io";
 import type { RosterIssue, RosterMapping, SheetData } from "@exam-seat/io";
@@ -63,8 +64,8 @@ export const useRosterStore = defineStore("roster", () => {
 
   const total = computed(() => students.value.length);
   const classNames = computed(() =>
-    [...new Set(students.value.map((s) => s.className).filter((c) => c.length > 0))].sort((a, b) =>
-      a.localeCompare(b, "zh"),
+    [...new Set(students.value.map((s) => s.className).filter((c) => c.length > 0))].sort(
+      compareText,
     ),
   );
   const classCount = computed(() => classNames.value.length);
@@ -85,7 +86,7 @@ export const useRosterStore = defineStore("roster", () => {
     }
     return [...map.entries()]
       .map(([combination, count]) => ({ combination, count }))
-      .sort((a, b) => a.combination.localeCompare(b.combination, "zh"));
+      .sort((a, b) => compareText(a.combination, b.combination));
   });
 
   const subjectCount = computed(() => students.value.filter((s) => Boolean(s.combination)).length);

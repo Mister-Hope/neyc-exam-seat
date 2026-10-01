@@ -36,6 +36,7 @@ import type { VirtualTableColumn } from "@/components/VirtualTable.vue";
 import { readFileBytes } from "@/lib/download";
 import { columnLabel } from "@/lib/roster-import";
 import { useRosterStore } from "@/stores/roster";
+import { compareText } from "@exam-seat/core";
 import { suggestMapping } from "@exam-seat/io";
 import type { RosterIssue, RosterMapping } from "@exam-seat/io";
 import {
@@ -128,7 +129,7 @@ const issueKey = (row: unknown, index: number): string => `${asIssue(row).row}-$
 const hasCombination = computed(() => roster.combinationSizes.length > 0);
 
 const classRows = computed(() =>
-  [...roster.classSizes].sort((a, b) => a.className.localeCompare(b.className, "zh")),
+  [...roster.classSizes].sort((a, b) => compareText(a.className, b.className)),
 );
 
 function pickFile(): void {

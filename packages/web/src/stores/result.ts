@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 
 import { loadState, saveState } from "@/lib/persist";
 import { useRoomsStore } from "@/stores/rooms";
-import { validate } from "@exam-seat/core";
+import { compareText, validate } from "@exam-seat/core";
 import type {
   BorrowedSeat,
   Job,
@@ -141,9 +141,7 @@ export const useResultStore = defineStore("result", () => {
   });
 
   const classNames = computed(() =>
-    [...new Set(sortedEntries.value.map((e) => e.className))].sort((a, b) =>
-      a.localeCompare(b, "zh"),
-    ),
+    [...new Set(sortedEntries.value.map((e) => e.className))].sort(compareText),
   );
 
   const roomList = computed(() => {
