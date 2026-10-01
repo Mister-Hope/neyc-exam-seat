@@ -1,5 +1,5 @@
 /**
- * 把 `packages/web` 的 Vite 产物同步到 `apps/desktop/web-dist`，供 Electron 主进程以 `app://bundle/` 提供。
+ * 把 `packages/web` 的 Vite 产物同步到 `packages/desktop/web-dist`，供 Electron 主进程以 `app://bundle/` 提供。
  *
  * 用法：node scripts/prepare-web.mjs [--skip-build] 默认先跑一次 `pnpm --filter @exam-seat/web build`（CI
  * 里前面已经 `pnpm build` 过，可加 --skip-build）。

@@ -15,7 +15,7 @@ const APP_DIR = path.resolve(import.meta.dirname, "..");
 const log = (message) => process.stdout.write(`${message}\n`);
 const logError = (message) => process.stderr.write(`${message}\n`);
 
-/** 打包后：`resources/web`；开发时：`apps/desktop/web-dist`（由 `pnpm prepare-web` 生成）。 */
+/** 打包后：`resources/web`；开发时：`packages/desktop/web-dist`（由 `pnpm prepare-web` 生成）。 */
 const WEB_ROOT = app.isPackaged
   ? path.join(process.resourcesPath, "web")
   : path.join(APP_DIR, "web-dist");

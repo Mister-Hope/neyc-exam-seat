@@ -6,8 +6,10 @@
   "type": "module",
   "scripts": {
     "acceptance": "node examples/acceptance.mjs",
-    "build": "pnpm -r --filter './packages/*' build",
+    "build": "pnpm -r --filter './packages/*' --filter '!./packages/desktop' build",
     "commit:verify": "node scripts/verifyCommit.ts",
+    "desktop:build:mac": "pnpm --filter @exam-seat/desktop build:mac",
+    "desktop:build:win": "pnpm --filter @exam-seat/desktop build:win",
     "exam-seat": "node packages/cli/bin/exam-seat.mjs",
     "lint": "oxlint --fix && oxfmt",
     "lint:check": "oxlint && oxfmt --check",
@@ -15,7 +17,7 @@
     "smoke": "node examples/smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "pnpm -r --filter './packages/*' typecheck",
+    "typecheck": "pnpm -r --filter './packages/*' --filter '!./packages/desktop' typecheck",
     "verify": "pnpm lint:check && pnpm typecheck && pnpm build && pnpm test && pnpm acceptance"
   },
   "devDependencies": {

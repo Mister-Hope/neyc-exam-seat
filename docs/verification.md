@@ -16,16 +16,16 @@
 
 ## 0. 当前状态
 
-| 项           | 值                                                                                                                                                                                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 验收脚本     | `examples/acceptance.mjs`，**140 项**（第 21 节 10 条：专属组合含 21h 互为子串；第 20 节 19 条）                                                                                                                                                  |
-| 阶段         | task-7 ✅ 71/71；task-11/14 ✅ 93/93；task-15 ✅ 111/111；task-16 ✅ 126/126；web 迁 shadcn-vue ✅ 130/130；专属组合/单场语义/预设统一 ✅ 140/140；「性别/备注」列不再解析 ✅ 140/140；**监考表备注 v3 ✅ 140/140**（见 §10–§12）                 |
-| 单测         | `pnpm exec vitest run` = **617 passed / 45 files**（node 406 = core 191 + io 174 + cli 41；web 211），exit 0                                                                                                                                      |
-| 依赖         | CLI bin 走 `packages/cli/dist`：`packages/cli/bin/exam-seat.mjs` → `import { main } from "../dist/cli.mjs"`                                                                                                                                       |
-| 最近一次运行 | acceptance **140/140**（242ms，dist 18:05:02）；单测 **617/617**；task-33 的 M3 变异 174/174 全绿（未抓住）→ 见 §12.4                                                                                                                             |
-| lint         | ⚠️ **全仓 `pnpm lint:check` 当前失败**：未跟踪的 `apps/desktop/`（另一个桌面轮次的 WIP）里 `src/main.mjs` 有 2 个语法错误 → oxlint 2 error、oxfmt 无法检查；**本轮范围 `packages/` 干净**（oxlint 0 error / 2 warning、oxfmt 全合规），详见 §12.5 |
-| 独立复核器   | `/tmp/vfy/check.mjs`（task-15）、`/private/tmp/vfy-r25-*.mjs`（task-25，见 §10）、`/private/tmp/vfy-r27-a.test.ts` + `base-io` + `io-vitest.config.mts`（task-27，见 §11）                                                                        |
-| 命令         | `node examples/acceptance.mjs`、`exam-seat plan/validate/template/rooms`、`pnpm --filter @exam-seat/web build`（不跑 `pnpm verify`）                                                                                                              |
+| 项           | 值                                                                                                                                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 验收脚本     | `examples/acceptance.mjs`，**140 项**（第 21 节 10 条：专属组合含 21h 互为子串；第 20 节 19 条）                                                                                                                                                      |
+| 阶段         | task-7 ✅ 71/71；task-11/14 ✅ 93/93；task-15 ✅ 111/111；task-16 ✅ 126/126；web 迁 shadcn-vue ✅ 130/130；专属组合/单场语义/预设统一 ✅ 140/140；「性别/备注」列不再解析 ✅ 140/140；**监考表备注 v3 ✅ 140/140**（见 §10–§12）                     |
+| 单测         | `pnpm exec vitest run` = **617 passed / 45 files**（node 406 = core 191 + io 174 + cli 41；web 211），exit 0                                                                                                                                          |
+| 依赖         | CLI bin 走 `packages/cli/dist`：`packages/cli/bin/exam-seat.mjs` → `import { main } from "../dist/cli.mjs"`                                                                                                                                           |
+| 最近一次运行 | acceptance **140/140**（242ms，dist 18:05:02）；单测 **617/617**；task-33 的 M3 变异 174/174 全绿（未抓住）→ 见 §12.4                                                                                                                                 |
+| lint         | ⚠️ **全仓 `pnpm lint:check` 当前失败**：未跟踪的 `packages/desktop/`（另一个桌面轮次的 WIP）里 `src/main.mjs` 有 2 个语法错误 → oxlint 2 error、oxfmt 无法检查；**本轮范围 `packages/` 干净**（oxlint 0 error / 2 warning、oxfmt 全合规），详见 §12.5 |
+| 独立复核器   | `/tmp/vfy/check.mjs`（task-15）、`/private/tmp/vfy-r25-*.mjs`（task-25，见 §10）、`/private/tmp/vfy-r27-a.test.ts` + `base-io` + `io-vitest.config.mts`（task-27，见 §11）                                                                            |
+| 命令         | `node examples/acceptance.mjs`、`exam-seat plan/validate/template/rooms`、`pnpm --filter @exam-seat/web build`（不跑 `pnpm verify`）                                                                                                                  |
 
 > task-7 阶段 1 在旧 dist 上观察到的失败在最终 build 后全部归零；其中 1 项是我自己的断言写错
 > （`已排人数 < 总数`），已按 design §5.4 改成「应考时段未排满人数 > 0」，见 §4 第 16 条。
@@ -1110,8 +1110,8 @@ io 实现未动：仓库 `FIELD_PRIORITY` 仍是 5 项，`packages/io/src/index.
 | `pnpm lint:check`                                                              | ⚠️ **失败**，原因**不在本轮**                                                       |
 | `pnpm exec oxlint packages` / `pnpm exec oxfmt --check packages docs examples` | ✅ 0 error（2 条既有 `max-lines` 警告）/ 全部格式正确                               |
 
-**lint 失败的具体情况**（如实记录）：仓库里多了一个**未跟踪**的 `apps/desktop/`（另一个桌面轮次的 WIP），
-其中 `apps/desktop/src/main.mjs` 有 2 个**语法错误**（oxlint：`Missing initializer in const declaration` /
+**lint 失败的具体情况**（如实记录）：仓库里多了一个**未跟踪**的 `packages/desktop/`（另一个桌面轮次的 WIP），
+其中 `packages/desktop/src/main.mjs` 有 2 个**语法错误**（oxlint：`Missing initializer in const declaration` /
 `Expected a semicolon…`），导致全仓 `oxlint` 报 2 error、`oxfmt --check` 也因该文件无法格式化而中止。
 把范围限定到本轮涉及的 `packages/`、`docs/`、`examples/` 后全部干净。等桌面轮的 WIP 修好，全仓 `lint:check` 应恢复。
 
@@ -1132,4 +1132,4 @@ io 实现未动：仓库 `FIELD_PRIORITY` 仍是 5 项，`packages/io/src/index.
 - **B**：真实产物与自述**完全吻合**（2/20 张 sheet 有备注；22+1 / 1 条文案；其余 18 张干净），单文件与合并版 0 处不一致，
   备注与班级表「主考场」列 24/24 自洽；唯一修正是列宽口径（11.65/10.54cm 是整表总宽，不是备注列宽）。
 - **C**：M1 / M2 / M4 全被现有测试抓住；**M3（主考场改回「最忙那间」）抓不住**，我用探针证明会造成判定翻转 → 建议补一条 fixture。
-- **D**：**617 单测 + 140 验收**通过；`packages/` 范围 lint 干净，全仓 lint 被未跟踪的 `apps/desktop` WIP 拖红。
+- **D**：**617 单测 + 140 验收**通过；`packages/` 范围 lint 干净，全仓 lint 被未跟踪的 `packages/desktop` WIP 拖红。

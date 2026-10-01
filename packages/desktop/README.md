@@ -1,4 +1,4 @@
-# apps/desktop · 「考场排布」桌面版
+# packages/desktop · 「考场排布」桌面版
 
 Electron 外壳，加载 `packages/web` 的构建产物。**不属于**根 `pnpm verify` 的范围（在 `apps/*` 而不是
 `packages/*`），所以日常验证与 CI 的 verify job 不会连带安装 / 打包 Electron。
@@ -16,7 +16,7 @@ Chromium 把 `file://` 当成不透明来源，`new Worker()` 会被直接拦掉
 # 安装（根目录）：electron 的二进制不会下载 —— pnpm-workspace.yaml 里 electron: false
 pnpm install
 
-# 1) 同步网页产物：packages/web 构建 + 拷贝到 apps/desktop/web-dist
+# 1) 同步网页产物：packages/web 构建 + 拷贝到 packages/desktop/web-dist
 pnpm --filter @exam-seat/desktop prepare-web
 
 # 2) 打包（不签名）
@@ -43,7 +43,7 @@ pnpm --filter @exam-seat/desktop smoke -- --no-sandbox   # 受限 shell 里 Chro
 
 ```
 src/main.mjs            主进程：app:// 协议、窗口、下载落盘
-scripts/prepare-web.mjs 同步 packages/web/dist → apps/desktop/web-dist
+scripts/prepare-web.mjs 同步 packages/web/dist → packages/desktop/web-dist
 scripts/build.mjs       electron-builder 封装（版本注入 / 不签名 / --target）
 scripts/smoke.mjs       CDP 驱动的端到端验收（协议 / 六步 / 真求解 / 导出）
 build/icon.svg          图标源文件（icon.png / icon.icns / icon.ico 由它导出）

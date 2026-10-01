@@ -1,8 +1,5 @@
 packages:
   - packages/*
-  # 桌面外壳单独放 apps/*：根 `pnpm verify` / `pnpm build` 只覆盖 packages/*，
-  # 不会把 Electron 的安装与打包带进日常验证与 CI 的 verify job。
-  - apps/*
 
 allowBuilds:
   vue-demi: true

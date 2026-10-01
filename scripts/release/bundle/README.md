@@ -215,7 +215,7 @@ A：包里的可执行文件没有代码签名证书，属于常见的分发未�
 A：不建议。它是命令行工具，双击会一闪而过。请在终端 / PowerShell 里带参数运行。
 
 **Q：能不能只跑网页版？**
-A：可以，仓库的 `packages/web` 是同一套算法的网页版，桌面版外壳见 `apps/desktop`（本包不带）。
+A：可以，仓库的 `packages/web` 是同一套算法的网页版，桌面版外壳见 `packages/desktop`（本包不带）。
 
 **Q：排不出来怎么办？**
 A：看 `precheck` 的 `diagnostics[].suggestions`——里面会给出「加几个考场 / 把某个考场改大 / 哪些学生改坐别处」的具体建议，其中 `patch` 可以直接回写到 job.json 重跑。

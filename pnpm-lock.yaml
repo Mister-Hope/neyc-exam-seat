@@ -209,15 +209,6 @@ importers:
         specifier: file:vendor/xlsx-0.20.3.tgz
         version: file:vendor/xlsx-0.20.3.tgz
 
-  apps/desktop:
-    devDependencies:
-      electron:
-        specifier: ^44.5.1
-        version: 44.5.1(supports-color@7.2.0)
-      electron-builder:
-        specifier: ^26.15.3
-        version: 26.15.3(electron-builder-squirrel-windows@26.15.3)(supports-color@7.2.0)
-
   packages/cli:
     dependencies:
       '@exam-seat/core':
@@ -231,6 +222,15 @@ importers:
         version: 15.0.0
 
   packages/core: {}
+
+  packages/desktop:
+    devDependencies:
+      electron:
+        specifier: ^44.5.1
+        version: 44.5.1(supports-color@7.2.0)
+      electron-builder:
+        specifier: ^26.15.3
+        version: 26.15.3(electron-builder-squirrel-windows@26.15.3)(supports-color@7.2.0)
 
   packages/io:
     dependencies:

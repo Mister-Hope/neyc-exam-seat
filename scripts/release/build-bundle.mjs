@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 /**
  * 打「AI 客户端技能包」zip：白名单拷贝 + 隐私扫描 + 零依赖打包。
  *
- * 用法： node scripts/package/build-bundle.mjs --mac-bin <path> --win-bin <path> [--version x.y.z]
+ * 用法： node scripts/release/build-bundle.mjs --mac-bin <path> --win-bin <path> [--version x.y.z]
  * [--out-dir <dir>]
  *
  * ⚠️ 隐私红线（本脚本的核心职责）：
@@ -27,7 +27,7 @@ import * as XLSX from "xlsx";
 import { createZip } from "./lib/zip.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
-const OUT_DIR = path.resolve(REPO_ROOT, option("out-dir") ?? "scripts/package/out");
+const OUT_DIR = path.resolve(REPO_ROOT, option("out-dir") ?? "scripts/release/out");
 const VERSION =
   option("version") ??
   JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")).version;
@@ -50,7 +50,7 @@ const ZIP_PATH = path.join(OUT_DIR, `${BUNDLE_NAME}-${VERSION}.zip`);
 
 if (!MAC_BIN || !WIN_BIN) {
   throw new Error(
-    "用法：node scripts/package/build-bundle.mjs --mac-bin <macOS 可执行文件> --win-bin <Windows .exe>",
+    "用法：node scripts/release/build-bundle.mjs --mac-bin <macOS 可执行文件> --win-bin <Windows .exe>",
   );
 }
 for (const [label, file] of [
@@ -66,7 +66,7 @@ for (const [label, file] of [
 
 /** 白名单：[源文件, 包内相对路径] */
 const WHITELIST = [
-  ["scripts/package/bundle/README.md", "README.md"],
+  ["scripts/release/bundle/README.md", "README.md"],
   [".agents/skills/exam-seating/SKILL.md", "skills/exam-seating/SKILL.md"],
   [".agents/skills/exam-seating/reference.md", "skills/exam-seating/reference.md"],
   [
@@ -107,22 +107,57 @@ function listFiles(dir, extensions) {
   return out;
 }
 
-/** 从一个 Excel 里抽「像姓名 / 准考证号」的单元格。 */
+/** 名单类表头：姓名列 / 准考证号（学号）列。只认这两类列，避免把「选科组合」这种词当成姓名。 */
+const NAME_HEADER = /(姓名|名字|考生姓名|学生姓名|name)/i;
+const ID_HEADER = /(准考证|考号|考籍号|学籍号|学号|studentid|examid|examno|studentno)/i;
+/** 姓名形如「何静」「欧阳娜娜」；准考证号是 6 位以上数字（超过这个范围的多半是考场号 / 组合，不算敏感）。 */
+const NAME_SHAPE = /^[\u4E00-\u9FA5·]{2,6}$/;
+const ID_SHAPE = /^\d{6,}$/;
+
+function normalizeHeader(value) {
+  return String(value ?? "")
+    .replaceAll(/\s/g, "")
+    .toLowerCase();
+}
+
+/** 在表头行里找出命中 `pattern` 的列下标。 */
+function columnsMatching(headerRow, pattern) {
+  return (headerRow ?? [])
+    .map((header, index) => (pattern.test(normalizeHeader(header)) ? index : -1))
+    .filter((index) => index >= 0);
+}
+
+/** 在一张表里找表头行（前 10 行里第一行含姓名列的）。 */
+function findHeaderRow(rows) {
+  for (let index = 0; index < Math.min(rows.length, 10); index += 1) {
+    if (columnsMatching(rows[index], NAME_HEADER).length > 0) return index;
+  }
+  return -1;
+}
+
+/** 从名单 / 结果类 Excel 里只抽「姓名列 + 准考证号列」的值。 */
 function tokensFromXlsx(file) {
   const tokens = new Set();
   try {
     const book = XLSX.readFile(file);
-    for (const name of book.SheetNames) {
-      const rows = XLSX.utils.sheet_to_json(book.Sheets[name], {
+    for (const sheetName of book.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(book.Sheets[sheetName], {
         header: 1,
         raw: false,
         defval: "",
       });
-      for (const row of rows) {
-        for (const cell of row) {
-          const value = String(cell ?? "").trim();
-          if (/^\d{6,}$/.test(value)) tokens.add(value);
-          else if (/^[\u4E00-\u9FA5·]{2,4}$/.test(value)) tokens.add(value);
+      const headerIndex = findHeaderRow(rows);
+      if (headerIndex < 0) continue;
+      const nameColumns = columnsMatching(rows[headerIndex], NAME_HEADER);
+      const idColumns = columnsMatching(rows[headerIndex], ID_HEADER);
+      for (const row of rows.slice(headerIndex + 1)) {
+        for (const column of nameColumns) {
+          const value = String(row[column] ?? "").trim();
+          if (NAME_SHAPE.test(value)) tokens.add(value);
+        }
+        for (const column of idColumns) {
+          const value = String(row[column] ?? "").trim();
+          if (ID_SHAPE.test(value)) tokens.add(value);
         }
       }
     }
@@ -132,22 +167,27 @@ function tokensFromXlsx(file) {
   return tokens;
 }
 
+/** 结果 JSON 里只抽「对象里 name / id / studentId 这类键」的值。 */
+const SENSITIVE_JSON_KEY = /^(name|studentName|id|studentId|examId|examNo|准考证号|学号)$/;
+
 function tokensFromJson(file) {
   const tokens = new Set();
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8"));
     const walk = (node) => {
-      if (typeof node === "string") {
-        const value = node.trim();
-        if (/^\d{6,}$/.test(value) || /^[\u4E00-\u9FA5·]{2,4}$/.test(value)) tokens.add(value);
-        return;
-      }
       if (Array.isArray(node)) {
         for (const item of node) walk(item);
         return;
       }
       if (node && typeof node === "object") {
-        for (const item of Object.values(node)) walk(item);
+        for (const [key, value] of Object.entries(node)) {
+          if (typeof value === "string" && SENSITIVE_JSON_KEY.test(key)) {
+            const text = value.trim();
+            if (NAME_SHAPE.test(text) || ID_SHAPE.test(text)) tokens.add(text);
+          } else {
+            walk(value);
+          }
+        }
       }
     };
     walk(parsed);
@@ -173,8 +213,15 @@ function collectSensitiveTokens() {
 
 function scanForLeaks() {
   const sensitive = collectSensitiveTokens();
+  const hasRealData =
+    existsSync(path.join(REPO_ROOT, "inputs")) || existsSync(path.join(REPO_ROOT, "out"));
   if (sensitive.size === 0) {
-    log("  · inputs/ 与 out/ 里没有可比的真实数据（跳过内容扫描）");
+    if (hasRealData) {
+      throw new Error(
+        "inputs/ 或 out/ 存在，但一个姓名/学号 token 都没抽到——扫描逻辑可能失效，拒绝打包",
+      );
+    }
+    log("  · 本机没有 inputs/ 与 out/（跳过内容扫描）");
     return;
   }
   // 仓库既有文档 / 示例里本来就有的词（例如 README 的占位示例），不算泄露

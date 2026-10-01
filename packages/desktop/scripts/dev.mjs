@@ -27,7 +27,7 @@ if (prepared.status !== 0) {
     [
       "[dev] 本地没有 Electron 二进制（pnpm 未放行 electron 的安装脚本）。三选一：",
       "  1) 直接跑打包产物：pnpm --filter @exam-seat/desktop build:mac --dir，再 open 产物里的 .app",
-      "  2) 补装二进制：node node_modules/electron/install.js（在 apps/desktop 下）",
+      "  2) 补装二进制：node node_modules/electron/install.js（在 packages/desktop 下）",
       "  3) 临时放行：pnpm approve-builds（勾 electron）后重新 install",
     ].join("\n"),
   );
