@@ -1,0 +1,5 @@
+# SEA 打包中间产物（CJS 单文件 / blob / 注入前的 config）
+sea/dist/
+
+# 打出来的可执行文件与技能包
+out/
