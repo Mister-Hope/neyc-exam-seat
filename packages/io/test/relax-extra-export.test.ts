@@ -185,7 +185,7 @@ describe("座位表：讲台侧加座", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 监考表：放宽标注 + 借考备注                                          */
+/* 监考表：放宽标注 + 备注（判定本身在 attendance-remark.test.ts）        */
 /* ------------------------------------------------------------------ */
 
 const SEATING_RELAXED: SeatingPlan = {
@@ -254,7 +254,7 @@ const PLAN_ALL: PlanAllResult = {
   diagnostics: [],
 };
 
-describe("监考表：放宽同班相邻 + 借考备注", () => {
+describe("监考表：放宽同班相邻 + 备注列", () => {
   it("第二行是「地点：… ｜ 考场人数：N」，放宽的考场补标注；第三行是具名表头", () => {
     const [sheet] = buildInvigilatorSheets(PLAN_ALL, undefined);
     expect(rowValues(sheet!.rows[0]!)[0]).toBe("第十八考场（生物）");
@@ -269,53 +269,20 @@ describe("监考表：放宽同班相邻 + 借考备注", () => {
     expect(JSON.stringify(sheetValues(sheet!))).not.toContain("监考");
   });
 
-  it("借考行备注写「借考（第6时段 生物）」，普通行备注留空", () => {
+  it("单科房间里考满全场 → 备注留空（借考字样也不再出现，v3 只留科目）", () => {
     const [sheet] = buildInvigilatorSheets(PLAN_ALL, undefined);
     expect(sheet!.rows.slice(3).map((row) => rowValues(row))).toEqual([
       [1, "高三(1)班", "李雷", "B01", ""],
-      [2, "高三(2)班", "某生", "B02", "借考（第6时段 生物）"],
+      [2, "高三(2)班", "某生", "B02", ""],
     ]);
+    expect(JSON.stringify(sheetValues(sheet!))).not.toContain("借考");
   });
 
-  it("多个借考科目各自带时段，用「、」连接", () => {
-    const multi: PlanAllResult = {
-      ...PLAN_ALL,
-      slots: [
-        { id: "T6", name: "第6时段", subjects: ["biology"] },
-        { id: "T7", name: "第7时段", subjects: ["politics"] },
-      ],
-      seatings: [{ ...SEATING_RELAXED, borrowedSubjects: { B02: ["biology", "politics"] } }],
-      byStudent: [
-        schedule("B01", "李雷", "高三(1)班", 1),
-        {
-          ...schedule("B02", "某生", "高三(2)班", 2),
-          slots: {
-            T6: {
-              subject: "biology",
-              subjectLabel: "生物",
-              roomId: "R18",
-              roomName: "第十八考场",
-              seatNo: 2,
-            },
-            T7: {
-              subject: "politics",
-              subjectLabel: "政治",
-              roomId: "R18",
-              roomName: "第十八考场",
-              seatNo: 2,
-            },
-          },
-        },
-      ],
-    };
-    const [sheet] = buildInvigilatorSheets(multi, undefined);
-    expect(rowValues(sheet!.rows.slice(3)[1]!)[4]).toBe("借考（第6时段 生物、第7时段 政治）");
-  });
-
-  it("拿不到时段信息时退回「借考（生物）」，不输出 undefined", () => {
+  it("拿不到该生时刻表时不写备注，也不输出 undefined", () => {
     const noSchedule: PlanAllResult = { ...PLAN_ALL, byStudent: [] };
     const [sheet] = buildInvigilatorSheets(noSchedule, undefined);
-    expect(rowValues(sheet!.rows.slice(3)[1]!)[4]).toBe("借考（生物）");
+    expect(rowValues(sheet!.rows.slice(3)[1]!)[4]).toBe("");
+    expect(JSON.stringify(sheetValues(sheet!))).not.toContain("undefined");
   });
 
   it("没放宽、没借考时第二行不带标注，正文仍带空的备注列", () => {
@@ -346,12 +313,12 @@ describe("监考表：放宽同班相邻 + 借考备注", () => {
     );
   });
 
-  it("导出成工作簿后仍能读回标注与备注", () => {
+  it("导出成工作簿后仍能读回标注（这张表没有备注）", () => {
     const bytes = buildInvigilatorWorkbook(PLAN_ALL, undefined);
     expect(readWorkbook(bytes).map((sheet) => sheet.name)).toContain("第十八考场（生物）");
     const aoa = readAoa(bytes, "第十八考场（生物）");
     expect(aoa[2]).toEqual(["座位号", "班级", "姓名", "准考证号", "备注"]);
-    expect(aoa[4]![4]).toBe("借考（第6时段 生物）");
+    expect(aoa[4]![4]).toBe("");
     expect(aoa[0]![0]).toBe("第十八考场（生物）");
   });
 });

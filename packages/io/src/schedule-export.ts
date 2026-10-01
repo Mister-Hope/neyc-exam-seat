@@ -14,6 +14,7 @@ import type {
   StudentSchedule,
 } from "@exam-seat/core";
 
+import { sortByRoomOrder } from "./room-order";
 import {
   A4_LANDSCAPE_CONTENT_WIDTH_CM,
   MIN_COL_WIDTH,
@@ -60,6 +61,23 @@ export function baseRoomName(room: { id: string; name?: string }): string {
   return stripped === "" ? raw : stripped;
 }
 
+/**
+ * 「不考：…」里科目的固定顺序。
+ *
+ * 必须与 core 的 `subjectListLabel` 顺序一致（语数外 → 物化生 → 政史地）； core 没有导出那个顺序，所以这里显式写一份，**按固定顺序输出，不按出现顺序**。
+ */
+const SUBJECT_DISPLAY_ORDER: readonly string[] = [
+  "chinese",
+  "math",
+  "english",
+  "physics",
+  "chemistry",
+  "biology",
+  "politics",
+  "history",
+  "geography",
+];
+
 /** 表格末尾列的列名（A、B…Z、AA）。 */
 function endColumn(count: number): string {
   let value = Math.max(count, 1);
@@ -89,8 +107,11 @@ function sortByClassAndId(students: readonly StudentSchedule[]): StudentSchedule
   );
 }
 
-/** 主考场：该生座位时段最多的那个考场；并列取 `byStudent.rooms` 里靠前的。 */
-function mainRoomId(student: StudentSchedule): string {
+/** `core` 的 3 门必考：语数外（主考场判定用）。 */
+const CORE_SUBJECTS: ReadonlySet<string> = new Set(["chinese", "math", "english"]);
+
+/** 退路：座位时段最多的那个考场；并列取 `byStudent.rooms` 里靠前的。 */
+function busiestRoomId(student: StudentSchedule): string {
   const counts = new Map<string, number>();
   for (const assignment of Object.values(student.slots ?? {})) {
     if (!assignment) continue;
@@ -108,9 +129,32 @@ function mainRoomId(student: StudentSchedule): string {
   return best;
 }
 
+/**
+ * **主考场**：该生考「语数外」的那间考场（老师：「毕竟语数外算是一个学生的主考场」）。
+ *
+ * 取不到语数外信息时（单场 / 数据缺失）退回 {@link busiestRoomId}（座位时段最多、并列取靠前）。 班级表的第一列「主考场」与监考表的备注判定都用这一个函数，前后一致。
+ */
+export function studentMainRoomId(student: StudentSchedule): string {
+  const counts = new Map<string, number>();
+  for (const assignment of Object.values(student.slots ?? {})) {
+    if (assignment && CORE_SUBJECTS.has(assignment.subject)) {
+      counts.set(assignment.roomId, (counts.get(assignment.roomId) ?? 0) + 1);
+    }
+  }
+  let best = busiestRoomId(student);
+  let bestCount = 0;
+  for (const [roomId, count] of counts) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = roomId;
+    }
+  }
+  return best;
+}
+
 /** 学生用到的考场，主考场排第一。 */
 function orderedRooms(student: StudentSchedule): StudentRoomUsage[] {
-  const main = mainRoomId(student);
+  const main = studentMainRoomId(student);
   const primary = student.rooms.find((room) => room.roomId === main);
   if (primary === undefined) return [...student.rooms];
   return [primary, ...student.rooms.filter((room) => room.roomId !== main)];
@@ -433,33 +477,78 @@ export function buildClassScheduleWorkbook(
   });
 }
 
+/** 一个学生在一套座位里的应到情况。 */
+export interface SeatingAttendance {
+  /** 他在这间**实际考**的科目（按 {@link SUBJECT_DISPLAY_ORDER} 固定顺序） */
+  subjects: string[];
+  /** 这间是不是他的主考场（见 {@link studentMainRoomId}） */
+  isMainRoom: boolean;
+}
+
 /**
- * 借考备注：「借考（第6时段 生物）」。
+ * 某学生在一套座位里的应到情况，**完全数据驱动**：
  *
- * 借考座位是**该时段的空位**，同一座号可以被别人在别的时段复用，所以备注必须带时段才看得懂。 时段从 `byStudent[].slots`（该生在该考场的这个科目） 配合
- * `result.slots` 反查；查不到就退回「借考（生物）」，不输出 undefined。
+ * 「实际考的科目」= 该生 `slots` 里 `roomId === seating.roomId` 的那些时段的 `subject`； 不看
+ * `students[].subjects`（那份只有 3 门选科、不含语数外，拿来相减会把人人标成「不考语文」）。
+ *
+ * 拿不到该生时刻表（`byStudent` 里没这个人）时返回 `undefined`：数据不全就不猜，不写备注。
  */
-function borrowRemark(
+export function seatingAttendance(
+  student: StudentSchedule | undefined,
   seating: SeatingPlan,
-  studentId: string,
-  subjects: readonly string[],
-  scheduleById: Map<string, StudentSchedule>,
-  slotNames: Map<string, string>,
-): string {
-  const schedule = scheduleById.get(studentId);
-  const labels = subjects.map((subject) => {
-    const subjectName = subjectLabel(subject);
-    let slotId: string | undefined;
-    for (const [id, assignment] of Object.entries(schedule?.slots ?? {})) {
-      if (assignment && assignment.roomId === seating.roomId && assignment.subject === subject) {
-        slotId = id;
-        break;
-      }
-    }
-    const slotName = slotId === undefined ? undefined : slotNames.get(slotId);
-    return slotName === undefined ? subjectName : `${slotName} ${subjectName}`;
-  });
-  return `借考（${labels.join("、")}）`;
+): SeatingAttendance | undefined {
+  if (student === undefined) return undefined;
+  const subjects = new Set<string>();
+  for (const assignment of Object.values(student.slots ?? {})) {
+    if (assignment && assignment.roomId === seating.roomId) subjects.add(assignment.subject);
+  }
+  return {
+    subjects: SUBJECT_DISPLAY_ORDER.filter((subject) => subjects.has(subject)),
+    isMainRoom: studentMainRoomId(student) === seating.roomId,
+  };
+}
+
+/**
+ * 主考场分支里「该考场会考、但该生不在这里考」的科目（固定顺序）。
+ *
+ * **外来分支返回空数组**（那类学生走「只考：…」）；没时刻表也返回空数组（数据不全不猜）。
+ */
+export function absentSubjectsInSeating(
+  student: StudentSchedule | undefined,
+  seating: SeatingPlan,
+): string[] {
+  const attendance = seatingAttendance(student, seating);
+  if (attendance === undefined || !attendance.isMainRoom) return [];
+  return SUBJECT_DISPLAY_ORDER.filter(
+    (subject) => seating.subjects.includes(subject) && !attendance.subjects.includes(subject),
+  );
+}
+
+/**
+ * 监考表「备注」列的文案（契约 v3：**只有科目，没有时段、没有「借考」字样、没有括号**）。
+ *
+ * - **本考场是主考场** → `不考：生物`（该考场会考、他却不在这里考的科目，多科用「、」按固定顺序）； 没有缺的科目 → 空字符串。
+ * - **本考场不是主考场**（他是来这间单科借考 / 单科安排的）→ `只考：生物`，多科 `只考：生物、地理`；
+ *   例外（防噪音）：他在这间考的科目正好等于该考场会考的全部科目（例如第十九考场（政治）里的 物化政学生）→ 空字符串。
+ *
+ * 老师原话：监考老师提前知道自己的监考时段、学生也知道自己的考试时段，所以这张表不需要时间信息。 没有信息量的行（全考 / 外来考满全场）保持空 —— 绝大多数行都该是空的。
+ */
+export function seatingRemark(student: StudentSchedule | undefined, seating: SeatingPlan): string {
+  const attendance = seatingAttendance(student, seating);
+  if (attendance === undefined) return "";
+
+  if (attendance.isMainRoom) {
+    const absent = SUBJECT_DISPLAY_ORDER.filter(
+      (subject) => seating.subjects.includes(subject) && !attendance.subjects.includes(subject),
+    );
+    if (absent.length === 0) return "";
+    return `不考：${absent.map((subject) => subjectLabel(subject)).join("、")}`;
+  }
+
+  if (attendance.subjects.length === 0) return "";
+  // 外来学生考满这个考场的全部科目 → 没有信息量，别加噪音
+  if (seating.subjects.every((subject) => attendance.subjects.includes(subject))) return "";
+  return `只考：${attendance.subjects.map((subject) => subjectLabel(subject)).join("、")}`;
 }
 
 /**
@@ -469,7 +558,11 @@ function borrowRemark(
  * 「第一考场（语数外物化生）」；某个考场混了组合时会拆成「第一考场（语数外物化）」+「第一考场（生物）」。
  *
  * 表头三行：合并大标题（与 sheet 名同文案）、`地点：… ｜ 考场人数：N`（放宽过的考场再补一句）， 以及 `座位号 | 班级 | 姓名 | 准考证号 |
- * 备注`。**不再有「监考：…」那一行**。 没有任何座位方案时兜底一张「无安排」表。
+ * 备注`。**不再有「监考：…」那一行**。
+ *
+ * 备注列区分两种情况（见 {@link seatingRemark}）：主考场的「不考：<科目>」与外来单科的「只考：<科目>」。
+ * 考场表列的是用过这间考场的人，但每个时段真正应到的只是其中一部分，不标的话监考老师会把不考的学生当成缺考。 没有信息量的行（全考 /
+ * 外来考满全场）留空。没有任何座位方案时兜底一张「无安排」表。
  */
 export function buildInvigilatorSheets(
   result: PlanAllResult,
@@ -477,10 +570,15 @@ export function buildInvigilatorSheets(
 ): XlsxSheet[] {
   const roomById = new Map((rooms ?? []).map((room) => [room.id, room]));
   const scheduleById = new Map(result.byStudent.map((student) => [student.studentId, student]));
-  const slotNames = new Map(result.slots.map((slot) => [slot.id, slot.name]));
   const headers = ["座位号", "班级", "姓名", "准考证号", "备注"];
 
-  const sheets = result.seatings.map<XlsxSheet>((seating) => {
+  // sheet 顺序按考场序号自然排（求解器的 seatings 顺序是分配顺序，会让 R17/R18 跑到最前）；
+  // 只在这里排，不改 `result.seatings` 本身。
+  const orderedSeatings = sortByRoomOrder(result.seatings, (seating) => ({
+    id: seating.roomId,
+    name: scheduleRoomName(seating.roomId, seating.roomName, roomById),
+  }));
+  const sheets = orderedSeatings.map<XlsxSheet>((seating) => {
     const spec = roomById.get(seating.roomId);
     const roomName = scheduleRoomName(seating.roomId, seating.roomName, roomById);
     const title = seatingTitle(roomName, seating.subjects);
@@ -499,11 +597,8 @@ export function buildInvigilatorSheets(
     const body: XlsxCellInput[][] = [];
     for (const { studentId, seatNo } of entries) {
       const student = scheduleById.get(studentId);
-      const borrowed = seating.borrowedSubjects?.[studentId];
-      const remark =
-        borrowed && borrowed.length > 0
-          ? borrowRemark(seating, studentId, borrowed, scheduleById, slotNames)
-          : "";
+      // 主考场不考某科 / 外来单科只考某科：只动备注列，不加列、不按时段分块
+      const remark = seatingRemark(student, seating);
       body.push([
         { value: seatNo, style: "body" },
         { value: student?.className ?? "", style: "body" },

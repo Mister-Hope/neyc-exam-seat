@@ -32,26 +32,41 @@ const ROSTER = [
 ];
 
 describe("名单导入", () => {
-  it("自动认出 学号 / 姓名 / 班级 三列", () => {
+  it("自动认出 学号 / 姓名 / 班级 三列；性别列不再解析", () => {
     const sheets = readWorkbook(makeXlsx(ROSTER));
     expect(sheets).toHaveLength(1);
     expect(sheets[0]!.headers).toEqual(["学号", "姓名", "班级", "性别"]);
     const { mapping, missing } = suggestMapping(sheets[0]!.headers);
     expect(missing).toEqual([]);
-    expect(mapping).toMatchObject({ id: 0, name: 1, className: 2, gender: 3 });
+    expect(mapping).toMatchObject({ id: 0, name: 1, className: 2 });
+    expect(mapping).not.toHaveProperty("gender");
+    expect(mapping).not.toHaveProperty("note");
   });
 
-  it("一站式读出学生名单", () => {
+  it("一站式读出学生名单：性别 / 备注列都不会进学生对象", () => {
     const result = readRoster(makeXlsx(ROSTER));
     expect(result.sheetName).toBe("Sheet1");
     expect(result.students).toHaveLength(3);
-    expect(result.students[0]).toMatchObject({
+    // 严格相等：多出 gender / meta 字段都会失败
+    expect(result.students[0]).toEqual({
       id: "20240101",
       name: "张三",
       className: "高三(1)班",
-      gender: "男",
     });
+    expect(result.students[0]).not.toHaveProperty("gender");
+    expect(result.students[0]).not.toHaveProperty("meta");
     expect(result.issues).toHaveLength(0);
+  });
+
+  it("备注列不会被读进 student.meta", () => {
+    const result = readRoster(
+      makeXlsx([
+        ["学号", "姓名", "班级", "备注"],
+        ["A1", "张三", "高三(1)班", "听力免考"],
+      ]),
+    );
+    expect(result.students[0]).toEqual({ id: "A1", name: "张三", className: "高三(1)班" });
+    expect(result.students[0]).not.toHaveProperty("meta");
   });
 
   it("表头用了别名也能认出来", () => {

@@ -14,6 +14,12 @@ export interface SheetData {
   rows: string[][];
 }
 
+/**
+ * 名单的列映射：每个字段都是**0 基的列号**。
+ *
+ * 只认下面这几列，其余列（含「性别」「备注」）一律忽略 —— 它们没有任何排考 / 校验 / 导出逻辑使用。 缺考名单里没有 id 列时会退化为「姓名 + 班级」成对定位，见
+ * `readAbsentKeys`。
+ */
 export interface RosterMapping {
   /** 学号所在列（0 基） */
   id: number;
@@ -21,8 +27,6 @@ export interface RosterMapping {
   name: number;
   /** 班级所在列 */
   className: number;
-  gender?: number;
-  note?: number;
   /** 选科所在列，例如「物化政」 */
   combination?: number;
   /** 「缺考」标记所在列；有内容即缺席（否定值除外，见 `isAbsentMark`） */
@@ -135,8 +139,6 @@ const HEADER_ALIASES: Record<keyof RosterMapping, string[]> = {
     "isexcluded",
     "absent",
   ],
-  gender: ["性别", "sex", "gender"],
-  note: ["备注", "说明", "note", "remark"],
   combination: [
     "选科",
     "选考",
@@ -164,8 +166,6 @@ const FIELD_PRIORITY: (keyof RosterMapping)[] = [
   "className",
   "absent",
   "combination",
-  "gender",
-  "note",
 ];
 
 /** 全角 ASCII（U+FF01–U+FF5E）→ 半角；其余字符原样。 */
@@ -294,14 +294,8 @@ export function parseRoster(
     }
     seen.add(id);
     const student: Student = { id, name, className };
-    if (mapping.gender !== undefined) {
-      const gender = (row[mapping.gender] ?? "").trim();
-      if (gender) student.gender = gender;
-    }
-    if (mapping.note !== undefined) {
-      const note = (row[mapping.note] ?? "").trim();
-      if (note) student.meta = { note };
-    }
+    // 「性别」「备注」列不解析：它们没有任何排考 / 校验 / 导出逻辑使用（老 job.json 里可能已有
+    // `student.gender` / `student.meta`，类型字段保留，但这里不再产生）
     if (mapping.combination !== undefined) {
       const raw = (row[mapping.combination] ?? "").trim();
       if (raw) {
@@ -372,8 +366,6 @@ export function readRoster(
     id: options.mapping?.id ?? guessed.mapping.id ?? -1,
     name: options.mapping?.name ?? guessed.mapping.name ?? -1,
     className: options.mapping?.className ?? guessed.mapping.className ?? -1,
-    gender: options.mapping?.gender ?? guessed.mapping.gender,
-    note: options.mapping?.note ?? guessed.mapping.note,
     combination: options.mapping?.combination ?? guessed.mapping.combination,
     absent: options.mapping?.absent ?? guessed.mapping.absent,
   };
@@ -537,7 +529,7 @@ function writeWorkbook(sheets: { name: string; ws: XLSX.WorkSheet }[]): Uint8Arr
   return new Uint8Array(out);
 }
 
-/** 名单表：考场号 / 座位号 / 学号 / 姓名 / 班级 /（性别）。 */
+/** 名单表：考场号 / 座位号 / 学号 / 姓名 / 班级（不含性别——姓名/性别这类扩展列都不参与排考与导出）。 */
 export function planToRows(result: PlanResult): (string | number)[][] {
   const rows: (string | number)[][] = [["考场", "座位号", "学号", "姓名", "班级"]];
   for (const e of result.entries) {
@@ -731,3 +723,6 @@ export function pruneEmptyRooms<T extends { rooms?: RoomSpec[] }>(
 
 /** 多场次两套导出表（`buildClassScheduleSheets` / `buildInvigilatorSheets` 等）。 */
 export * from "./schedule-export";
+
+/** 考场名的中文序号解析与自然排序（`chineseNumberToArabic` / `sortByRoomOrder` 等）。 */
+export * from "./room-order";
