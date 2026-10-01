@@ -11,11 +11,22 @@ import type {
   RoomSpec,
   Suggestion,
 } from "./types";
-import { isSameClassRelaxed, relaxedClassLimit } from "./util";
+import {
+  describeSameClassRelax,
+  isSameClassRelaxed,
+  relaxedClassLimit,
+  sameClassLimit,
+} from "./util";
 
 /** 班级上限用的「本考场最多能容纳同一个班多少人」：放宽后按 `relaxSameClass` 取。 */
 function effectiveSameClassLimit(room: RoomSpec, fallback: number, capacity: number): number {
   return relaxedClassLimit(room, fallback, capacity);
+}
+
+/** 考场显示名（没写 name 就用 id），诊断文案里用 */
+function roomName(room: RoomSpec): string {
+  const name = room.name?.trim() ?? "";
+  return name === "" ? room.id : name;
 }
 
 export interface PrecheckResult {
@@ -49,6 +60,40 @@ export function resolveAdjacency(
   }
   if (classes.size < MIN_CLASSES_FOR_KING) return { adjacency: "orthogonal", downgraded: true };
   return { adjacency: "king", downgraded: false };
+}
+
+/**
+ * 建模型**之前**的房间几何校验（`precheckJob` 会先调它，再 `compileModel`）。
+ *
+ * 为什么必须在前面：`compileModel` 要为每个考场算「同班人数上限」，几何函数碰到非法/超大尺寸 以前会抛 `RangeError`（`1 << width` 溢出），CLI 就变成
+ * exit 1「内部错误」——违反「core 不抛异常」铁律。 现在几何函数本身已经安全，这里仍把问题**在模型之前**如实报出来，让诊断顺序与消息都可预期。
+ *
+ * 只依赖原始 `job.rooms`，不需要 `CompiledModel`；与 `runPrecheck` 里的同类检查不重复（那边已删除）。
+ */
+export function validateRoomGeometry(job: Job): Diagnostic[] {
+  const diagnostics: Diagnostic[] = [];
+  const rooms = job.rooms ?? [];
+
+  const invalid = rooms.filter(
+    (room) =>
+      !Number.isInteger(room.rows) ||
+      !Number.isInteger(room.cols) ||
+      room.rows < 1 ||
+      room.cols < 1,
+  );
+  if (invalid.length > 0) {
+    diagnostics.push({
+      code: "INVALID_ROOM_SIZE",
+      severity: "error",
+      message: `有 ${invalid.length} 个考场的行列数不合法（必须是 ≥ 1 的整数）：${invalid
+        .map((room) => room.id)
+        .join("、")}`,
+      evidence: { roomIds: invalid.map((room) => room.id) },
+      suggestions: [],
+    });
+  }
+
+  return diagnostics;
 }
 
 export function runPrecheck(
@@ -105,18 +150,7 @@ export function runPrecheck(
     });
   }
 
-  const invalidRooms = rooms.filter((r) => r.spec.rows < 1 || r.spec.cols < 1);
-  if (invalidRooms.length > 0) {
-    push({
-      code: "INVALID_ROOM_SIZE",
-      severity: "error",
-      message: `有 ${invalidRooms.length} 个考场的行列数不合法：${invalidRooms
-        .map((r) => r.spec.id)
-        .join("、")}`,
-      evidence: { roomIds: invalidRooms.map((r) => r.spec.id) },
-      suggestions: [],
-    });
-  }
+  // 行列数的合法性在 `validateRoomGeometry()` 里、建模型之前就查过了（见该函数注释），这里不重复报。
 
   // 加座列必须落在 [1, cols] 内（`docs/design.md` §5.8.4）：越界会被几何函数静默丢弃，
   // 而老师以为多了座位 —— 这里明确报错，别让容量悄悄变小。
@@ -257,11 +291,31 @@ export function runPrecheck(
       0,
     );
     if (size > limit) {
+      // 单间设有「同班人数上限」（数字形态）时，把限制逐间写清楚：老师才知道该调哪一间、调到多少
+      const cappedRooms = rooms
+        .map((room) => ({
+          room,
+          cap: sameClassLimit(room.spec, room.maxSameClass, room.capacity),
+        }))
+        .filter(
+          (item): item is { room: (typeof rooms)[number]; cap: number } => item.cap !== undefined,
+        );
+      const hint =
+        cappedRooms.length === 0
+          ? ""
+          : `（其中 ${cappedRooms
+              .map((item) => `${roomName(item.room.spec)} 同班上限 ${item.cap} 人`)
+              .join("、")}）`;
       push({
         code: "CLASS_LIMIT_EXCEEDED",
         severity: "error",
-        message: `${model.classNames[cls]} 有 ${size} 人，但所有考场加起来最多只能容纳该班 ${limit} 人`,
-        evidence: { className: model.classNames[cls], size, limit },
+        message: `${model.classNames[cls]} 有 ${size} 人，但所有考场加起来最多只能容纳该班 ${limit} 人${hint}`,
+        evidence: {
+          className: model.classNames[cls],
+          size,
+          limit,
+          cappedRooms: cappedRooms.map((item) => ({ roomId: item.room.spec.id, cap: item.cap })),
+        },
         suggestions: capacitySuggestions(job, size - limit),
       });
     }
@@ -274,7 +328,11 @@ export function runPrecheck(
     push({
       code: "ROOM_SAME_CLASS_RELAXED",
       severity: "warning",
-      message: `${room.spec.name ?? room.spec.id} 已放宽「同班相邻」：本考场同班人数上限 ${limit}（正常上限 ${room.maxSameClass}），该考场内同班相邻不再算冲突`,
+      message: `${room.spec.name ?? room.spec.id} 已放宽「同班相邻」：${describeSameClassRelax(
+        room.spec,
+        room.maxSameClass,
+        room.capacity,
+      )}（正常上限 ${room.maxSameClass}），该考场内同班相邻不再算冲突`,
       evidence: {
         roomId: room.spec.id,
         relaxSameClass: room.spec.relaxSameClass === true ? true : room.spec.relaxSameClass,
@@ -545,7 +603,8 @@ function capacitySuggestions(job: Job, deficit: number): Suggestion[] {
   // 2) 加考场：新考场按本 job 座位数最大的考场取模板（没有任何考场时退回 6 列 × 7 排），
   //    这样别的学校复用时不至于被写死的 42 座带偏。
   const template = biggest ?? FALLBACK_ROOM_TEMPLATE;
-  const templateCapacity = roomCapacity(template);
+  // 最大考场也可能只有 0 个座位（行列数非法时）—— 兜到 1，避免 ceil(deficit / 0) = Infinity 变成死循环
+  const templateCapacity = Math.max(1, roomCapacity(template));
   const addCount = Math.max(1, Math.ceil(deficit / templateCapacity));
   // 新考场的 id 从 rooms.length + 1 往上找，跳过已经用掉的编号
   const usedIds = new Set(rooms.map((room) => room.id));

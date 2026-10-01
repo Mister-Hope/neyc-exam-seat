@@ -221,13 +221,29 @@ function orthogonalMaxIndependentSet(rows: number, cols: number, extraCols: numb
 }
 
 /**
+ * 轮廓线 DP 允许的最大位宽。
+ *
+ * DP 是 `O(width · 2^width)`：本机实测 20×20（width 20）约 0.4s、24×24（width 24）约 8.8s， 而且 `1 << width` 在
+ * width ≥ 31 时按 32 位取模会溢出（30×40 直接抛 `RangeError`）。
+ * 超过这个宽度就退回闭式解（对纯矩形是精确值，带加座时是**保守下界**）：宁可少算也不能算错或卡死。
+ */
+const MAX_DP_WIDTH = 20;
+
+/**
  * 国王图（8 邻域）的精确最大独立集（非攻击国王问题的「带洞」一般化）。
  *
  * 座位图仍是一个 `rows+1` 行 × `cols` 列的网格：第 1..rows 排满座，第 0 排只有加座。 逐行做轮廓线 DP（bitmask
  * 记录上一排选中了哪些座位），转移时用「子集最大值」变换 (SOS) 把 `2^width` 的枚举压到 `width · 2^width`。为了控制位宽，列数比 `rows + 1`
  * 大时把网格转置后再做（国王图对转置不变）。
+ *
+ * 无加座时直接返回闭式解 `⌈rows/2⌉·⌈cols/2⌉`（与 DP 逐值一致，见 `docs/design.md` §4.5）； 位宽超过 {@link MAX_DP_WIDTH}
+ * 时同样退回闭式解（不抛异常、不误算）。
  */
 function kingMaxIndependentSet(rows: number, cols: number, extraCols: number[]): number {
+  if (extraCols.length === 0 || Math.min(cols, rows + 1) > MAX_DP_WIDTH) {
+    // 加座只会增加节点，不可能让最大独立集变小 → 纯矩形闭式解是带加座时的下界
+    return Math.ceil(rows / 2) * Math.ceil(cols / 2);
+  }
   if (cols <= rows + 1) {
     let extraMask = 0;
     for (const col of extraCols) extraMask |= 1 << (col - 1);
@@ -289,18 +305,24 @@ function kingProfileMaxIndependentSet(allowed: number[], width: number): number 
 /**
  * 单个考场内、同班学生数的上限 = 真实座位图的最大独立集。
  *
- * 4 邻域（orthogonal）时图是二分图，用 König 定理精确求；8 邻域（king）时按实际图形状做轮廓线 DP。 纯矩形（无加座）的结果与旧的闭式公式逐值一致：4 邻域 =
+ * 4 邻域（orthogonal）时图是二分图，用 König 定理精确求；8 邻域（king）时按实际图形状做轮廓线 DP。 纯矩形（无加座）直接返回闭式解，与 DP 逐值一致：4 邻域 =
  * `⌈rows·cols / 2⌉`，8 邻域 = `⌈rows/2⌉ · ⌈cols/2⌉`。
  *
  * 加座会改变图的形状：37 座（7×5 + 第 2、4 列加座）的 4 邻域上限是 **20**（不是设计文档 §4.5 写的 19—— 加座落在二分图的另一侧，两侧为 20 /
- * 17，最大匹配只能到 17）。
+ * 17，最大匹配只能到 17）。加座 + 位宽超过 {@link MAX_DP_WIDTH} 时退回闭式解（保守下界，绝不抛异常）。
+ *
+ * 本函数**不抛异常**（铁律 3）：大考场（30×40 / 40×40 / 100×100）与非法尺寸都必须安全返回。
  */
 export function maxSameClass(room: RoomSpec, adjacency: Adjacency = "king"): number {
   const rows = Math.max(0, Math.floor(room.rows));
   const cols = Math.max(0, Math.floor(room.cols));
   if (rows === 0 || cols === 0) return 0;
   const extraCols = normalizeExtraSeats(cols, room.extraFrontSeats);
-  if (adjacency === "orthogonal") return orthogonalMaxIndependentSet(rows, cols, extraCols);
+  if (adjacency === "orthogonal") {
+    // 二分图：纯矩形闭式解精确，加座才需要跑匹配
+    if (extraCols.length === 0) return Math.ceil((rows * cols) / 2);
+    return orthogonalMaxIndependentSet(rows, cols, extraCols);
+  }
   return kingMaxIndependentSet(rows, cols, extraCols);
 }
 

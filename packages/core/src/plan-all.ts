@@ -2,12 +2,13 @@ import { compileDomains, hasAnySelector, resolveConstraintStudents } from "./dom
 import { compileModel } from "./model";
 import type { CompiledModel } from "./model";
 import { roomCapacity } from "./numbering";
-import { normalizeOptions, plan } from "./plan";
+import { normalizeOptions, plan, planDelivery, validationIssueDiagnostics } from "./plan";
 import { resolveAdjacency } from "./precheck";
 import { deriveTimeSlots, findSlotConflicts, normalizeSlots } from "./schedule";
 import type { TimeSlot } from "./schedule";
 import {
   CORE_SUBJECTS,
+  compareCombinationNames,
   isRegularCombination,
   normalizeCombination,
   subjectLabel,
@@ -17,12 +18,19 @@ import type {
   Diagnostic,
   GroupPreference,
   Job,
+  PlanDelivery,
   PlanOptions,
   PlanResult,
   RoomSpec,
   UnmetConstraint,
 } from "./types";
-import { isSameClassRelaxed, relaxedClassLimit, roomCombination } from "./util";
+import {
+  describeSameClassRelax,
+  isSameClassRelaxed,
+  relaxedClassLimit,
+  roomCombination,
+} from "./util";
+import { validateAll } from "./validate";
 
 /** 一套座位方案：一个考场里的一批固定学生 + 一套固定座位 */
 export interface SeatingPlan {
@@ -95,6 +103,8 @@ export interface StudentSchedule {
 
 export interface PlanAllResult {
   ok: boolean;
+  /** 整体交付状态：任一套座位 `blocked` 或 `validateAll()` 出 error → 整体 `blocked`（见 {@link PlanDelivery}） */
+  delivery?: PlanDelivery;
   /** 应届的时段划分 */
   slots: TimeSlot[];
   seatings: SeatingPlan[];
@@ -871,7 +881,7 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     diagnostics.push({
       code: "ROOM_SAME_CLASS_RELAXED",
       severity: "warning",
-      message: `${roomName(room.spec)} 已放宽「同班相邻」：本考场同班上限放宽为 ${relaxedClassLimit(
+      message: `${roomName(room.spec)} 已放宽「同班相邻」：${describeSameClassRelax(
         room.spec,
         room.maxSameClass,
         roomCapacity(room.spec),
@@ -1282,8 +1292,10 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
 
     // 4a. 常规组合：各自占一批普通考场（人数多的先分，减少碎片）。
     // 科目取每生「主考场科目」的并集 —— 显式借考出去的科目不会从主考场消失（除非全班都借走了）。
+    // 并列人数时按冻结的拼音序排序：core 里不许依赖 ICU（`localeCompare` 随 Node/ICU 版本可能给出
+    // 不同顺序，会直接破坏「同输入同 seed 必得同结果」）。
     const regularEntries = [...regularByCombination.entries()].sort(
-      (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "zh"),
+      (a, b) => b[1].length - a[1].length || compareCombinationNames(a[0], b[0]),
     );
     for (const [combo, members] of regularEntries) {
       for (const segment of splitByRequiredRoom(
@@ -1859,7 +1871,7 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     overRoomLimit.length === 0 &&
     seatings.every((s) => s.result.ok);
 
-  return {
+  const result: PlanAllResult = {
     ok,
     slots,
     seatings,
@@ -1871,6 +1883,23 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     borrowings,
     diagnostics,
   };
+
+  // 交付判定：导出层不必记得自己跑校验 —— 这里就把 `validateAll()` 的 error 与逐套房座位的
+  // `delivery` 一起汇入（任一套 blocked → 整体 blocked）。
+  result.delivery = evaluateDeliveryAll(job, result);
+
+  return result;
+}
+
+/**
+ * 多场次的**独立复算**：重跑 `validateAll()` 并结合逐套房座位的 `delivery` 判定整体交付状态。
+ *
+ * 导出层写文件前应当调它（结果可能已被改动过）；`planAll()` 内部也用它保证只有一处判据。
+ */
+export function evaluateDeliveryAll(job: Job, result: PlanAllResult): PlanDelivery {
+  if (result.seatings.some((seating) => seating.result.delivery === "blocked")) return "blocked";
+  const validationErrors = validationIssueDiagnostics(validateAll(job, result).issues);
+  return planDelivery([...result.diagnostics, ...validationErrors]);
 }
 
 // 保持既有公共 API：core 的入口一直从这里取 subjectListLabel

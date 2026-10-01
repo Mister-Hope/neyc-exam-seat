@@ -30,6 +30,40 @@ export function relaxedClassLimit(
 }
 
 /**
+ * 「这个考场最多能坐同一个班多少人」的**硬上限**：只有**数字**形态才返回数字，其余一律 `undefined`（不限人数）。
+ *
+ * 语义分工（`docs/design.md` §5.8.1）：
+ *
+ * - 缺省 / `false` → 不放宽：靠普通「同班相邻」规则限制（上限是座位图的最大独立集，即 `fallback`），**没有额外计数上限**；
+ * - `true` → 完全放开：该考场不再判同班相邻，也**不限**同班人数（`undefined`）；
+ * - 数字 `n` → 该考场不再判同班相邻，但**同班人数不得超过 `n`**（求解器计数约束 + 校验器独立复核）。
+ */
+export function sameClassLimit(
+  room: Pick<RoomSpec, "relaxSameClass">,
+  fallback: number,
+  capacity: number,
+): number | undefined {
+  const relax = room.relaxSameClass;
+  if (typeof relax !== "number" || !Number.isFinite(relax)) return undefined;
+  return relaxedClassLimit(room, fallback, capacity);
+}
+
+/**
+ * `ROOM_SAME_CLASS_RELAXED` 文案里「本考场放宽成什么样」那半句。
+ *
+ * `true` 与数字的**语义不同**，文案必须能一眼区分：`true` 是不限人数，数字是同班人数上限 —— 若把 `true` 也写成「上限 N」（N =
+ * 座位数），老师会误以为那是自己配置的值。
+ */
+export function describeSameClassRelax(
+  room: Pick<RoomSpec, "relaxSameClass">,
+  fallback: number,
+  capacity: number,
+): string {
+  if (room.relaxSameClass === true) return "本考场不限同班人数";
+  return `本考场同班人数上限 ${relaxedClassLimit(room, fallback, capacity)} 人`;
+}
+
+/**
  * 考场的「专属组合」（`RoomSpec.combination`）规范化后的值：没写或写了空串 = 不专属任何组合。
  *
  * 写法可任意（「史地政」/「政史地」等价）；认不出任何科目的文本按原样返回，既不误伤也便于报错。

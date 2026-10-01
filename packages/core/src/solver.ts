@@ -1,5 +1,6 @@
 import type { StudentDomain } from "./domain";
 import type { CompiledModel } from "./model";
+import { RoomClassCaps } from "./room-cap";
 import type { Adjacency, Conflict, RelaxMode } from "./types";
 import { isSameClassRelaxed, mulberry32 } from "./util";
 
@@ -23,7 +24,16 @@ export interface SolveOutput {
   unplacedStudents: number[];
   conflicts: Conflict[];
   conflictCount: number;
+  /**
+   * 「同班人数超过该考场上限」的超出量之和（`relaxSameClass` 为数字时才有意义；0 = 全部满足）。
+   * 与相邻冲突一样是要最小化的违规量：数字形态下该考场不判同班相邻，但同班人数不得超过 `n`。
+   */
+  capViolationCount: number;
   iterations: number;
+  /** 本次的迭代预算（`min(4_000_000, max(1000, timeLimitMs × 400))`）—— 同输入必得同预算 */
+  iterationBudget: number;
+  /** 是否被**墙钟兜底**提前掐断（正常路径恒为 false；true 表示结果不完整） */
+  truncated: boolean;
   elapsedMs: number;
   completed: boolean;
 }
@@ -31,6 +41,19 @@ export interface SolveOutput {
 const W_CONFLICT = 1000;
 const W_PIN_SOFT = 400;
 const W_PIN_HARD_PRIORITY = 50;
+
+/** 迭代硬上限：`timeLimitMs` 换算出的迭代预算不会超过它（保持历史上限，避免超长跑） */
+const MAX_ITERATIONS = 4_000_000;
+/**
+ * `timeLimitMs` → 迭代预算的**固定换算系数**。
+ *
+ * 系数是**常量**，所以预算只由输入决定（同输入同预算 → 同迭代数 → 同结果，铁律 2）； 实测本机约 1300 迭代/ms，取 400 留余量；默认 10s × 400 = 400 万 =
+ * 历史上限。
+ */
+const ITERATIONS_PER_MS = 400;
+const MIN_ITERATIONS = 1000;
+/** 墙钟兜底的检查间隔（防「单次迭代极慢」把进程卡死，只在兜底路径上有意义） */
+const TRUNCATION_CHECK_MASK = 8191;
 
 /** 模拟退火 + 贪心初始化。纯函数：同输入同 seed 必得同结果。 */
 export function solve(input: SolveInput): SolveOutput {
@@ -49,6 +72,9 @@ export function solve(input: SolveInput): SolveOutput {
     for (let s = room.firstSeat; s < room.firstSeat + room.seatCount; s += 1) seatRelaxed[s] = 1;
   }
 
+  // `relaxSameClass` 为**数字**的考场：不判同班相邻，但同班人数不得超过 n（0 = 不限人数）
+  const caps = new RoomClassCaps(model);
+
   const rng = mulberry32(seed);
   const strict = relax === "none";
   const W_PIN = relax === "minConflicts" ? W_PIN_HARD_PRIORITY : W_PIN_SOFT;
@@ -66,7 +92,10 @@ export function solve(input: SolveInput): SolveOutput {
       unplacedStudents: Array.from({ length: nStudents }, (_, index) => index),
       conflicts: [],
       conflictCount: 0,
+      capViolationCount: 0,
       iterations: 0,
+      iterationBudget: 0,
+      truncated: false,
       elapsedMs: Date.now() - started,
       completed: nStudents === 0,
     };
@@ -89,6 +118,7 @@ export function solve(input: SolveInput): SolveOutput {
   const place = (student: number, seat: number): void => {
     studentAtSeat[seat] = student;
     seatOfStudent[student] = seat;
+    caps.add(student, seat);
   };
 
   const sameClassNeighborCount = (student: number, seat: number): number => {
@@ -103,14 +133,14 @@ export function solve(input: SolveInput): SolveOutput {
     return count;
   };
 
-  // 1) 受限学生先坐：在可用集合里挑同班邻居最少的座位
+  // 1) 受限学生先坐：在可用集合里挑同班邻居最少、且不超同班上限的座位
   for (const student of constrained) {
     const domain = domains[student]!;
     let bestSeat = -1;
     let bestCost = Number.POSITIVE_INFINITY;
     for (const seat of domain) {
       if (studentAtSeat[seat]! >= 0) continue;
-      const cost = sameClassNeighborCount(student, seat);
+      const cost = sameClassNeighborCount(student, seat) + caps.penalty(student, seat) * 2;
       if (cost < bestCost) {
         bestCost = cost;
         bestSeat = seat;
@@ -126,12 +156,12 @@ export function solve(input: SolveInput): SolveOutput {
     while (cursor < seatCount && studentAtSeat[cursor]! >= 0) cursor += 1;
     if (cursor >= seatCount) break;
     let chosen = cursor;
-    if (sameClassNeighborCount(student, cursor) > 0) {
+    if (sameClassNeighborCount(student, cursor) > 0 || caps.penalty(student, cursor) > 0) {
       let scanned = 0;
       for (let s = cursor + 1; s < seatCount && scanned < 64; s += 1) {
         if (studentAtSeat[s]! >= 0) continue;
         scanned += 1;
-        if (sameClassNeighborCount(student, s) === 0) {
+        if (sameClassNeighborCount(student, s) === 0 && caps.penalty(student, s) === 0) {
           chosen = s;
           break;
         }
@@ -141,27 +171,36 @@ export function solve(input: SolveInput): SolveOutput {
     if (chosen === cursor) cursor += 1;
   }
 
-  // 3) 兜底：贪心没安排下的学生，塞进任意空位（必要时违反限定，由报告说明）
+  // 3) 兜底：**严格模式（用户没 relax）下只允许域内空位**。域内确实没空位就不硬塞 —— 该生保持「未安排」，
+  //    由 `unplacedStudents` → `SEARCH_FAILED` → 独立校验的 `ENTRY_MISSING_STUDENT` 走不可交付路径。
+  //    ⚠️ 绝不能无条件退回「任意空位」：那会**自然产出违反用户限定的名单**（docs/design.md §18 R-6）。
+  //    用户显式 `--relax` 时要的是「违反最少并交付」，这时才允许越域（由 `violatedStudents` 如实标注）。
   for (let i = 0; i < nStudents; i += 1) {
     if (seatOfStudent[i]! >= 0) continue;
-    let target = -1;
     const domain = domains[i];
-    if (domain) {
-      for (const seat of domain)
-        if (studentAtSeat[seat]! < 0) {
-          target = seat;
-          break;
-        }
+    if (domain == null) {
+      // 无任何限定的学生：任何空位都在他的「域」里
+      for (let s = 0; s < seatCount; s += 1) {
+        if (studentAtSeat[s]! >= 0) continue;
+        place(i, s);
+        break;
+      }
+      continue;
     }
-    if (target < 0) {
-      for (let s = 0; s < seatCount; s += 1)
-        if (studentAtSeat[s]! < 0) {
-          target = s;
-          break;
-        }
+    let placed = false;
+    for (const seat of domain) {
+      if (studentAtSeat[seat]! >= 0) continue;
+      place(i, seat);
+      placed = true;
+      break;
     }
-    if (target < 0) break;
-    place(i, target);
+    if (placed || strict) continue;
+    // 显式放宽：允许「尽量排」（越域），由 `violatedStudents` / `CONSTRAINT_UNMET` 如实报出
+    for (let s = 0; s < seatCount; s += 1) {
+      if (studentAtSeat[s]! >= 0) continue;
+      place(i, s);
+      break;
+    }
   }
 
   /* ---------------- 舞台结构 ---------------- */
@@ -282,7 +321,9 @@ export function solve(input: SolveInput): SolveOutput {
   }
 
   let conflicts = countAllConflicts();
+  let capViolations = caps.debtTotal();
   let bestConflicts = conflicts;
+  let bestCap = capViolations;
   let bestViolations = violations;
   let bestSeatOf = Int32Array.from(seatOfStudent);
 
@@ -294,12 +335,14 @@ export function solve(input: SolveInput): SolveOutput {
       if (seat >= 0) studentAtSeat[seat] = i;
     }
     rebuildOccupied();
+    caps.rebuild(studentAtSeat);
     conflicts = bestConflicts;
+    capViolations = bestCap;
     violations = bestViolations;
   };
 
-  // 初始状态只有在「零冲突且零违反」时才算完成；软约束模式下也要继续优化违反数
-  let completed = conflicts === 0 && violations === 0;
+  // 初始状态只有在「零冲突、零超上限、零违反」时才算完成；软约束模式下也要继续优化违反数
+  let completed = conflicts === 0 && capViolations === 0 && violations === 0;
 
   /* ---------------- 模拟退火 ---------------- */
 
@@ -338,15 +381,26 @@ export function solve(input: SolveInput): SolveOutput {
     return occupied[Math.trunc(rng() * occupied.length)]!;
   };
 
-  const maxIterations = 4_000_000;
+  // 预算是**迭代次数**（确定性）；时间只用来换算预算，不进循环条件
+  const iterationBudget = Math.min(
+    MAX_ITERATIONS,
+    Math.max(MIN_ITERATIONS, Math.round(timeLimitMs * ITERATIONS_PER_MS)),
+  );
+  // 墙钟**兜底**：只在「单次迭代极慢」导致远超预算耗时时才触发，命中即标记结果不完整（truncated），
+  // 并且**绝不**参与正常轨迹 —— 正常路径完全由 iterationBudget 决定。
+  const hardDeadline = started + Math.max(timeLimitMs * 4, 30_000);
+  let truncated = false;
   let temperature = 1.6;
   const cooling = 0.999995;
   const minTemperature = 0.02;
   let iterations = 0;
   let stale = 0;
 
-  while (!completed && iterations < maxIterations) {
-    if ((iterations & 1023) === 0 && Date.now() - started > timeLimitMs) break;
+  while (!completed && iterations < iterationBudget) {
+    if ((iterations & TRUNCATION_CHECK_MASK) === 0 && Date.now() > hardDeadline) {
+      truncated = true;
+      break;
+    }
     iterations += 1;
 
     const s1 = pickSeat();
@@ -372,22 +426,27 @@ export function solve(input: SolveInput): SolveOutput {
 
     buildAffected(s1, s2);
     const before = pairsInAffected();
+    // 同班人数上限：先把「两人换考场」的计数变更落账，再量超出量的变化（被拒时回滚）
+    const capDelta = caps.apply(s1, s2, u, v);
     swapSeats(s1, s2);
     const after = pairsInAffected();
-    const delta = W_CONFLICT * (after - before) + W_PIN * pinDelta;
+    const delta = W_CONFLICT * (after - before) + W_CONFLICT * capDelta + W_PIN * pinDelta;
 
     if (delta <= 0 || rng() < Math.exp(-delta / temperature)) {
       conflicts += after - before;
+      capViolations += capDelta;
       violations += pinDelta;
       if (
         conflicts < bestConflicts ||
-        (conflicts === bestConflicts && violations < bestViolations)
+        (conflicts === bestConflicts && capViolations < bestCap) ||
+        (conflicts === bestConflicts && capViolations === bestCap && violations < bestViolations)
       ) {
         bestConflicts = conflicts;
+        bestCap = capViolations;
         bestViolations = violations;
         bestSeatOf = Int32Array.from(seatOfStudent);
         stale = 0;
-        if (conflicts === 0 && violations === 0) {
+        if (conflicts === 0 && capViolations === 0 && violations === 0) {
           completed = true;
           break;
         }
@@ -396,6 +455,7 @@ export function solve(input: SolveInput): SolveOutput {
       }
     } else {
       swapSeats(s1, s2);
+      caps.revert(s1, s2, u, v);
       stale += 1;
     }
 
@@ -409,7 +469,11 @@ export function solve(input: SolveInput): SolveOutput {
     }
   }
 
-  if (bestConflicts < conflicts || (bestConflicts === conflicts && bestViolations < violations)) {
+  if (
+    bestConflicts < conflicts ||
+    (bestConflicts === conflicts && bestCap < capViolations) ||
+    (bestConflicts === conflicts && bestCap === capViolations && bestViolations < violations)
+  ) {
     restoreBest();
   }
 
@@ -434,10 +498,16 @@ export function solve(input: SolveInput): SolveOutput {
     unplacedStudents,
     conflicts: conflictList,
     conflictCount: conflictList.length,
+    capViolationCount: caps.debtTotal(),
     iterations,
+    iterationBudget,
+    truncated,
     elapsedMs: Date.now() - started,
     completed:
-      conflictList.length === 0 && violatedStudents.length === 0 && unplacedStudents.length === 0,
+      conflictList.length === 0 &&
+      violatedStudents.length === 0 &&
+      unplacedStudents.length === 0 &&
+      caps.debtTotal() === 0,
   };
 }
 

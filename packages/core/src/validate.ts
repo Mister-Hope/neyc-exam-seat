@@ -1,10 +1,12 @@
 import { compileDomains, hasAnySelector } from "./domain";
-import { compileModel } from "./model";
+import { compileModel, seatIndexAt } from "./model";
 import { roomCapacity, seatNoToRCIn, toPhysicalCol } from "./numbering";
 import type { PlanAllResult, RoomSubjectClash } from "./plan-all";
 import type { Job, PlanResult, Student, ValidationIssue, ValidationReport } from "./types";
 import { isSameClassRelaxed } from "./util";
 import { combinationIssuesForAssignments } from "./validate-combination";
+import { sameClassLimitIssues } from "./validate-relax-limit";
+import { scheduleConsistencyIssues } from "./validate-schedule";
 
 /** 独立校验器：只依赖 job 与最终 entries，**不复用求解器的任何状态**。 任何一条硬约束不过，就拒绝导出。 */
 export function validate(job: Job, result: PlanResult): ValidationReport {
@@ -109,9 +111,10 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
     const room = roomById.get(entry.roomId);
     if (!room) continue;
     const rc = seatNoToRCIn(room.spec, entry.seatNo);
-    const seat = room.grid[(rc.row - 1) * room.spec.cols + (rc.col - 1)];
+    // 座位寻址统一走 `seatIndexAt`（它正确处理第 0 排加座）；手写下标会让加座学生在这里隐身
+    const seat = seatIndexAt(room, rc.row, rc.col);
     const si = studentIndexOf.get(entry.studentId);
-    if (seat === undefined || seat < 0 || si === undefined) continue;
+    if (seat < 0 || si === undefined) continue;
     studentAtSeat[seat] = si;
   }
 
@@ -166,6 +169,13 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
     });
   }
 
+  /* 3b) `relaxSameClass` 为数字时：该考场同班人数不得超过 n（实现见 validate-relax-limit.ts） */
+  issues.push(
+    ...sameClassLimitIssues(model, result, studentIndexOf, (roomId) =>
+      roomLabel(roomById.get(roomId)?.spec, roomId),
+    ),
+  );
+
   /* 4) 限定是否被满足 */
   const domains = compileDomains(model);
   for (const entry of result.entries) {
@@ -176,8 +186,9 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
     const room = roomById.get(entry.roomId);
     if (!room) continue;
     const rc = seatNoToRCIn(room.spec, entry.seatNo);
-    const seat = room.grid[(rc.row - 1) * room.spec.cols + (rc.col - 1)];
-    if (seat === undefined || seat < 0) continue;
+    // 同上：统一寻址，否则「坐在加座上的受限学生」会被当成越界静默跳过（漏报 CONSTRAINT_UNMET）
+    const seat = seatIndexAt(room, rc.row, rc.col);
+    if (seat < 0) continue;
     if (!domain.has(seat)) {
       const hits = domains.studentConstraints[si]!;
       issues.push({
@@ -498,8 +509,17 @@ export function validateAll(job: Job, result: PlanAllResult): PlanAllValidation 
   );
   if (hasSelection) issues.push(...combinationIssuesForAssignments(job, result));
 
-  /* 5) 参加考试的人必须至少有一个场次 */
-  const scheduled = new Set(byStudent.map((student) => student.studentId));
+  /* 4d) 时段一致性（未知时段 / 座位方案↔时段表 / `rooms`↔`slots`）：实现见 validate-schedule.ts */
+  issues.push(...scheduleConsistencyIssues({ slots, seatings, byStudent, roomById, roomLabel }));
+
+  /* 5) 参加考试的人必须至少有一个**非空**场次 */
+  // 只看「byStudent 里有没有这条记录」不够：把 slots 清空/全部置 null 后记录还在，会蒙混过关。
+  const scheduled = new Set<string>();
+  for (const item of byStudent) {
+    if (item == null) continue;
+    const hasAssignment = Object.values(item.slots ?? {}).some((assignment) => assignment != null);
+    if (hasAssignment) scheduled.add(item.studentId);
+  }
   const allStudents = job.students ?? [];
   const participants = allStudents.filter((student) => student.included !== false);
   // 「一套座位都没有」不能算通过（空数组上的 every 会真空为真，与 planAll 的 C1 同理）

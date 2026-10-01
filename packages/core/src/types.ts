@@ -247,6 +247,23 @@ export type DiagnosticCode =
   | "SEAT_CONFLICT"
   // 求解
   | "SEARCH_FAILED"
+  | "TIME_LIMIT_REACHED"
+  // 校验器（`validate()` / `validateAll()`）的原始码：自校验失败时**按原码**升成顶层诊断，
+  // 不再统一泛化成 SEARCH_FAILED（否则结构性错误会绕过导出门禁，见 docs/design.md §18 R-1）
+  | "ADJACENCY_CONFLICT"
+  | "ENTRY_DUPLICATE_SEAT"
+  | "ENTRY_DUPLICATE_STUDENT"
+  | "ENTRY_MISSING_SLOT"
+  | "ENTRY_MISSING_STUDENT"
+  | "ENTRY_NUMBERING_MISMATCH"
+  | "ENTRY_SEAT_OUT_OF_RANGE"
+  | "ENTRY_UNKNOWN_ROOM"
+  | "ENTRY_UNKNOWN_SLOT"
+  | "ENTRY_UNKNOWN_STUDENT"
+  | "CONSTRAINT_UNMET"
+  | "ROOM_SAME_CLASS_LIMIT_EXCEEDED"
+  | "ROOM_COMBINATION_MISMATCH"
+  | "ROOM_COMBINATION_UNMET"
   | "OK";
 
 /** JSON Patch 操作，agent 可直接应用到 job.json 后重跑。 */
@@ -326,12 +343,33 @@ export interface PlanStats {
   elapsedMs: number;
   seed: number;
   adjacency: Adjacency;
+  /**
+   * 本次求解实际跑的退火迭代数（可选：手工拼的历史结果可能没有）。
+   *
+   * 预算 = `min(4_000_000, max(1000, timeLimitMs × 400))`，**只由输入决定**（可复现）。 用 `iterations === 预算 &&
+   * !ok` 判断「是不是被预算截断」，不必看耗时。
+   */
+  iterations?: number;
 }
+
+/**
+ * 交付状态：由 core 在**独立校验之后**统一判定，导出层只消费这个字段（不要自己看诊断猜）。
+ *
+ * - `blocked`：**不得**导出名单 / 监考表。存在结构性 error（编号不符、重复占座、未知学生、漏排、 专属组合不符、容量不足……），导出只会误导老师；
+ * - `ready-with-warnings`：可以导出，但带着 warning（`--relax` 主动降级、考场级放宽、空置考场……）；
+ * - `ready`：零 error、零 warning。
+ *
+ * `plan()` / `planAll()` 一定会写入该字段；手工拼出来的历史结果可能缺省， 用 `blocksListExport(result)` 或
+ * `evaluateDelivery(job, result)` 兜底判定。
+ */
+export type PlanDelivery = "blocked" | "ready" | "ready-with-warnings";
 
 export interface PlanResult {
   resultVersion: number;
   /** 是否零冲突且全部限定满足 */
   ok: boolean;
+  /** 交付状态：导出闸门只看这个（见 {@link PlanDelivery}） */
+  delivery?: PlanDelivery;
   level: PlanLevel;
   stats: PlanStats;
   entries: PlanEntry[];

@@ -144,6 +144,49 @@ export function normalizeCombination(text: string): string {
   return parseCombination(text).combination;
 }
 
+/**
+ * 组合名字符的**冻结顺序表** —— 项目自定的稳定顺序，**不承诺与任何 ICU 版本一致**。
+ *
+ * 只用来做「稳定排序」，值本身没有业务含义，也不代表拼音序 / 码点序。 之所以写成数据而不是调 `localeCompare(name, "zh")`：后者的结果取决于运行环境的 ICU
+ * 构建，会破坏「同输入同 seed 必得同结果」。
+ *
+ * 现状记录（不要当成保证）：对本项目能出现的 35 种组合名，本表与旧代码的 `localeCompare(a, b, "zh")` 得到的**全序相同**（逐对验证 0 处不同；顺序已被
+ * `packages/core/test/combination-order.test.ts` 冻结成字面量）； 但这是「恰好一致」，不是设计目标 —— 认不出的字符会退回 UTF-16
+ * 码元序。
+ *
+ * ⚠️ 与**默认 locale**（不带 `"zh"`）的 `localeCompare` 以及 `Array#sort()` 的内建码元序**都不同**（实测 440/1225 对不一致，
+ * 例如它们会把 `物化政` 排在 `物化生` 之前）。排查排序问题时先确认拿到的是不是本函数——`sort(undefined)` 会静默退化成内建排序。
+ */
+const COMBINATION_CHAR_RANK: ReadonlyMap<string, number> = new Map([
+  ["地", 0],
+  ["化", 1],
+  ["生", 2],
+  ["史", 3],
+  ["物", 4],
+  ["政", 5],
+]);
+
+/**
+ * 组合名排序：稳定、可复现、**不依赖 ICU**。
+ *
+ * 逐字符查 {@link COMBINATION_CHAR_RANK}；认不出的字符退回 UTF-16 码元序（同样与 ICU 无关），保证全序。
+ * 只在「两个组合人数并列」时用于决定分房先后（`plan-all.ts` 的常规组合排序），不参与任何语义判断。
+ */
+export function compareCombinationNames(a: string, b: string): number {
+  if (a === b) return 0;
+  const length = Math.min(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const left = a[i]!;
+    const right = b[i]!;
+    if (left === right) continue;
+    const rankLeft = COMBINATION_CHAR_RANK.get(left);
+    const rankRight = COMBINATION_CHAR_RANK.get(right);
+    if (rankLeft !== undefined && rankRight !== undefined) return rankLeft < rankRight ? -1 : 1;
+    return left < right ? -1 : 1;
+  }
+  return a.length < b.length ? -1 : 1;
+}
+
 /** 校验是不是合法的 3+1+2 选科，返回问题列表（空数组 = 合规）。 */
 export function validateSelection(subjects: readonly string[]): string[] {
   const problems: string[] = [];

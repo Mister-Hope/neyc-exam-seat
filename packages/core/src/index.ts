@@ -7,6 +7,7 @@ export {
   SECONDARY_SUBJECTS,
   SUBJECT_LABELS,
   SUBJECT_SHORT,
+  compareCombinationNames,
   formatCombination,
   hasSubject,
   normalizeCombination,
@@ -61,7 +62,7 @@ export {
 } from "./domain";
 export type { ConstraintSeatSet, DomainBundle, StudentDomain } from "./domain";
 
-export { findRoomSubjectClashes, planAll } from "./plan-all";
+export { evaluateDeliveryAll, findRoomSubjectClashes, planAll } from "./plan-all";
 export type {
   BorrowedSeat,
   PlanAllResult,
@@ -73,7 +74,13 @@ export type {
   StudentSlotAssignment,
 } from "./plan-all";
 
-export { MIN_CLASSES_FOR_KING, describeRoomLoad, resolveAdjacency, runPrecheck } from "./precheck";
+export {
+  MIN_CLASSES_FOR_KING,
+  describeRoomLoad,
+  resolveAdjacency,
+  runPrecheck,
+  validateRoomGeometry,
+} from "./precheck";
 export type { PrecheckResult } from "./precheck";
 
 export { collectConflicts, solve } from "./solver";
@@ -87,10 +94,13 @@ export {
   DEFAULT_TIME_LIMIT_MS,
   RESULT_VERSION,
   blocksListExport,
+  evaluateDelivery,
   isFatal,
   normalizeOptions,
   plan,
+  planDelivery,
   precheckJob,
+  validationIssueDiagnostics,
 } from "./plan";
 export type { PrecheckOutput } from "./plan";
 

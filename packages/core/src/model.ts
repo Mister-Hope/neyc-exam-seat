@@ -90,8 +90,11 @@ const NEIGHBOR_OFFSETS_ORTHOGONAL: readonly (readonly [number, number])[] = [
  * 取 `(row, col)` 处的全局座位下标；该位置没有座位（越界，或第 0 排该列没有加座）返回 -1。
  *
  * 第 0 排 = 讲台侧加座，只有 `extraSeat` 里非 -1 的列才有座位。
+ *
+ * ⚠️ **座位寻址只有这一处实现**（求解器的邻接表、校验器都用它）。历史上校验器手写过 `room.grid[(row - 1) * cols + (col - 1)]`，对加座（行
+ * 0）算出负下标而静默跳过 —— 别再复制那个公式。
  */
-function seatIndexAt(room: CompiledRoom, row: number, col: number): number {
+export function seatIndexAt(room: CompiledRoom, row: number, col: number): number {
   if (!Number.isInteger(row) || !Number.isInteger(col)) return -1;
   if (col < 1 || col > room.spec.cols) return -1;
   if (row === 0) return room.extraSeat[col - 1]!;
