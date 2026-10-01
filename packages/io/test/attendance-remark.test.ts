@@ -539,8 +539,10 @@ describe("主考场必须取「语数外所在考场」，不是座位时段最�
     );
     const { rows, headers } = buildClassScheduleRows(plan, ROOM_SPECS);
     const values = rowValues(rows[0]!);
-    expect(String(values[headers.indexOf("主考场")])).toBe("第一考场");
-    expect(String(values[headers.indexOf("单科考场1")])).toBe("第二考场（外语、物理、化学、生物）");
+    expect(String(values[headers.indexOf("主考场")])).toBe("第一考场·某个教室");
+    expect(String(values[headers.indexOf("单科考场1")])).toBe(
+      "第二考场（外语、物理、化学、生物）·某个教室",
+    );
   });
 });
 
@@ -568,7 +570,9 @@ describe("回归对照：语数外都在同一间（普通形态）", () => {
 
     const { rows, headers } = buildClassScheduleRows(plan, ROOM_SPECS);
     const values = rowValues(rows[0]!);
-    expect(String(values[headers.indexOf("主考场")])).toBe("第一考场");
-    expect(String(values[headers.indexOf("单科考场1")])).toBe("第二考场（物理、化学、生物）");
+    expect(String(values[headers.indexOf("主考场")])).toBe("第一考场·某个教室");
+    expect(String(values[headers.indexOf("单科考场1")])).toBe(
+      "第二考场（物理、化学、生物）·某个教室",
+    );
   });
 });

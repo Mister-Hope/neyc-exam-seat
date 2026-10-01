@@ -166,15 +166,14 @@ function roomLabel(index: number): string {
 }
 
 /**
- * 考场列表头：每个考场列后面紧跟一列地点。
+ * 考场列表头：每个考场一组**两列** —— 考场（已含地点）/ 座位号。
  *
- * `主考场 | 主考场地点 | 单科考场1 | 单科考场1地点 | …`
+ * `主考场 | 主座位号 | 单科考场1 | 座位号1 | 单科考场2 | 座位号2 | …`
  */
 function roomColumnHeaders(count: number): string[] {
   const headers: string[] = [];
   for (let index = 0; index < count; index += 1) {
-    const label = roomLabel(index);
-    headers.push(label, `${label}地点`);
+    headers.push(roomLabel(index), index === 0 ? "主座位号" : `座位号${index}`);
   }
   return headers;
 }
@@ -221,6 +220,50 @@ function roomLocation(room: StudentRoomUsage, byId: Map<string, RoomSpec>): stri
   const own = room.location?.trim();
   if (own !== undefined && own !== "") return own;
   return byId.get(room.roomId)?.location?.trim() ?? "";
+}
+
+/** 中点类字符：地点文本里的这些点只在拼接展示时去掉。 */
+const MIDDLE_DOTS = /[·•・‧∙]/g;
+
+/**
+ * 地点文本进考场列前的清理：去掉中点，并把连续空白压成一个空格。
+ *
+ * **只在拼接时用**，不改动 `byStudent[].rooms[].location` / `job.rooms[].location` 里的原始值。
+ */
+export function cleanLocationText(location: string): string {
+  return location.replaceAll(MIDDLE_DOTS, "").replaceAll(/\s+/g, " ").trim();
+}
+
+/**
+ * 考场列的文案：`<考场名>·<地点>`（分隔符 U+00B7，前后不加空格）。
+ *
+ * 地点为空（或清理后为空）时**只写考场名，不留「·」**。
+ */
+export function roomColumnValue(roomName: string, location: string): string {
+  const cleaned = cleanLocationText(location);
+  return cleaned === "" ? roomName : `${roomName}·${cleaned}`;
+}
+
+/**
+ * 该生在某考场里的座位号：**去重 + 升序**。
+ *
+ * 数据来源是 `byStudent[].slots`（**不是** `seating.studentBySeatNo`，那个是按座位方案反查的）： 遍历他的每个时段，取 `roomId ===
+ * 该考场` 的 `seatNo`。正常情况下只有一个号； 同一考场承担两科、座位方案不同时会有多个号（例如 `12` 和 `15`），这里全都要保留。
+ */
+export function seatNumbersInRoom(student: StudentSchedule, roomId: string): number[] {
+  const seatNos = new Set<number>();
+  for (const assignment of Object.values(student.slots ?? {})) {
+    if (assignment && assignment.roomId === roomId) seatNos.add(assignment.seatNo);
+  }
+  return [...seatNos].sort((a, b) => a - b);
+}
+
+/** 座位号列的值：**单号返回 number**（`12`，Excel 里能排序 / 比较）；多号返回字符串 `12/15` （升序、去重）；取不到返回 `""`。只写数字，不带「号」字。 */
+export function seatNumberText(student: StudentSchedule, roomId: string): number | string {
+  const seatNos = seatNumbersInRoom(student, roomId);
+  if (seatNos.length === 0) return "";
+  if (seatNos.length === 1) return seatNos[0]!;
+  return seatNos.join("/");
 }
 
 /** 姓名默认最多保留几个字 */
@@ -319,11 +362,13 @@ function buildClassTable(
     const ordered = orderedRooms(student);
     const cells: XlsxCellInput[] = [];
     for (const [index, room] of ordered.entries()) {
-      cells.push({
-        value: roomCellText(room, scheduleRoomName(room.roomId, room.roomName, byId), index === 0),
-        style: "body",
-      });
-      cells.push({ value: roomLocation(room, byId), style: "body" });
+      const roomName = roomCellText(
+        room,
+        scheduleRoomName(room.roomId, room.roomName, byId),
+        index === 0,
+      );
+      cells.push({ value: roomColumnValue(roomName, roomLocation(room, byId)), style: "body" });
+      cells.push({ value: seatNumberText(student, room.roomId), style: "body" });
     }
     while (cells.length < maxRooms * 2) cells.push({ value: "", style: "body" });
     const head: XlsxCellInput[] = [
@@ -344,8 +389,8 @@ function withHeaderRow(headers: string[], rows: XlsxCellInput[][]): XlsxCellInpu
 /**
  * 输出 A 的数据行。
  *
- * 列：`班级 | 姓名 | 准考证号 | 主考场 | 主考场地点 | 单科考场1 | 单科考场1地点 | …`； 考场列数 = 实际用到的最大数（最少 1
- * 列），用不到的列不出现。**班级列每行都填**（不是只写第一行）， 方便按班级筛选 / 排序。
+ * 列：`班级 | 姓名 | 准考证号 | 主考场 | 主座位号 | 单科考场1 | 座位号1 | 单科考场2 | 座位号2 | …` （每个考场一组两列，考场列已带「·地点」）；考场组数 =
+ * 实际用到的最大数（最少 1 组），用不到的组不出现。 **班级列每行都填**（不是只写第一行），方便按班级筛选 / 排序。
  *
  * `truncatedNames` = 这次导出是否把姓名截成了 5 个字（整表超 A4 横向宽度才会截，见 {@link fitNamesToA4}）； 判断基于**全年级**，所以总表 /
  * 每班表 / 单班文件的口径一致。 `options.className` 给了就只产出这个班。

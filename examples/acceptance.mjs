@@ -2786,6 +2786,11 @@ const sheetRowsOf = (file, name) => {
   const wb = readWorkbook(readFileSync(file), { type: "buffer" });
   return xlsxUtils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: "" });
 };
+/** 保留原始类型（raw）的版本：用来断言「座位号是数字单元格」这类类型约定。 */
+const sheetRowsRaw = (file, name) => {
+  const wb = readWorkbook(readFileSync(file), { type: "buffer" });
+  return xlsxUtils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: "" });
+};
 /** Xlsx 是否有「A4 横向 + 缩放到一页宽 + 冻结 + 合并标题」这套打印设置。 */
 const hasPrintSetup = (xml) =>
   xml.includes('paperSize="9"') &&
@@ -2849,6 +2854,14 @@ const columnWidthCm = (xml) => {
   const roomCols = totalHeader
     .map((h, index) => (/^主考场$|^单科考场\d+$/.test(h) ? index : -1))
     .filter((index) => index >= 0);
+  // 每个考场一组三列：考场 / …地点 / …座位号
+  // 主考场 → 主座位号；单科考场N → 座位号N（按表头定位，别再靠偏移量）
+  const seatNoCols = roomCols.map((index) => {
+    const label = totalHeader[index];
+    return totalHeader.indexOf(
+      label === "主考场" ? "主座位号" : `座位号${label.replace("单科考场", "")}`,
+    );
+  });
   const bodyIds = new Set(totalBody.map((row) => String(row[2])));
   const expectedIds = new Set(job.students.filter((s) => s.included !== false).map((s) => s.id));
   check(
@@ -2870,45 +2883,117 @@ const columnWidthCm = (xml) => {
   const specialCells = totalBody
     .flatMap((row) => roomCols.slice(1).map((index) => String(row[index] ?? "")))
     .filter(Boolean);
+  // 科目括号：单科考场形如「第37考场（政治）·生物实验室」；主考场不带科目括号（但地点里可能有 (1) 这种半角括号）
+  const subjectBracket = (cell) => String(cell).match(/（(?<subject>[^（）]+)）/u)?.groups?.subject;
   check(
-    "总表：主考场不带括号，只有换考场才在考场后标科目",
+    "总表：主考场不带科目括号、单科考场带科目括号，且考场列用「·」拼地点",
     primaryCells.length > 0 &&
-      primaryCells.every((cell) => !cell.includes("（")) &&
+      primaryCells.every((cell) => subjectBracket(cell) === undefined) &&
       specialCells.length > 0 &&
-      specialCells.every((cell) => /^.+（[^（）]+）$/.test(cell)),
+      specialCells.every((cell) => {
+        const subject = subjectBracket(cell);
+        return subject !== undefined && /^[^·]+·[^·]+$/u.test(String(cell));
+      }) &&
+      [...primaryCells, ...specialCells].some((cell) => String(cell).includes("·")),
     `主考场样例=${primaryCells[0]}；换考场样例=${specialCells.slice(0, 3).join("、")}`,
   );
-  // 每个考场列后面必须紧跟同名的「…地点」列，且地点与 job 里的教室对得上
+  // 考场列用「·」拼地点：后半段应等于 job 里的教室（中点已清理），考场名仍能对上
   const locationOfRoom = new Map(
-    job.rooms.map((room) => [baseNameOf(room.name ?? room.id), room.location ?? ""]),
+    job.rooms.map((room) => [
+      baseNameOf(room.name ?? room.id),
+      String(room.location ?? "")
+        .replaceAll(/[·•・‧∙]/gu, "")
+        .trim(),
+    ]),
   );
   const locationProblems = [];
   for (const index of roomCols) {
     const label = totalHeader[index];
-    if (totalHeader[index + 1] !== `${label}地点`) {
-      locationProblems.push(`${label}:缺地点列`);
+    const expectedSeatHeader =
+      label === "主考场" ? "主座位号" : `座位号${label.replace("单科考场", "")}`;
+    if (totalHeader[index + 1] !== expectedSeatHeader) {
+      locationProblems.push(`${label}:后面不是「${expectedSeatHeader}」列`);
       continue;
     }
     for (const row of totalBody) {
-      const roomCell = String(row[index] ?? "").trim();
-      const placeCell = String(row[index + 1] ?? "").trim();
-      if (roomCell === "") {
-        if (placeCell !== "") locationProblems.push(`${label}:空考场却有地点`);
-        continue;
-      }
-      const expected = locationOfRoom.get(baseNameOf(roomCell));
-      if (expected === undefined) locationProblems.push(`${label}:认不出考场 ${roomCell}`);
-      else if (placeCell !== expected)
-        locationProblems.push(`${label}:${roomCell} 地点=${placeCell}≠${expected}`);
+      const cell = String(row[index] ?? "").trim();
+      if (cell === "") continue;
+      const [roomName, place] = cell.split("·");
+      const expected = locationOfRoom.get(baseNameOf(roomName));
+      if (expected === undefined) locationProblems.push(`${label}:认不出考场 ${roomName}`);
+      else if (String(place ?? "") !== expected)
+        locationProblems.push(`${label}:${roomName} 地点=${place ?? ""}≠${expected}`);
     }
   }
   check(
-    "总表：每个考场列后面紧跟「…地点」列，且地点与考务表的教室一致",
+    "总表：考场列用「·」拼地点，地点与考务表的教室一致（且座位号列紧随其后）",
     roomCols.length > 0 && locationProblems.length === 0,
     locationProblems.length === 0
       ? `${totalHeader.join(" | ")}`
       : locationProblems.slice(0, 3).join("；"),
   );
+  // 座位号必须逐人与 plan 一致；单号必须是「数字」单元格（Excel 里可排序），多号才是字符串
+  const expectedSeatNos = new Map();
+  for (const student of result.byStudent) {
+    const byRoom = new Map();
+    for (const item of Object.values(student.slots ?? {})) {
+      if (!item) continue;
+      const list = byRoom.get(item.roomId) ?? [];
+      list.push(item.seatNo);
+      byRoom.set(item.roomId, list);
+    }
+    expectedSeatNos.set(
+      student.studentId,
+      student.rooms.map((room) =>
+        [...new Set(byRoom.get(room.roomId))].sort((a, b) => a - b).join("/"),
+      ),
+    );
+  }
+  const seatProblems = [];
+  let numericSeatCells = 0;
+  let textSeatCells = 0;
+  const totalBodyRaw = sheetRowsRaw(classBookPath, "总表")
+    .slice(3)
+    .filter((row) => row.some((cell) => String(cell) !== ""));
+  for (const row of totalBodyRaw) {
+    const studentId = String(row[2]);
+    const expected = expectedSeatNos.get(studentId);
+    if (expected === undefined) {
+      seatProblems.push(`${studentId}:plan 里没有这个人`);
+      continue;
+    }
+    for (const [position, roomIndex] of roomCols.entries()) {
+      const roomCell = String(row[roomIndex] ?? "").trim();
+      const seatCell = row[seatNoCols[position]];
+      const actual = String(seatCell ?? "").trim();
+      if (actual === "") {
+        if (expected[position] !== undefined && expected[position] !== "")
+          seatProblems.push(`${studentId}:${roomCell} 缺座位号（期望 ${expected[position]}）`);
+        continue;
+      }
+      if (actual !== expected[position]) {
+        seatProblems.push(`${studentId}:${roomCell} 座位号 ${actual} ≠ ${expected[position]}`);
+        continue;
+      }
+      if (typeof seatCell === "number") numericSeatCells += 1;
+      else textSeatCells += 1;
+      if (actual.includes("/") && typeof seatCell === "number")
+        seatProblems.push(`${studentId}:多号不该是数字单元格`);
+    }
+  }
+  check(
+    "总表：座位号逐人与 plan 一致（考场列后紧跟「…座位号」列）",
+    seatProblems.length === 0 && numericSeatCells > 0,
+    seatProblems.length === 0
+      ? `${numericSeatCells + textSeatCells} 个座位号格；数字格 ${numericSeatCells}、文本格 ${textSeatCells}`
+      : seatProblems.slice(0, 3).join("；"),
+  );
+  check(
+    "总表：座位号是数字单元格（多号才是文本），Excel 里能正常排序",
+    numericSeatCells > 0 && textSeatCells === 0,
+    `数字格 ${numericSeatCells} ｜ 文本格 ${textSeatCells}`,
+  );
+
   check(
     "总表：不再出现旧的「考场①/②」列名",
     !totalHeader.some((h) => /^考场[①②③④⑤]/.test(h)),

@@ -121,22 +121,20 @@ describe("导出：考场地点走 job.rooms，监考表不再有「监考：」
     expect(text).toContain("张三");
   });
 
-  it("班级总表的地点列同样取 job.rooms 的 location", () => {
+  it("班级总表：考场列用「·」拼地点，地点同样取 job.rooms 的 location", () => {
     const sheets = buildClassScheduleSheets(fixture(), ROOMS);
     const overall = sheets[0]!;
     const rows = rowTexts(overall);
 
     const headers = rows.find((row) => row.includes("准考证号"));
     expect(headers).toBeDefined();
-    const locationIndex = headers!.findIndex((header) => header.endsWith("地点"));
-    expect(locationIndex).toBeGreaterThanOrEqual(0);
+    // 考场与地点合并成一列，后面紧跟「主座位号」
+    expect(headers![headers!.indexOf("主考场") + 1]).toBe("主座位号");
 
     const studentRow = rows.find((row) => row.includes("张三"));
     expect(studentRow).toBeDefined();
-    expect(studentRow![locationIndex]).toBe("高二三班");
-    // 考场列仍是「考场名（科目）」
-    const roomIndex = headers!.indexOf("主考场");
-    expect(studentRow![roomIndex]).toContain("第一考场");
+    // 地点里的中点会被清理后再拼上：高二·三班 → 高二三班
+    expect(String(studentRow![headers!.indexOf("主考场")])).toBe("第一考场·高二三班");
 
     expect(sheetText(overall)).not.toContain("监考：");
   });

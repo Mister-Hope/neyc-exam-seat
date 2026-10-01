@@ -116,9 +116,10 @@ function roomColumns(row: XlsxCellInput[], headers: string[]): string[] {
   return pickColumns(row, headers, (header) => header === "主考场" || /^单科考场\d+$/.test(header));
 }
 
-/** 地点列（主考场地点 / 单科考场N地点）。 */
-function locationColumns(row: XlsxCellInput[], headers: string[]): string[] {
-  return pickColumns(row, headers, (header) => header.endsWith("地点"));
+/** 从「<考场名>·<地点>」里取地点；没有「·」说明地点为空。 */
+function locationOf(roomColumn: string): string {
+  const index = roomColumn.indexOf("·");
+  return index === -1 ? "" : roomColumn.slice(index + 1);
 }
 
 function pickColumns(
@@ -138,9 +139,9 @@ const CLASS_HEADERS_2_ROOMS = [
   "姓名",
   "准考证号",
   "主考场",
-  "主考场地点",
+  "主座位号",
   "单科考场1",
-  "单科考场1地点",
+  "座位号1",
 ];
 
 /* ------------------------------------------------------------------ */
@@ -165,12 +166,12 @@ describe("baseRoomName：考场名去掉（…）后缀", () => {
 /* ------------------------------------------------------------------ */
 
 describe("输出 A：按班级", () => {
-  it("列是 班级 / 姓名 / 准考证号 / 主考场 + 地点 / 单科考场1 + 地点，列数按实际用到的最大数", () => {
+  it("列是 班级 / 姓名 / 准考证号 /（考场 + 座位号）× 考场组数", () => {
     const { headers } = buildClassScheduleRows(result, ROOMS);
     expect(headers).toEqual(CLASS_HEADERS_2_ROOMS);
   });
 
-  it("没人换考场时只出 主考场 / 主考场地点 两列", () => {
+  it("没人换考场时只出一组：主考场 / 主座位号", () => {
     const singleRoom: PlanAllResult = {
       ...result,
       byStudent: result.byStudent.map((student) => ({
@@ -180,26 +181,55 @@ describe("输出 A：按班级", () => {
       })),
     };
     const { headers } = buildClassScheduleRows(singleRoom, ROOMS);
-    expect(headers).toEqual(["班级", "姓名", "准考证号", "主考场", "主考场地点"]);
+    expect(headers).toEqual(["班级", "姓名", "准考证号", "主考场", "主座位号"]);
   });
 
-  it("每个考场列后面紧跟一列地点，取值来自 byStudent[].rooms[].location", () => {
+  it("座位号列来自 byStudent[].slots，只写数字（不带「号」字）", () => {
+    const { rows, headers } = buildClassScheduleRows(result, ROOMS);
+    const seatIndex = headers.indexOf("主座位号");
+    const seats = rows.map((row) => String(rowValues(row)[seatIndex] ?? ""));
+    expect(seats.every((seat) => /^\d+$/.test(seat))).toBe(true);
+    // 真实数据里每人每考场一个号 → 必须是 number 单元格（不是文本）
+    expect(rows.every((row) => typeof rowValues(row)[seatIndex] === "number")).toBe(true);
+    // 跟数据源逐个对得上（该生在主考场的座位号）
+    const expected = new Map(
+      result.byStudent.map((student) => [
+        student.studentId,
+        [
+          ...new Set(
+            Object.values(student.slots)
+              .filter((slot) => slot?.roomId === student.rooms[0]?.roomId)
+              .map((slot) => slot!.seatNo),
+          ),
+        ]
+          .sort((a, b) => a - b)
+          .join("/"),
+      ]),
+    );
+    for (const row of rows) {
+      const values = rowValues(row);
+      expect(String(values[seatIndex] ?? "")).toBe(expected.get(String(values[2] ?? "")) ?? "");
+    }
+  });
+
+  it("考场列带「·地点」，取值来自 byStudent[].rooms[].location（且地点里的点已清理）", () => {
     const { rows, headers } = buildClassScheduleRows(result, ROOMS);
     const politics = rows.find((row) => String(rowValues(row)[1]).startsWith("物化政"))!;
-    const politicsLocations = locationColumns(politics, headers);
+    const politicsRooms = roomColumns(politics, headers);
     // 主考场是普通考场（高二N班），单科考场是生物实验室
-    expect(politicsLocations[0]).toMatch(/^高二.+班$/);
-    expect(politicsLocations[1]).toBe("生物实验室");
+    expect(locationOf(politicsRooms[0]!)).toMatch(/^高二.+班$/);
+    expect(politicsRooms[1]).toBe("第二十考场（政治）·生物实验室");
+    expect(locationOf(politicsRooms[1]!)).toBe("生物实验室");
 
     const geography = rows.find((row) => String(rowValues(row)[1]).startsWith("物化地"))!;
-    expect(locationColumns(geography, headers)[1]).toBe("地理教室");
+    expect(roomColumns(geography, headers)[1]).toBe("第二十一考场（地理）·地理教室");
 
-    // 常规组合只有一个考场，第二组地点留空
+    // 常规组合只有一个考场，第二组留空
     const regular = rows.find((row) => String(rowValues(row)[1]).startsWith("物化生"))!;
-    const regularLocations = locationColumns(regular, headers);
-    expect(regularLocations[0]).toMatch(/^高二.+班$/);
-    expect(regularLocations[1]).toBe("");
-    expect(roomColumns(regular, headers).filter((value) => value !== "")).toHaveLength(1);
+    const regularRooms = roomColumns(regular, headers);
+    expect(locationOf(regularRooms[0]!)).toMatch(/^高二.+班$/);
+    expect(regularRooms[1]).toBe("");
+    expect(regularRooms.filter((value) => value !== "")).toHaveLength(1);
   });
 
   it("byStudent 没带 location 时退回 job.rooms 的 location", () => {
@@ -217,10 +247,9 @@ describe("输出 A：按班级", () => {
     const { rows, headers } = buildClassScheduleRows(noLocation, ROOMS);
     const politics = rows.find((row) => String(rowValues(row)[1]).startsWith("物化政"))!;
     const rooms = roomColumns(politics, headers);
-    const locations = locationColumns(politics, headers);
-    expect(rooms[1]).toBe("第二十考场（政治）");
-    expect(locations[1]).toBe("生物实验室"); // job.rooms 里 R20 的 location
-    expect(locations[0]).toMatch(/^高二.+班$/);
+    expect(rooms[1]).toBe("第二十考场（政治）·生物实验室"); // job.rooms 里 R20 的 location
+    expect(locationOf(rooms[1]!)).toBe("生物实验室");
+    expect(locationOf(rooms[0]!)).toMatch(/^高二.+班$/);
   });
 
   it("这份表没超 A4 → 不截断姓名（truncatedNames=false）", () => {
@@ -245,20 +274,20 @@ describe("输出 A：按班级", () => {
 
     const regular = rows.find((row) => String(rowValues(row)[1]).startsWith("物化生"))!;
     const regularRooms = roomColumns(regular, headers);
-    expect(regularRooms[0]).toMatch(/^第.考场$/);
+    expect(regularRooms[0]).toMatch(/^第.考场(?:·.*)?$/);
     expect(regularRooms[1]).toBe("");
-    expect(regularRooms[0]).not.toContain("（");
+    expect(regularRooms[0]!.split("·")[0]).not.toContain("（");
 
     const politics = rows.find((row) => String(rowValues(row)[1]).startsWith("物化政"))!;
     const politicsRooms = roomColumns(politics, headers);
-    expect(politicsRooms[0]).toMatch(/^第.考场$/);
-    expect(politicsRooms[0]).not.toContain("（");
-    expect(politicsRooms[1]).toBe("第二十考场（政治）");
+    expect(politicsRooms[0]).toMatch(/^第.考场(?:·.*)?$/);
+    expect(politicsRooms[0]!.split("·")[0]).not.toContain("（");
+    expect(politicsRooms[1]).toBe("第二十考场（政治）·生物实验室");
 
     const geography = rows.find((row) => String(rowValues(row)[1]).startsWith("物化地"))!;
     const geographyRooms = roomColumns(geography, headers);
-    expect(geographyRooms[0]).toMatch(/^第.考场$/);
-    expect(geographyRooms[1]).toBe("第二十一考场（地理）");
+    expect(geographyRooms[0]).toMatch(/^第.考场(?:·.*)?$/);
+    expect(geographyRooms[1]).toBe("第二十一考场（地理）·地理教室");
   });
 
   it("第一列考场永远是主考场（不带括号），其余列都有括号", () => {
@@ -273,7 +302,7 @@ describe("输出 A：按班级", () => {
     }
     expect(firstColumns.length).toBeGreaterThan(0);
     expect(otherColumns.length).toBeGreaterThan(0);
-    expect(firstColumns.every((value) => !value.includes("（"))).toBe(true);
+    expect(firstColumns.every((value) => !value.split("·")[0]!.includes("（"))).toBe(true);
     expect(otherColumns.every((value) => value.includes("（"))).toBe(true);
   });
 
