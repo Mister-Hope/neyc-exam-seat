@@ -9,11 +9,11 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
       // oxlint 的 typeCheck 走的是原生 TS 编译器，认不出 `.vue` 导入，
       // 会在 web 包里报一堆 TS2307 假阳性，所以这里关掉、只保留 typeAware 的规则。
       typeCheck: false,
-      // 预设默认 denyWarnings + maxWarnings:10。本仓保留「error 阻断、warning 只提示」：
-      // 这个上限只是为了不去数存量；实际存量全是「规模类」提示，且都已在下面单独豁免或说明。
-      // 清零后应把上限收紧到 0，让 warning 也阻断 CI（见 AGENTS.md 的清理约定）。
+      // 本仓**不允许** warning 存量：从 2026-10 起 maxWarnings 归零，warning 与 error 一样阻断 CI。
+      // 确实有正当理由的「规模类」提示请在下面按文件单独豁免，并写清理由（见 precheck / plan-all /
+      // io/index / cli/cli / acceptance 那几条），不要用总量上限去掩盖新增警告。
       denyWarnings: false,
-      maxWarnings: 100_000,
+      maxWarnings: 0,
     },
     rules: {
       complexity: "off",
