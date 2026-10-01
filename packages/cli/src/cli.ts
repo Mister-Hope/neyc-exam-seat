@@ -531,9 +531,9 @@ export async function main(argv: string[]): Promise<number> {
 
         if (multi) {
           const multiResult = planAll(job, overrides);
-          // 结构性 error（ROOM_SUBJECT_CLASH / CAPACITY_INSUFFICIENT 等）时不导出名单与监考表；
-          // 放宽模式的 SEARCH_FAILED 属于主动降级，照常导出
-          const blocked = blocksListExport(multiResult.diagnostics);
+          // 导出闸门**只看 core 算好的 `delivery`**（铁律 4）：blocked 时不导出名单与监考表；
+          // 放宽模式的主动降级是 ready-with-warnings，照常导出
+          const blocked = blocksListExport(multiResult);
           if (options.outDir) {
             const written = writeMultiPlanFiles(multiResult, {
               outDir: options.outDir,
@@ -590,8 +590,8 @@ export async function main(argv: string[]): Promise<number> {
         }
 
         const result: PlanResult = plan(job, overrides);
-        // 与多场次同一判据
-        const blocked = blocksListExport(result.diagnostics);
+        // 与多场次同一判据：只看 core 算好的 `delivery`（铁律 4）
+        const blocked = blocksListExport(result);
 
         if (options.outDir) {
           const written = writePlanFiles(result, {

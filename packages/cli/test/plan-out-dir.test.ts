@@ -494,8 +494,9 @@ describe("plan --out-dir 导出", () => {
       const captured = captureOutput();
       const code = await main(["node", "exam-seat", "plan", "--job", jobPath]);
 
-      // 限定过载是结构性 error（CONSTRAINT_OVERSATURATED）→ 退出码 3
-      expect(code).toBe(EXIT_INFEASIBLE);
+      // 这个 job 自己声明了 `relax: "minConflicts"`：限定过载（CONSTRAINT_OVERSATURATED）在放宽模式下
+      // 被软化成 warning（task-62 / F-1）→ 主动降级并交付，退出码 2；结构性错误才 blocked → 3
+      expect(code).toBe(EXIT_DEGRADED);
       const stdout = captured.stdout();
       expect(stdout).toContain("未满足的限定：");
       expect(stdout).toContain("C5 · 第1考场");
