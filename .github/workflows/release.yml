@@ -1,0 +1,240 @@
+# 打 tag（v*）时自动构建并发布：桌面版（win-x64 / mac-arm64）、CLI 单文件二进制、AI 技能包。
+#
+# 本地跑不了 GitHub Release，所以每条命令都能在本地按同样顺序手跑：
+#   pnpm ci → pnpm build → 打包脚本（见 scripts/release/*.mjs、packages/desktop/scripts/*.mjs）
+# 版本号统一由 `version` job 从 tag 解析（`v0.2.0` → `0.2.0`），注入到所有产物文件名。
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 手动试跑用的版本号（不带 v，例如 0.2.0）；留空则用 package.json 里的版本
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  # 版本号只解析一次，三个构建 job 共用（避免三处重复逻辑）
+  version:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      is_tag: ${{ steps.resolve.outputs.is_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: 从 tag / 输入解析版本号
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ github.event.inputs.version }}"
+          if [ -z "$version" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "$version" ]; then
+            version="$(node -p "require('./package.json').version")"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "版本号：${version}（ref=${GITHUB_REF}，是否 tag=${GITHUB_REF#refs/tags/}）"
+
+  desktop:
+    name: 桌面版 · ${{ matrix.label }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: mac-arm64
+            platform: mac
+            artifact: desktop-mac-arm64
+            # mac 出 dmg（安装包）+ zip（免安装绿色包）
+            glob: |
+              packages/desktop/release/*.dmg
+              packages/desktop/release/*.zip
+          - os: windows-latest
+            label: win-x64
+            platform: win
+            artifact: desktop-win-x64
+            glob: |
+              packages/desktop/release/*.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+
+      - name: 安装依赖
+        run: pnpm ci
+
+      - name: 构建核心包（web 产物由 desktop 的 prepare-web 负责）
+        run: pnpm build
+
+      # mac 需要额外把 zip 也传上去（免安装绿色包）
+      - name: 打包桌面版（${{ matrix.platform }}）
+        env:
+          EXAM_SEAT_VERSION: ${{ needs.version.outputs.version }}
+        run: pnpm --filter @exam-seat/desktop build:${{ matrix.platform }}
+
+      - name: 收集产物清单
+        shell: bash
+        run: ls -la packages/desktop/release
+
+      - name: 上传 workflow 产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.glob }}
+          if-no-files-found: error
+
+      - name: 发布到该 tag 的 Release
+        if: needs.version.outputs.is_tag == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ matrix.glob }}
+
+  cli:
+    name: CLI · ${{ matrix.label }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: mac-arm64
+            platform: mac
+            artifact: cli-mac-arm64
+            glob: scripts/release/out/exam-seat-*-mac-*
+          - os: windows-latest
+            label: win-x64
+            platform: win
+            artifact: cli-win-x64
+            glob: scripts/release/out/exam-seat-*-win-*
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+
+      - name: 安装依赖
+        run: pnpm ci
+
+      # CLI 二进制内联了 core/io（alias 到 src），所以不依赖 pnpm build；这里仍跑一次，
+      # 保证「和发布出去的其他产物同源」，也顺手验证仓库在当前 tag 上是可构建的
+      - name: 构建
+        run: pnpm build
+
+      - name: 打 CLI 单文件二进制（${{ matrix.platform }}）
+        shell: bash
+        run: node scripts/release/build-cli.mjs --platform ${{ matrix.platform }} --version "${{ needs.version.outputs.version }}"
+
+      - name: 冒烟（打出来的二进制自检）
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -la scripts/release/out
+          case "${{ matrix.platform }}" in
+            mac)
+              binary="scripts/release/out/exam-seat-${VERSION}-mac-arm64"
+              chmod +x "$binary"
+              "$binary" --version
+              "$binary" --help >/dev/null
+              ;;
+            win)
+              binary="scripts/release/out/exam-seat-${VERSION}-win-x64.exe"
+              "$binary" --version
+              "$binary" --help >/dev/null
+              ;;
+          esac
+
+      - name: 上传 workflow 产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.glob }}
+          if-no-files-found: error
+
+      - name: 发布到该 tag 的 Release
+        if: needs.version.outputs.is_tag == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ matrix.glob }}
+
+  bundle:
+    name: AI 技能包
+    needs: [version, cli]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+
+      - name: 安装依赖
+        run: pnpm ci
+
+      - name: 下载两平台的 CLI 二进制
+        uses: actions/download-artifact@v5
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: scripts/release/out
+
+      - name: 打技能包（白名单拷贝 + 隐私扫描）
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -la scripts/release/out
+          node scripts/release/build-bundle.mjs \
+            --mac-bin "scripts/release/out/exam-seat-${VERSION}-mac-arm64" \
+            --win-bin "scripts/release/out/exam-seat-${VERSION}-win-x64.exe" \
+            --version "${VERSION}"
+
+      - name: 上传 workflow 产物
+        uses: actions/upload-artifact@v5
+        with:
+          name: agent-bundle
+          path: scripts/release/out/exam-seat-agent-bundle-*.zip
+          if-no-files-found: error
+
+      - name: 发布到该 tag 的 Release
+        if: needs.version.outputs.is_tag == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: scripts/release/out/exam-seat-agent-bundle-*.zip

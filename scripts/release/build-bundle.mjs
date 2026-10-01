@@ -108,8 +108,8 @@ function listFiles(dir, extensions) {
 }
 
 /** 名单类表头：姓名列 / 准考证号（学号）列。只认这两类列，避免把「选科组合」这种词当成姓名。 */
-const NAME_HEADER = /(姓名|名字|考生姓名|学生姓名|name)/i;
-const ID_HEADER = /(准考证|考号|考籍号|学籍号|学号|studentid|examid|examno|studentno)/i;
+const NAME_HEADER = /(?:姓名|名字|考生姓名|学生姓名|name)/i;
+const ID_HEADER = /(?:准考证|考号|考籍号|学籍号|学号|studentid|examid|examno|studentno)/i;
 /** 姓名形如「何静」「欧阳娜娜」；准考证号是 6 位以上数字（超过这个范围的多半是考场号 / 组合，不算敏感）。 */
 const NAME_SHAPE = /^[\u4E00-\u9FA5·]{2,6}$/;
 const ID_SHAPE = /^\d{6,}$/;
@@ -168,7 +168,7 @@ function tokensFromXlsx(file) {
 }
 
 /** 结果 JSON 里只抽「对象里 name / id / studentId 这类键」的值。 */
-const SENSITIVE_JSON_KEY = /^(name|studentName|id|studentId|examId|examNo|准考证号|学号)$/;
+const SENSITIVE_JSON_KEY = /^(?:name|studentName|id|studentId|examId|examNo|准考证号|学号)$/;
 
 function tokensFromJson(file) {
   const tokens = new Set();

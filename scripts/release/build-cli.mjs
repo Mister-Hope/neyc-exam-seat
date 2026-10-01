@@ -92,6 +92,8 @@ async function bundle() {
       "@exam-seat/core": "packages/core/src/index.ts",
     },
     outputOptions: { entryFileNames: "exam-seat-cli.cjs" },
+    // 打包时把 tag 版本号注入 SEA 入口：`exam-seat --version` 与产物文件名一致，且不改源码
+    define: { EXAM_SEA_VERSION: JSON.stringify(version) },
     report: false,
   });
   if (!existsSync(BUNDLE_FILE)) throw new Error(`没有生成 ${BUNDLE_FILE}`);
