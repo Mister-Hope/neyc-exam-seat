@@ -8,3 +8,20 @@ allowBuilds:
   electron: false
   # electron-builder 的传递依赖，只有做 Squirrel 安装包才需要它的 postinstall（我们走 nsis），显式关掉避免 pnpm 报「被忽略的构建脚本」。
   electron-winstaller: false
+
+minimumReleaseAgeExclude:
+  - "@mr-hope/*"
+  - "@oxfmt/*"
+  - "@oxlint/*"
+  - "@oxlint-tsgolint/*"
+  - "@vitest/*"
+  - oxc-config-hope
+  - oxfmt
+  - oxlint
+  - oxlint-tsgolint
+  - tsdown
+  - vitest
+minimumReleaseAgeExcludePrune: true
+trustPolicy: no-downgrade
+trustPolicyExcludePrune: true
+trustPolicyIgnoreAfter: 720
