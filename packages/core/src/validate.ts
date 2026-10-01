@@ -4,6 +4,7 @@ import { roomCapacity, seatNoToRCIn, toPhysicalCol } from "./numbering";
 import type { PlanAllResult, RoomSubjectClash } from "./plan-all";
 import type { Job, PlanResult, Student, ValidationIssue, ValidationReport } from "./types";
 import { isSameClassRelaxed } from "./util";
+import { combinationIssuesForAssignments } from "./validate-combination";
 
 /** 独立校验器：只依赖 job 与最终 entries，**不复用求解器的任何状态**。 任何一条硬约束不过，就拒绝导出。 */
 export function validate(job: Job, result: PlanResult): ValidationReport {
@@ -190,6 +191,9 @@ export function validate(job: Job, result: PlanResult): ValidationReport {
       });
     }
   }
+
+  // 「专属组合」是多场次概念：单场（这里就是单个考场、单场考试）忽略它，不做组合判定
+  // （单场下 `plan()` 会给出 `ROOM_COMBINATION_IGNORED_SINGLE` warning，多场次由 `validateAll()` 负责）
 
   return { ok: !issues.some((i) => i.severity === "error"), issues };
 }
@@ -485,6 +489,14 @@ export function validateAll(job: Job, result: PlanAllResult): PlanAllValidation 
       }
     }
   }
+
+  /* 4c) 专属组合考场（`RoomSpec.combination`）：只在多场次下才有意义 */
+  // 单场 = 所有人同一份卷子，这个字段会被 `plan()` 忽略（并给 ROOM_COMBINATION_IGNORED_SINGLE），
+  // 因此校验器也不能拿它判人。
+  const hasSelection = (job.students ?? []).some(
+    (student) => student.included !== false && (student.subjects?.length ?? 0) > 0,
+  );
+  if (hasSelection) issues.push(...combinationIssuesForAssignments(job, result));
 
   /* 5) 参加考试的人必须至少有一个场次 */
   const scheduled = new Set(byStudent.map((student) => student.studentId));

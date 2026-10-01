@@ -1,8 +1,16 @@
 import type { DomainBundle } from "./domain";
 import { checkSeatMatching, compileDomains } from "./domain";
 import type { CompiledModel } from "./model";
-import { describeCols, describeRows, seatId } from "./numbering";
-import type { Adjacency, Diagnostic, Job, RelaxMode, RoomSpec, Suggestion } from "./types";
+import { describeCols, describeRows, roomCapacity, seatId } from "./numbering";
+import type {
+  Adjacency,
+  Diagnostic,
+  Job,
+  JsonPatchOp,
+  RelaxMode,
+  RoomSpec,
+  Suggestion,
+} from "./types";
 import { isSameClassRelaxed, relaxedClassLimit } from "./util";
 
 /** 班级上限用的「本考场最多能容纳同一个班多少人」：放宽后按 `relaxSameClass` 取。 */
@@ -469,47 +477,106 @@ function indexOfConstraint(job: Job, constraintId: string): number {
   return at === -1 ? 0 : at;
 }
 
+/** 一个考场都没有时，「加考场」建议退回的模板：6 列 × 7 排 = 42 座。 */
+const FALLBACK_ROOM_TEMPLATE: RoomSpec = {
+  id: "R1",
+  name: "第1考场",
+  rows: 7,
+  cols: 6,
+  doorSide: "right",
+};
+
+/** 把第 `index` 个考场改成跟 `biggest` 一样大的 JSON Patch（含加座列）。 */
+function upgradeRoomPatch(room: RoomSpec, index: number, biggest: RoomSpec): JsonPatchOp[] {
+  const patch: JsonPatchOp[] = [
+    { op: "replace", path: `/rooms/${index}/rows`, value: biggest.rows },
+    { op: "replace", path: `/rooms/${index}/cols`, value: biggest.cols },
+  ];
+  if (biggest.extraFrontSeats !== undefined) {
+    patch.push({
+      op: room.extraFrontSeats === undefined ? "add" : "replace",
+      path: `/rooms/${index}/extraFrontSeats`,
+      value: biggest.extraFrontSeats,
+    });
+  } else if (room.extraFrontSeats !== undefined) {
+    patch.push({ op: "remove", path: `/rooms/${index}/extraFrontSeats` });
+  }
+  return patch;
+}
+
 function capacitySuggestions(job: Job, deficit: number): Suggestion[] {
   const out: Suggestion[] = [];
   if (deficit <= 0) return out;
   const rooms = job.rooms ?? [];
 
-  // 1) 小考场改大考场
-  const smallRooms = rooms.map((r, i) => ({ r, i })).filter(({ r }) => r.rows * r.cols === 30);
-  const gainEach = 12;
-  const needed = Math.ceil(deficit / gainEach);
-  if (smallRooms.length >= needed && needed > 0) {
-    const chosen = smallRooms.slice(0, needed);
-    out.push({
-      id: "upgrade-small-rooms",
-      label:
-        needed === 1
-          ? `把 ${chosen[0]!.r.name ?? chosen[0]!.r.id} 从小考场改成大考场（30 → 42 人）`
-          : `把 ${chosen.map((c) => c.r.name ?? c.r.id).join("、")} 改成大考场`,
-      effect: `增加 ${needed * gainEach} 个座位`,
-      patch: chosen.flatMap(({ i }) => [
-        { op: "replace" as const, path: `/rooms/${i}/rows`, value: 7 },
-        { op: "replace" as const, path: `/rooms/${i}/cols`, value: 6 },
-      ]),
-    });
+  // 1) 把比「本 job 最大考场」小的考场改成跟最大考场一样大 —— 不依赖任何预设尺寸
+  //    （预设会变：小考场 30 座 → 35 座的静默调整曾让按 30 硬编码的旧建议失效）
+  let biggest: RoomSpec | undefined;
+  for (const room of rooms) {
+    if (biggest === undefined || roomCapacity(room) > roomCapacity(biggest)) biggest = room;
+  }
+  if (biggest !== undefined) {
+    const biggestCapacity = roomCapacity(biggest);
+    const upgradable = rooms
+      .map((room, index) => ({ room, index, gain: biggestCapacity - roomCapacity(room) }))
+      .filter(({ gain }) => gain > 0)
+      // 越小的考场改起来越划算，先改它们；同 gain 按考场顺序，保证同输入同建议
+      .sort((a, b) => b.gain - a.gain || a.index - b.index);
+    const chosen: typeof upgradable = [];
+    let gain = 0;
+    for (const item of upgradable) {
+      if (gain >= deficit) break;
+      chosen.push(item);
+      gain += item.gain;
+    }
+    if (gain >= deficit && chosen.length > 0) {
+      out.push({
+        id: "upgrade-small-rooms",
+        label:
+          chosen.length === 1
+            ? `${chosen[0]!.room.name ?? chosen[0]!.room.id} ${roomCapacity(chosen[0]!.room)} 座 → 改成 ${biggestCapacity} 座可多放 ${chosen[0]!.gain} 人`
+            : `把 ${chosen.map(({ room }) => room.name ?? room.id).join("、")} 改成最大考场那样大（${biggestCapacity} 座）`,
+        effect: `增加 ${gain} 个座位`,
+        patch: chosen.flatMap(({ room, index }) => upgradeRoomPatch(room, index, biggest)),
+      });
+    }
   }
 
-  // 2) 加考场
-  const addCount = Math.max(1, Math.ceil(deficit / 42));
-  const nextIndex = rooms.length + 1;
+  // 2) 加考场：新考场按本 job 座位数最大的考场取模板（没有任何考场时退回 6 列 × 7 排），
+  //    这样别的学校复用时不至于被写死的 42 座带偏。
+  const template = biggest ?? FALLBACK_ROOM_TEMPLATE;
+  const templateCapacity = roomCapacity(template);
+  const addCount = Math.max(1, Math.ceil(deficit / templateCapacity));
+  // 新考场的 id 从 rooms.length + 1 往上找，跳过已经用掉的编号
+  const usedIds = new Set(rooms.map((room) => room.id));
+  const newRooms: string[] = [];
+  let nextNumber = rooms.length + 1;
+  while (newRooms.length < addCount) {
+    const id = `R${nextNumber}`;
+    nextNumber += 1;
+    if (usedIds.has(id)) continue;
+    usedIds.add(id);
+    newRooms.push(id);
+  }
   out.push({
     id: "add-rooms",
-    label: `加 ${addCount} 个大考场（6 列 × 7 排）`,
-    effect: `增加 ${addCount * 42} 个座位`,
-    patch: Array.from({ length: addCount }, (_, k) => ({
+    label:
+      addCount === 1
+        ? `加 1 个考场（${template.cols} 列 × ${template.rows} 排，${templateCapacity} 座）`
+        : `加 ${addCount} 个考场（共 ${addCount * templateCapacity} 座）`,
+    effect: `增加 ${addCount * templateCapacity} 个座位`,
+    patch: newRooms.map((id) => ({
       op: "add" as const,
       path: "/rooms/-",
       value: {
-        id: `R${nextIndex + k}`,
-        name: `第${nextIndex + k}考场`,
-        rows: 7,
-        cols: 6,
-        doorSide: "right",
+        id,
+        name: `第${id.slice(1)}考场`,
+        rows: template.rows,
+        cols: template.cols,
+        doorSide: template.doorSide ?? "right",
+        ...(template.extraFrontSeats === undefined
+          ? {}
+          : { extraFrontSeats: [...template.extraFrontSeats] }),
       },
     })),
   });

@@ -113,6 +113,17 @@ export interface RoomSpec {
    * 只影响本考场：该考场内同班学生相邻不再算冲突（仍会留一条 `ROOM_SAME_CLASS_RELAXED` warning， 并在监考表表头标注）；其余考场规则不变。
    */
   relaxSameClass?: boolean | number;
+  /**
+   * 这个考场是哪个选科组合的「专属考场」：只接收 `students[].combination` 等于该字符串的 **常规组合批次**（整批进、全程不换考场，仍然遵守「一室一时段一卷」）。
+   *
+   * 典型用法：指定一间专属的老文科考场，让考政史地的整批学生集中到这里，不必再去第 4 步写限定。
+   *
+   * - 允许多个考场钉同一个组合（人数超过单室容量时按 `rooms` 顺序依次吃下，装不下走既有缺座路径）；
+   * - 写法可任意（「史地政」/「政史地」都行），内部规范化后比较；缺省 = 不专属任何组合，行为不变；
+   * - 与 `dedicatedSubjects` 同时出现时按专属组合处理（会报 `ROOM_COMBINATION_IGNORED_DEDICATED`）；
+   * - 被 `roomId` 限定显式钉进来的学生不受影响（显式限定优先）。
+   */
+  combination?: string;
 }
 
 /** 显式时段表的单个时段（`PlanOptions.slots`）。 */
@@ -221,6 +232,11 @@ export type DiagnosticCode =
   | "SUBJECT_ROOM_NO_SLOT"
   | "SLOTS_PROVIDED"
   | "SLOTS_CONFLICT"
+  // 专属组合考场（RoomSpec.combination）
+  | "ROOM_COMBINATION_APPLIED"
+  | "ROOM_COMBINATION_UNKNOWN"
+  | "ROOM_COMBINATION_IGNORED_DEDICATED"
+  | "ROOM_COMBINATION_IGNORED_SINGLE"
   // 限定
   | "CONSTRAINT_EMPTY_DOMAIN"
   | "CONSTRAINT_INDEX_OUT_OF_RANGE"

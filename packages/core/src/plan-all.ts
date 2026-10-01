@@ -22,7 +22,7 @@ import type {
   RoomSpec,
   UnmetConstraint,
 } from "./types";
-import { isSameClassRelaxed, relaxedClassLimit } from "./util";
+import { isSameClassRelaxed, relaxedClassLimit, roomCombination } from "./util";
 
 /** 一套座位方案：一个考场里的一批固定学生 + 一套固定座位 */
 export interface SeatingPlan {
@@ -200,6 +200,10 @@ interface SeatingDemand {
   subjects: string[];
   /** 被 `roomId` 限定到某个考场：只能放进它，放不下要明确诊断（绝不改成「不限考场」） */
   requiredRoomId?: string;
+  /** 被「专属组合考场」（`RoomSpec.combination`）钉住的批次：按顺序依次吃下这些考场的座位， 装不下就走既有缺座路径（绝不偷偷混排到别的考场）。 */
+  requiredRoomIds?: string[];
+  /** 本批次的选科组合：`RoomSpec.combination` 只收对应组合的批次 */
+  combination?: string;
   /**
    * 同一次 `splitByRequiredRoom` 拆出的几段共享同一个 originKey。
    *
@@ -338,6 +342,47 @@ function splitByRequiredRoom(
 }
 
 /**
+ * 把一批学生里「组合有专属考场」的那部分挑出来，单独成批并指定必选考场（`requiredRoomIds`）。
+ *
+ * 典型的 4a 批次整批就是一个组合；4b 的混合批次也会按组合拆开，保证专属考场真的只收自己人。 没有被组合钉住的学生保持原批不动（继续走 roomId 限定 / 自动分房）。
+ */
+function splitByCombinationRooms(
+  demand: SeatingDemand,
+  pickCombination: (studentIndex: number) => string | undefined,
+  roomsOfCombination: (combination: string) => readonly RoomSpec[],
+  subjectsOf: (studentIndices: readonly number[]) => string[],
+): SeatingDemand[] {
+  const buckets = new Map<string, number[]>();
+  const rest: number[] = [];
+  for (const index of demand.students) {
+    const combination = pickCombination(index);
+    if (combination === undefined) {
+      rest.push(index);
+      continue;
+    }
+    const list = buckets.get(combination) ?? [];
+    list.push(index);
+    buckets.set(combination, list);
+  }
+  if (buckets.size === 0) return [demand];
+
+  const out: SeatingDemand[] = [];
+  for (const [combination, students] of buckets) {
+    out.push({
+      kind: demand.kind,
+      key: combination,
+      combination,
+      students,
+      subjects: subjectsOf(students),
+      requiredRoomIds: roomsOfCombination(combination).map((room) => room.id),
+      originKey: demand.originKey,
+    });
+  }
+  if (rest.length > 0) out.push({ ...demand, students: rest, subjects: subjectsOf(rest) });
+  return out;
+}
+
+/**
  * 某套座位适用的限定：命中这套座位里的学生，且 roomId 为空或就是这套座位的考场。
  *
  * 不带 roomId 的行/列限定（如「17 班靠墙」）在子 job 里按本考场自己的行列数解析 —— 借考生的借考座位 也一样吃这类限定（他借考到的考场就是个普通候选考场）。
@@ -361,12 +406,15 @@ function constraintsForGroup(
   return out;
 }
 
-/** 某个「被 roomId 限定」的批次没能放进指定考场的原因 */
+/** 某个「被 roomId / 专属组合限定」的批次没能放进指定考场的原因 */
 interface UnsatisfiedDemand {
   key: string;
   roomId: string;
   students: number;
-  reason: "unknown-room" | "capacity" | "conflict";
+  reason: "unknown-room" | "capacity" | "conflict" | "combination-capacity";
+  /** `combination-capacity` 时：专属组合与它钉住的全部考场 */
+  combination?: string;
+  roomIds?: string[];
 }
 
 interface Allocation {
@@ -377,6 +425,21 @@ interface Allocation {
   sharedRooms: string[];
   /** 被 roomId 限定、却没能进指定考场的批次（要变成明确诊断，绝不静默改成「不限考场」） */
   unsatisfied: UnsatisfiedDemand[];
+}
+
+/** 这批学生是不是被钉死在某个/某些考场上（`roomId` 限定或专属组合考场） */
+function isPinnedDemand(demand: SeatingDemand): boolean {
+  return demand.requiredRoomId != null || (demand.requiredRoomIds?.length ?? 0) > 0;
+}
+
+/**
+ * 自动分房时这个考场能不能收这批学生。
+ *
+ * 设了 `combination`（专属组合）的考场只收同组合的批次；没设的考场照旧谁都收。 被 `roomId` 显式限定钉进来的批次不走这个检查（老师说了算）。
+ */
+function roomAdmitsDemand(room: RoomSpec, demand: SeatingDemand): boolean {
+  const pinned = roomCombination(room);
+  return pinned === undefined || pinned === demand.combination;
 }
 
 /**
@@ -461,18 +524,57 @@ function allocateDemands(
     );
   };
 
-  // 被 roomId 限定的批次先分房，保证它先拿到指定考场的座位
+  // 被 roomId / 专属组合限定的批次先分房，保证它先拿到指定考场的座位
   const order = demands
     .map((_, index) => index)
     .sort((a, b) => {
-      const pinnedA = demands[a]!.requiredRoomId == null ? 1 : 0;
-      const pinnedB = demands[b]!.requiredRoomId == null ? 1 : 0;
+      const pinnedA = isPinnedDemand(demands[a]!) ? 0 : 1;
+      const pinnedB = isPinnedDemand(demands[b]!) ? 0 : 1;
       return pinnedA - pinnedB || a - b;
     });
 
   for (const demandIndex of order) {
     const demand = demands[demandIndex]!;
     let remaining = demand.students;
+
+    if (demand.requiredRoomIds != null && demand.requiredRoomIds.length > 0) {
+      // 专属组合考场：按考场顺序依次吃下这批学生；装不下就报缺座，绝不改放到别的考场。
+      let unknownRoomId: string | undefined;
+      for (const roomId of demand.requiredRoomIds) {
+        if (remaining.length === 0) break;
+        const roomIndex = roomIndexOf.get(roomId);
+        if (roomIndex === undefined) {
+          unknownRoomId = roomId;
+          break;
+        }
+        if (!canEnter(demandIndex, roomIndex)) continue;
+        const free = roomCapacity(rooms[roomIndex]!) - state[roomIndex]!.used;
+        if (free <= 0) continue;
+        const chunk = remaining.slice(0, free);
+        remaining = remaining.slice(chunk.length);
+        place(demandIndex, roomIndex, chunk);
+      }
+      if (unknownRoomId !== undefined) {
+        unsatisfied.push({
+          key: demand.key,
+          roomId: unknownRoomId,
+          students: remaining.length,
+          reason: "unknown-room",
+        });
+        missingSeats += remaining.length;
+      } else if (remaining.length > 0) {
+        unsatisfied.push({
+          key: demand.key,
+          roomId: demand.requiredRoomIds[demand.requiredRoomIds.length - 1]!,
+          students: remaining.length,
+          reason: "combination-capacity",
+          combination: demand.combination,
+          roomIds: [...demand.requiredRoomIds],
+        });
+        missingSeats += remaining.length;
+      }
+      continue;
+    }
 
     if (demand.requiredRoomId != null) {
       const roomIndex = roomIndexOf.get(demand.requiredRoomId);
@@ -527,6 +629,12 @@ function allocateDemands(
       }
       const roomIndex = cursor;
       const capacity = roomCapacity(rooms[roomIndex]!);
+
+      // 专属组合考场：自动分房只认它自己的组合，别的批次一律跳过
+      if (!roomAdmitsDemand(rooms[roomIndex]!, demand)) {
+        cursor += 1;
+        continue;
+      }
 
       if (preference === "sameCombination") {
         // 每批次独占考场：一个考场只装同一个批次。例外：同一次拆分的两段（originKey 相同）
@@ -673,11 +781,40 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     });
   }
 
-  /* ---------- 2. 考场分组：专用 vs 普通 ---------- */
+  /* ---------- 2. 考场分组：专属组合 / 专用科目 / 普通 ---------- */
+  const combinationRooms = new Map<string, RoomSpec[]>();
   const dedicatedRooms = new Map<string, RoomSpec[]>();
   const generalRooms: RoomSpec[] = [];
   for (const room of model.rooms.map((r) => r.spec)) {
+    const combination = roomCombination(room);
+    if (combination !== undefined) {
+      const list = combinationRooms.get(combination) ?? [];
+      list.push(room);
+      combinationRooms.set(combination, list);
+    }
     const dedicated = [...new Set(room.dedicatedSubjects)];
+    if (combination !== undefined) {
+      // combination 优先：设了专属组合的考场不再进专用科目池
+      if (dedicated.length > 0) {
+        const raw = room.combination?.trim() ?? "";
+        diagnostics.push({
+          code: "ROOM_COMBINATION_IGNORED_DEDICATED",
+          severity: "warning",
+          message: `${roomName(room)} 同时设了专属组合「${raw === "" ? combination : raw}」与专用科目（${dedicated
+            .map((subject) => subjectLabel(subject))
+            .join("、")}），按专属组合处理`,
+          evidence: {
+            roomId: room.id,
+            combination,
+            dedicatedSubjects: dedicated,
+          },
+          suggestions: [],
+        });
+      }
+      // 仍留在普通考场池里：roomId 限定可以显式把人钉进来，自动分房则由 roomAdmitsDemand 拦
+      generalRooms.push(room);
+      continue;
+    }
     if (dedicated.length === 0) {
       generalRooms.push(room);
       continue;
@@ -689,6 +826,42 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     }
   }
   const dedicatedSubjects = new Set(dedicatedRooms.keys());
+
+  // 每个专属组合的参考人数（名单里有没有这个组合的人，用来报 APPLIED / UNKNOWN）
+  const combinationCounts = new Map<string, number>();
+  for (const [key, list] of model.combinationGroups) {
+    const combination = normalizeCombination(key) || key;
+    combinationCounts.set(combination, (combinationCounts.get(combination) ?? 0) + list.length);
+  }
+  for (const [combination, rooms] of combinationRooms) {
+    const count = combinationCounts.get(combination) ?? 0;
+    for (const room of rooms) {
+      const raw = room.combination?.trim() ?? "";
+      const label = raw === "" ? combination : raw;
+      if (count === 0) {
+        diagnostics.push({
+          code: "ROOM_COMBINATION_UNKNOWN",
+          severity: "warning",
+          message: `${roomName(room)} 指定了专属组合「${label}」，但名单里没有这个组合的学生`,
+          evidence: { roomId: room.id, combination },
+          suggestions: [],
+        });
+        continue;
+      }
+      diagnostics.push({
+        code: "ROOM_COMBINATION_APPLIED",
+        severity: "info",
+        message: `${roomName(room)} 专属组合：${combination}（${count} 人）`,
+        evidence: {
+          roomId: room.id,
+          combination,
+          students: count,
+          roomIds: rooms.map((r) => r.id),
+        },
+        suggestions: [],
+      });
+    }
+  }
 
   /* ---------- 2b. 考场级放宽「同班相邻」 ---------- */
   const relaxedRooms: string[] = [];
@@ -843,6 +1016,30 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     });
   }
 
+  // 专属组合考场在子 job 里补一条等价限定：让「rooms[].combination」与「用 constraints 把该组合钉到
+  // 同一考场」两种写法给求解器完全一样的输入（否则求解器初始化顺序不同，座位号会跟着漂）。
+  for (const [combination, rooms] of combinationRooms) {
+    const members: number[] = [];
+    for (let i = 0; i < students.length; i += 1) {
+      const own = model.combinationOfStudent[i];
+      if (own != null && (normalizeCombination(own) || own) === combination) members.push(i);
+    }
+    if (members.length === 0) continue;
+    for (const room of rooms) {
+      const raw = room.combination?.trim() ?? "";
+      if (normalizeCombination(raw) === "") continue;
+      applicableConstraints.push({
+        constraint: {
+          id: `room-combination:${room.id}`,
+          note: `${roomName(room)} 的专属组合`,
+          roomId: room.id,
+          combinations: [raw],
+        },
+        hits: new Set(members),
+      });
+    }
+  }
+
   /* ---------- 3c. 借考：subjectRoom 校验 + 逐生逐科路由（§5.8.2） ---------- */
   /** 学生被 roomId 钉住的普通考场（主考场）；没钉住就是 undefined */
   const mainRoomOfStudent = (index: number): string | undefined =>
@@ -891,27 +1088,38 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
     if (accepted.length > 0) subjectRoomEntries.set(i, accepted);
   }
 
-  // 2) 「钉住批次开考哪些科目」：被 roomId 钉到普通考场 R 的学生，合起来会让 R 开考哪些科目。
-  //    用于「自动优待」：R 本来就开考这一科时，钉在 R 的学生不必专门跑去专用考场。
+  // 2) 「钉住批次开考哪些科目」：被 roomId 钉到普通考场 R 的学生（或 R 是某组合的专属考场），
+  //    合起来会让 R 开考哪些科目。用于「自动优待」：R 本来就开考这一科时，钉在 R 的学生不必专门
+  //    跑去专用考场。
   const pinnedBatchSubjects = new Map<string, Set<string>>();
-  for (let i = 0; i < students.length; i += 1) {
-    const roomId = mainRoomOfStudent(i);
-    if (roomId === undefined) continue;
+  const addToPinnedBatch = (roomId: string, index: number): void => {
     const subjects = pinnedBatchSubjects.get(roomId) ?? new Set<string>();
     pinnedBatchSubjects.set(roomId, subjects);
     for (const subject of core) subjects.add(subject);
-    const own = model.subjectOfStudent[i] ?? [];
-    if (!hasSelection || regularOfStudent[i]) {
+    const own = model.subjectOfStudent[index] ?? [];
+    if (!hasSelection || regularOfStudent[index]) {
       // 常规组合：整批一起考，core + 全部选科
       for (const subject of own) subjects.add(subject);
-      continue;
+      return;
     }
     // 非常规组合：core + 非专用选科 + 显式 subjectRoom 指向该考场的那几科
     for (const subject of own) {
       if (!dedicatedSubjects.has(subject)) subjects.add(subject);
     }
-    for (const entry of subjectRoomEntries.get(i) ?? []) {
+    for (const entry of subjectRoomEntries.get(index) ?? []) {
       if (entry.roomId === roomId) subjects.add(entry.subject);
+    }
+  };
+  for (let i = 0; i < students.length; i += 1) {
+    const roomId = mainRoomOfStudent(i);
+    if (roomId !== undefined) addToPinnedBatch(roomId, i);
+  }
+  // 专属组合考场：这个组合的整批学生也是「钉在」这些考场上的（自动优待要看得见他们开考哪些科）
+  for (const [combination, rooms] of combinationRooms) {
+    for (let i = 0; i < students.length; i += 1) {
+      const own = model.combinationOfStudent[i];
+      if (own == null || (normalizeCombination(own) || own) !== combination) continue;
+      for (const room of rooms) addToPinnedBatch(room.id, i);
     }
   }
 
@@ -995,6 +1203,28 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
         });
         continue;
       }
+      if (item.reason === "combination-capacity") {
+        const capacity = (item.roomIds ?? []).reduce(
+          (sum, roomId) => sum + (model.rooms.find((r) => r.spec.id === roomId)?.capacity ?? 0),
+          0,
+        );
+        diagnostics.push({
+          code: "CAPACITY_INSUFFICIENT",
+          severity: "error",
+          message: `专属组合「${item.combination ?? item.key}」被钉在 ${
+            (item.roomIds ?? []).join("、") || name
+          }，但这些考场只有 ${capacity} 个座位，还差 ${item.students} 个`,
+          evidence: {
+            combination: item.combination,
+            roomIds: item.roomIds,
+            capacity,
+            missingSeats: item.students,
+            batch: item.key,
+          },
+          suggestions: [],
+        });
+        continue;
+      }
       diagnostics.push({
         code: "RULE_INTERSECT_EMPTY",
         severity: "error",
@@ -1019,41 +1249,68 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
   if (hasSelection) {
     const demands: SeatingDemand[] = [];
 
+    /** 学生 → 他所属组合的专属考场组合名（`RoomSpec.combination`）；没有就是 undefined */
+    const pinnedCombinationOf = (index: number): string | undefined => {
+      const own = model.combinationOfStudent[index];
+      if (own == null) return undefined;
+      const combination = normalizeCombination(own) || own;
+      return combinationRooms.has(combination) ? combination : undefined;
+    };
+    /** 这批学生的「主考场科目」并集 */
+    const subjectsOf = (indices: readonly number[]): string[] => {
+      const set = new Set<string>();
+      for (const index of indices) {
+        for (const subject of mainSubjectsOfStudent[index] ?? []) set.add(subject);
+      }
+      return [...set];
+    };
+    // 先按 roomId 限定拆（显式限定优先），再把「组合有专属考场」的部分单独成批钉到那些考场
+    const pushDemand = (segment: SeatingDemand): void => {
+      if (segment.requiredRoomId !== undefined) {
+        demands.push(segment);
+        return;
+      }
+      demands.push(
+        ...splitByCombinationRooms(
+          segment,
+          pinnedCombinationOf,
+          (combination) => combinationRooms.get(combination) ?? [],
+          subjectsOf,
+        ),
+      );
+    };
+
     // 4a. 常规组合：各自占一批普通考场（人数多的先分，减少碎片）。
     // 科目取每生「主考场科目」的并集 —— 显式借考出去的科目不会从主考场消失（除非全班都借走了）。
     const regularEntries = [...regularByCombination.entries()].sort(
       (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0], "zh"),
     );
     for (const [combo, members] of regularEntries) {
-      const subjects = new Set<string>();
-      for (const i of members) {
-        for (const s of mainSubjectsOfStudent[i] ?? []) subjects.add(s);
+      for (const segment of splitByRequiredRoom(
+        {
+          kind: "regular",
+          key: combo,
+          students: interleaveByClass(members, model.classOfStudent),
+          subjects: subjectsOf(members),
+        },
+        (index) => requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
+        nextOriginKey,
+      )) {
+        pushDemand(segment);
       }
-      demands.push(
-        ...splitByRequiredRoom(
-          {
-            kind: "regular",
-            key: combo,
-            students: interleaveByClass(members, model.classOfStudent),
-            subjects: [...subjects],
-          },
-          (index) => requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
-          nextOriginKey,
-        ),
-      );
     }
 
     // 4b. 非常规主考场：语数外 + 选考科目里「没被专用考场 / 借考接走」的那些（3c 已经算好）。
     // 按逐时段科目签名分批 —— 签名冲突（同一时段两门科目）的批次不能并进同一套座位，
     // 签名不冲突的批次（例如有政史地把政治/地理拆到两个时段时的物化政 + 物化地）继续共用主考场。
     for (const base of groupIrregularDemands(irregular, mainSubjectsOfStudent, model, slots)) {
-      demands.push(
-        ...splitByRequiredRoom(
-          base,
-          (index) => requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
-          nextOriginKey,
-        ),
-      );
+      for (const segment of splitByRequiredRoom(
+        base,
+        (index) => requiredRoomIn(requiredRoomsByStudent.get(index), generalRoomIds),
+        nextOriginKey,
+      )) {
+        pushDemand(segment);
+      }
     }
 
     // 分房倾向（§5.4）：
@@ -1260,13 +1517,18 @@ export function planAll(job: Job, overrides?: PlanOptions): PlanAllResult {
       // 只把「命中这套座位里的学生、且 roomId 为空或就是本考场」的限定交给求解器
       constraints: constraintsForGroup(applicableConstraints, group.students, group.room.id),
     };
-    const result = plan(subJob, {
-      seed: options.seed,
-      adjacency: options.adjacency,
-      forceKing: options.forceKing,
-      relax: options.relax,
-      timeLimitMs: options.timeLimitMs,
-    });
+    const result = plan(
+      subJob,
+      {
+        seed: options.seed,
+        adjacency: options.adjacency,
+        forceKing: options.forceKing,
+        relax: options.relax,
+        timeLimitMs: options.timeLimitMs,
+      },
+      // 每套房座位不是用户意义上的「单场」：单场专属诊断（如专属组合被忽略）不要混进来
+      { fromPlanAll: true },
+    );
 
     const seatNoById: Record<string, number> = {};
     const studentBySeatNo: Record<number, string> = {};

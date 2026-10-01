@@ -18,7 +18,7 @@ import type {
   Suggestion,
   UnmetConstraint,
 } from "./types";
-import { fingerprint, isSameClassRelaxed } from "./util";
+import { fingerprint, isSameClassRelaxed, roomCombination } from "./util";
 import { validate } from "./validate";
 
 export const DEFAULT_SEED = 20260930;
@@ -145,12 +145,35 @@ export function blocksListExport(diagnostics: readonly Diagnostic[]): boolean {
   );
 }
 
+/** `plan` 的内部开关（不是用户选项）：`planAll` 逐套座位求解时用它说明「这不是用户意义上的单场」， 免得单场专属的诊断（如专属组合被忽略）混进多场次的每套房结果里。 */
+export interface PlanRunFlags {
+  fromPlanAll?: boolean;
+}
+
 /** 主入口：预检 → 求解 → 自校验 → 出结果。同输入同 seed 必得同结果。 */
-export function plan(job: Job, overrides?: PlanOptions): PlanResult {
+export function plan(job: Job, overrides?: PlanOptions, flags?: PlanRunFlags): PlanResult {
   const started = Date.now();
   const pre = precheckJob(job, overrides);
   const { model, options, adjacency, downgraded } = pre;
   const diagnostics: Diagnostic[] = [...pre.diagnostics];
+
+  // 单场模式只有一场考试（所有人同一份卷子）：「专属组合」是多场次概念，这里忽略它但绝不静默
+  // （planAll 的每套房求解会传 fromPlanAll，避免把这条诊断带进多场次结果）
+  if (flags?.fromPlanAll !== true) {
+    for (const room of model.rooms) {
+      const combination = roomCombination(room.spec);
+      if (combination === undefined) continue;
+      const raw = room.spec.name?.trim() ?? "";
+      const label = raw === "" ? room.spec.id : raw;
+      diagnostics.push({
+        code: "ROOM_COMBINATION_IGNORED_SINGLE",
+        severity: "warning",
+        message: `单场模式下所有考生考同一份卷子，${label}的专属组合「${combination}」不生效（按普通考场处理）`,
+        evidence: { roomId: room.spec.id, combination },
+        suggestions: [],
+      });
+    }
+  }
 
   // 考场级放宽（`RoomSpec.relaxSameClass`）是一次真实放宽，级别高于「班级数不足自动退化」
   const hasRelaxedRoom = model.rooms.some((room) => isSameClassRelaxed(room.spec));

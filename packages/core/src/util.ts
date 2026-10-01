@@ -1,3 +1,4 @@
+import { normalizeCombination } from "./subjects";
 import type { RoomSpec } from "./types";
 
 /**
@@ -26,6 +27,17 @@ export function relaxedClassLimit(
   if (relax === true) return capacity;
   if (typeof relax !== "number" || !Number.isFinite(relax)) return fallback;
   return Math.max(1, Math.min(Math.floor(relax), capacity));
+}
+
+/**
+ * 考场的「专属组合」（`RoomSpec.combination`）规范化后的值：没写或写了空串 = 不专属任何组合。
+ *
+ * 写法可任意（「史地政」/「政史地」等价）；认不出任何科目的文本按原样返回，既不误伤也便于报错。
+ */
+export function roomCombination(room: Pick<RoomSpec, "combination">): string | undefined {
+  const raw = room.combination?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  return normalizeCombination(raw) || raw;
 }
 
 /** 稳定序列化：对象键排序，保证同输入得到同字符串。 */

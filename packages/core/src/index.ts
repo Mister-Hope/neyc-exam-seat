@@ -100,4 +100,5 @@ export {
   isSameClassRelaxed,
   mulberry32,
   relaxedClassLimit,
+  roomCombination,
 } from "./util";
