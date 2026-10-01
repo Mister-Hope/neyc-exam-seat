@@ -26,15 +26,29 @@ export function pointer(...tokens: (string | number)[]): string {
   return `/${tokens.map((t) => escapeToken(String(t))).join("/")}`;
 }
 
+/**
+ * 会顺着原型链读写的危险键名。patch 可能来自 AI，路径段必须先在门口拦掉： 只要有一个段是它们，`record[token] = …` / `Reflect.deleteProperty`
+ * 就会落到 `Object.prototype` 上（R-4）。
+ */
+const UNSAFE_TOKENS = new Set(["__proto__", "constructor", "prototype"]);
+
+function assertSafeToken(token: string, path: string): void {
+  if (UNSAFE_TOKENS.has(token)) {
+    throw new Error(`JSON Patch 的路径段「${token}」会读到原型链上，已拒绝：「${path}」`);
+  }
+}
+
 function parsePointer(path: string): string[] {
   if (path === "") return [];
   if (!path.startsWith("/")) {
     throw new Error(`JSON Pointer 必须以 / 开头，收到的是「${path}」`);
   }
-  return path
+  const tokens = path
     .split("/")
     .slice(1)
     .map((token) => unescapeToken(token));
+  for (const token of tokens) assertSafeToken(token, path);
+  return tokens;
 }
 
 function isContainer(value: unknown): value is Record<string, unknown> | unknown[] {
@@ -51,7 +65,8 @@ function readChild(container: unknown, token: string, path: string): unknown {
   }
   if (isContainer(container)) {
     const record = container as Record<string, unknown>;
-    if (!(token in record)) throw new Error(`JSON Patch 找不到路径「${path}」`);
+    // 只认自有属性：`in` 会命中 `toString`、`__proto__` 等继承属性
+    if (!Object.hasOwn(record, token)) throw new Error(`JSON Patch 找不到路径「${path}」`);
     return record[token];
   }
   throw new Error(`JSON Patch 找不到路径「${path}」`);
@@ -81,12 +96,14 @@ function applyOp(target: unknown, token: string, op: JsonPatchOp): void {
   if (isContainer(target)) {
     const record = target as Record<string, unknown>;
     if (op.op === "remove") {
-      if (!(token in record)) throw new Error(`JSON Patch 要删除的字段不存在：「${op.path}」`);
+      // 只认自有属性：`in` 会把 `toString` 之类的继承属性当成待删字段
+      if (!Object.hasOwn(record, token))
+        throw new Error(`JSON Patch 要删除的字段不存在：「${op.path}」`);
       // 键名来自运行时的 JSON Pointer，只能动态删；Reflect 与 delete 语义一致
       Reflect.deleteProperty(record, token);
       return;
     }
-    if (op.op === "replace" && !(token in record)) {
+    if (op.op === "replace" && !Object.hasOwn(record, token)) {
       throw new Error(`JSON Patch 要替换的字段不存在：「${op.path}」`);
     }
     record[token] = clone(op.value);
