@@ -146,14 +146,13 @@ describe("求解兜底不得静默越域（task-61 / 违反限定的名单不可
     expect(strictResult.diagnostics.map((d) => d.code)).not.toContain("CONSTRAINT_UNMET");
     expect(strictResult.delivery).toBe("blocked");
 
-    // 显式 relax：用户要的是「违反最少并交付」→ 所有人都排上、违规如实标注
+    // 显式 relax：用户要的是「违反最少并交付」→ 所有人都排上、违规如实标注、**可交付**
+    // （限定过载在放宽模式下被软化成 warning，见 task-62 / F-1；严格模式下它仍是 error → blocked）
     const relaxed = plan(job("minConflicts"));
     expect(relaxed.entries).toHaveLength(6);
     expect(relaxed.diagnostics.map((d) => d.code)).toContain("CONSTRAINT_UNMET");
-    // 注意：这条 fixture 是「3 个人被要求坐同一个座位」，预检本身就会报结构性 error
-    // （`CONSTRAINT_OVERSATURATED` / `SEAT_CONFLICT`，在不可降级清单里），所以即便 relax 也不可交付 ——
-    // 这是 task-51 的既有语义。真正「合法降级仍可交付」的回归见上一条（minConflicts + 9/9/9/3）。
     expect(relaxed.entries.length).toBeGreaterThan(strictResult.entries.length);
-    expect(blocksListExport(relaxed.diagnostics)).toBe(true);
+    expect(relaxed.delivery).toBe("ready-with-warnings");
+    expect(blocksListExport(relaxed)).toBe(false);
   });
 });

@@ -1,7 +1,14 @@
+import {
+  BLOCKING_EXPORT_CODES,
+  DEGRADABLE_ERROR_CODES,
+  SOFTENABLE_CODES,
+  downgradeSoftenedDiagnostics,
+} from "./diagnostics-policy";
 import type { DomainBundle } from "./domain";
 import { compileModel } from "./model";
 import type { CompiledModel } from "./model";
 import { toPhysicalCol } from "./numbering";
+import type { PlanAllResult } from "./plan-all";
 import { describeRoomLoad, resolveAdjacency, runPrecheck, validateRoomGeometry } from "./precheck";
 import { solve } from "./solver";
 import type {
@@ -56,6 +63,8 @@ export function normalizeOptions(options?: PlanOptions): Required<PlanOptions> {
 export interface PrecheckOutput {
   diagnostics: Diagnostic[];
   fatal: boolean;
+  /** 被 `relax` 软化（error → warning）的预检诊断；`relax === "none"` 时恒为空 */
+  softened: Diagnostic[];
   adjacency: Adjacency;
   downgraded: boolean;
   options: Required<PlanOptions>;
@@ -63,39 +72,11 @@ export interface PrecheckOutput {
   model: CompiledModel;
 }
 
-/** 只做预检：判断有没有解、为什么没解、怎么放宽。不进求解器。 */
-export function precheckJob(job: Job, overrides?: PlanOptions): PrecheckOutput {
-  const options = normalizeOptions({ ...job.options, ...overrides });
-  const { adjacency, downgraded } = resolveAdjacency(job, options.adjacency, options.forceKing);
-  // 房间几何校验必须在 compileModel 之前：非法/超大尺寸要在建模型时就被拦住，
-  // 不能等到几何函数里抛异常（铁律 3：业务失败只用诊断表达）。
-  const geometry = validateRoomGeometry(job);
-  const model = compileModel(job, adjacency);
-  const pre = runPrecheck(model, { adjacency, downgraded, relax: options.relax });
-  return {
-    diagnostics: [...geometry, ...pre.diagnostics],
-    fatal: pre.fatal || geometry.some((d) => d.severity === "error"),
-    adjacency,
-    downgraded,
-    options,
-    domains: pre.domains,
-    model,
-  };
-}
-
 /**
- * 这些诊断在 `relax != 'none'` 时**不应该**直接判死： 它们描述的是「限定太紧」，而软约束模式的价值恰恰是把限定降级为惩罚、求出违反最少的方案。
- * 结构性错误（没考场、座位不够、名单有重复学号……）无论怎么放宽都救不了，仍然致命。
+ * 预检结果是否致命。放宽模式下，只有结构性错误才算致命（`SOFTENABLE_CODES` 那几条会软化成 warning）。
+ *
+ * `precheckJob()` 已经按这个规则把软化码降级并放进 `softened`；这个函数留给直接拿到**原始** 预检诊断的调用方（例如自定义流程 / 脚本）。
  */
-const SOFTENABLE_CODES: ReadonlySet<string> = new Set([
-  "CONSTRAINT_EMPTY_DOMAIN",
-  "CONSTRAINT_INDEX_OUT_OF_RANGE",
-  "CONSTRAINT_OVERSATURATED",
-  "RULE_INTERSECT_EMPTY",
-  "SEAT_CONFLICT",
-]);
-
-/** 预检结果是否致命。放宽模式下，只有结构性错误才算致命。 */
 export function isFatal(
   diagnostics: readonly Diagnostic[],
   relax: RelaxMode,
@@ -108,52 +89,36 @@ export function isFatal(
   return { fatal: hard.length > 0, softened };
 }
 
-/**
- * 会阻止「导出名单 / 监考表」的错误码（`docs/design.md` §8.1）。
- *
- * 只收结构性错误与硬规则违规：这些错误下座位表本身是错的，导出只会误导老师。 注意 `SEARCH_FAILED` **不在**表里 —— `--relax`（softConstraints /
- * minConflicts）本来就是 「违反最少并交付」，把它拦下来会打断 L2/L3 这条路；降级结果照常导出，靠黄色横幅 + 校验报告 + 退出码 2 表达。
- */
-const BLOCKING_EXPORT_CODES: ReadonlySet<Diagnostic["code"]> = new Set<Diagnostic["code"]>([
-  "ROOM_SUBJECT_CLASH",
-  "CAPACITY_INSUFFICIENT",
-  "NO_STUDENTS",
-  "NO_ROOMS",
-  "INVALID_ROOM_SIZE",
-  "STUDENT_DUPLICATE_ID",
-  "STUDENT_MISSING_CLASS",
-  "CLASS_LIMIT_EXCEEDED",
-  "SEAT_CONFLICT",
-  "UNKNOWN_ROOM_ID",
-  "CONSTRAINT_NO_SELECTOR",
-  "CONSTRAINT_EMPTY_DOMAIN",
-  "CONSTRAINT_INDEX_OUT_OF_RANGE",
-  "CONSTRAINT_OVERSATURATED",
-  "RULE_INTERSECT_EMPTY",
-  // 本轮新增：借考/显式时段的硬性失败都必须拦住导出
-  "SUBJECT_ROOM_UNKNOWN_ROOM",
-  "SUBJECT_ROOM_UNKNOWN_SUBJECT",
-  "SUBJECT_ROOM_CLASH",
-  "SUBJECT_ROOM_NO_SEAT",
-  "SUBJECT_ROOM_NO_SLOT",
-  "SLOTS_CONFLICT",
-]);
-
-/**
- * 允许「带 error 仍可交付」的诊断码：只有这些 error 不阻断导出，其余 error 一律视为不可交付。
- *
- * - `SEARCH_FAILED`：求解没排满（严格模式下也是 error），沿用旧语义照常导出（退出码 2 = 主动降级）；
- * - `CONSTRAINT_UNMET` / `ADJACENCY_CONFLICT`：`--relax`（softConstraints / minConflicts）**有意设计**的
- *   「违反最少并交付」，是校验器报的规则类问题，不是结构性损坏。
- *
- * 除此之外的任何 error（含校验器的 `ENTRY_*`、专属组合不符、以及 {@link BLOCKING_EXPORT_CODES} 里的全部码） 都判定为 `blocked` ——
- * 宁可多拦，也不能把错误名单交给老师。
- */
-const DEGRADABLE_ERROR_CODES: ReadonlySet<Diagnostic["code"]> = new Set<Diagnostic["code"]>([
-  "SEARCH_FAILED",
-  "CONSTRAINT_UNMET",
-  "ADJACENCY_CONFLICT",
-]);
+/** 只做预检：判断有没有解、为什么没解、怎么放宽。不进求解器。 */
+export function precheckJob(job: Job, overrides?: PlanOptions): PrecheckOutput {
+  const options = normalizeOptions({ ...job.options, ...overrides });
+  const { adjacency, downgraded } = resolveAdjacency(job, options.adjacency, options.forceKing);
+  // 房间几何校验必须在 compileModel 之前：非法/超大尺寸要在建模型时就被拦住，
+  // 不能等到几何函数里抛异常（铁律 3：业务失败只用诊断表达）。
+  const geometry = validateRoomGeometry(job);
+  const model = compileModel(job, adjacency);
+  const pre = runPrecheck(model, { adjacency, downgraded, relax: options.relax });
+  const diagnostics = [...geometry, ...pre.diagnostics];
+  // 用户显式放宽：把「限定过紧」的预检 error 降级为 warning（保留 code/evidence），
+  // 这样 `planDelivery()` 才会给 `ready-with-warnings` 而不是 fail-closed 的 `blocked`（F-1）。
+  const softened =
+    options.relax === "none"
+      ? []
+      : diagnostics.filter(
+          (diagnostic) => diagnostic.severity === "error" && SOFTENABLE_CODES.has(diagnostic.code),
+        );
+  if (softened.length > 0) downgradeSoftenedDiagnostics(diagnostics);
+  return {
+    diagnostics,
+    fatal: pre.fatal || geometry.some((d) => d.severity === "error"),
+    softened,
+    adjacency,
+    downgraded,
+    options,
+    domains: pre.domains,
+    model,
+  };
+}
 
 /**
  * 由诊断列表判定交付状态 —— core 的**唯一判据**（`PlanResult.delivery` / `PlanAllResult.delivery` 都出自它）。
@@ -191,12 +156,14 @@ function validationDiagnostics(report: ValidationReport): Diagnostic[] {
 }
 
 /**
- * 导出前要不要阻止导出名单 / 监考表 —— 导出闸门的**唯一判据**。
+ * 导出前要不要阻止导出名单 / 监考表 —— 导出闸门的**唯一判据**（铁律 4）。
  *
- * 既能吃完整结果（优先看 `result.delivery`，core 已按独立校验判定），也能吃诊断数组（老签名）。 结果没写 `delivery`
- * 时按码兜底：{@link BLOCKING_EXPORT_CODES} ∪ 「不可降级的 error」。
+ * 既能吃完整结果（`plan()` / `planAll()` 的产物，优先看 `result.delivery`，core 已按独立校验判定）， 也能吃诊断数组（老签名）。 结果没写
+ * `delivery` 时按码兜底：{@link BLOCKING_EXPORT_CODES} ∪ 「不可降级的 error」。
  */
-export function blocksListExport(source: PlanResult | readonly Diagnostic[]): boolean {
+export function blocksListExport(
+  source: PlanResult | PlanAllResult | readonly Diagnostic[],
+): boolean {
   if (isDiagnosticList(source)) return blocksListExportByCodes(source);
   if (source.delivery === "blocked") return true;
   if (source.delivery === "ready" || source.delivery === "ready-with-warnings") return false;
@@ -205,7 +172,7 @@ export function blocksListExport(source: PlanResult | readonly Diagnostic[]): bo
 
 /** 类型守卫：`Array.isArray` 会把联合类型收窄成 `any[]`，单独包一层拿回精确元素类型。 */
 function isDiagnosticList(
-  value: PlanResult | readonly Diagnostic[],
+  value: PlanResult | PlanAllResult | readonly Diagnostic[],
 ): value is readonly Diagnostic[] {
   return Array.isArray(value);
 }
@@ -277,7 +244,11 @@ export function plan(job: Job, overrides?: PlanOptions, flags?: PlanRunFlags): P
             ? "orthogonal"
             : "strict";
 
-  const { fatal, softened } = isFatal(pre.diagnostics, options.relax);
+  // 预检诊断已经按 relax 软化过（`pre.softened` 是降级前的快照）：剩下还是 error 的才是真致命
+  const { fatal, softened } = {
+    fatal: diagnostics.some((d) => d.severity === "error"),
+    softened: pre.softened,
+  };
 
   if (softened.length > 0) {
     diagnostics.push({
