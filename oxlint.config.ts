@@ -9,8 +9,9 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
       // oxlint 的 typeCheck 走的是原生 TS 编译器，认不出 `.vue` 导入，
       // 会在 web 包里报一堆 TS2307 假阳性，所以这里关掉、只保留 typeAware 的规则。
       typeCheck: false,
-      // 预设默认 denyWarnings + maxWarnings:10。本仓的风格与预设不同，
-      // 存量 warning 有几十条，让它们阻断 CI 没有意义：error 阻断，warning 只提示。
+      // 预设默认 denyWarnings + maxWarnings:10。本仓保留「error 阻断、warning 只提示」：
+      // 这个上限只是为了不去数存量；实际存量全是「规模类」提示，且都已在下面单独豁免或说明。
+      // 清零后应把上限收紧到 0，让 warning 也阻断 CI（见 AGENTS.md 的清理约定）。
       denyWarnings: false,
       maxWarnings: 100_000,
     },
@@ -139,6 +140,23 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
     },
   },
   {
+    // io 的公共面：roster 解析 / 缺考应用 / 工作簿组装 / 导出编排都在这里，
+    // 调用方按 `@exam-seat/io` 一个入口取用；拆成多文件会让「导入契约」散落，
+    // 反而不利于与 core 的 job 契约对照阅读。572 行超阈值，单文件放开。
+    files: ["packages/io/src/index.ts"],
+    rules: {
+      "max-lines": "off",
+    },
+  },
+  {
+    // cli.ts 是「所有子命令的定义处」：选项、参数校验、退出码、人类可读摘要一一对应，
+    // 拆开会让「退出码语义」分居两处；601 行超阈值，同样单文件放开
+    files: ["packages/cli/src/cli.ts"],
+    rules: {
+      "max-lines": "off",
+    },
+  },
+  {
     // Vue 单文件组件会把模板里用到的每个子组件都算成一次 import，15 个的上限对
     // 「页面型」组件太紧（App.vue 23、StepExclude 18）；放宽到 40，
     // 仍能挡住真正失控的巨型组件。类型检查由 vue-tsc 负责，这里只是风格提示。
@@ -169,6 +187,15 @@ const oxlintConfig: OxlintConfig = defineHopeConfig(
     files: ["packages/web/src/main.ts"],
     rules: {
       "typescript/no-unsafe-argument": "off",
+    },
+  },
+  {
+    // desktop 是**纯 JS（.mjs）**，类型门禁靠 `tsc --checkJs`（见 packages/desktop/tsconfig.json）。
+    // 对这类文件 JSDoc 的 `@type` 是**唯一的**注解手段，不是冗余；
+    // `check-tag-names` 是给 `.ts` 项目设计的（那边有类型系统，`@type` 才「冗余」）。
+    files: ["packages/desktop/**/*.mjs"],
+    rules: {
+      "jsdoc/check-tag-names": "off",
     },
   },
 );

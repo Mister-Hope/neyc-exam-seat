@@ -3,6 +3,7 @@
   "version": "0.0.2",
   "private": true,
   "description": "排考场工具：核心算法包 + CLI + Web 应用 + AI Skill",
+  "license": "LicenseRef-Proprietary-NonCommercial",
   "type": "module",
   "scripts": {
     "acceptance": "node examples/acceptance.mjs",
@@ -18,6 +19,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "pnpm -r --filter './packages/*' --filter '!./packages/desktop' typecheck",
+    "typecheck:all": "pnpm typecheck && pnpm typecheck:desktop && pnpm typecheck:scripts",
+    "typecheck:desktop": "tsc --noEmit -p packages/desktop/tsconfig.json",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
     "verify": "pnpm lint:check && pnpm typecheck && pnpm build && pnpm test && pnpm acceptance"
   },
   "devDependencies": {
@@ -41,7 +45,7 @@
     "*.{js,mjs,ts,vue}": "oxlint --fix"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.18.0"
   },
   "packageManager": "pnpm@12.8.1"
 }

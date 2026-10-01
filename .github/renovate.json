@@ -5,9 +5,10 @@
   "schedule": ["every weekend"],
   "packageRules": [
     {
-      "description": "devDependencies 自动合并（CI 会挡住坏改动）",
+      "description": "devDependencies 只自动合并 minor/patch（大版本要人看：vite/vitest/electron 等的 breaking change 不能被自动吞掉）",
       "automerge": true,
-      "matchDepTypes": ["devDependencies"]
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"]
     },
     {
       "description": "TypeScript 锁在 6.x：Vue 工具链目前不支持 7",

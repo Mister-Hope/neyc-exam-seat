@@ -42,6 +42,15 @@ jobs:
       - name: 类型检查
         run: pnpm typecheck
 
+      # 这两个盲区不在 `pnpm typecheck` 里（见 tsconfig.scripts.json 与 packages/desktop/tsconfig.json 的注释）：
+      # desktop 被根 typecheck 有意排除（避免日常验证拉 Electron），scripts/** 不被任何包的 tsconfig 覆盖。
+      # 纯 tsc，不需要 Electron 二进制，ubuntu runner 直接跑。
+      - name: 类型检查（desktop，checkJs）
+        run: pnpm typecheck:desktop
+
+      - name: 类型检查（scripts）
+        run: pnpm typecheck:scripts
+
       - name: 构建
         run: pnpm build
 
