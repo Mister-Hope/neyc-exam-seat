@@ -204,6 +204,7 @@ export interface Job {
 export type DiagnosticCode =
   // 数据问题
   | "STUDENT_DUPLICATE_ID"
+  | "STUDENT_MISSING_ID"
   | "STUDENT_MISSING_CLASS"
   | "STUDENT_MISSING_NAME"
   | "STUDENT_MISSING_SUBJECTS"

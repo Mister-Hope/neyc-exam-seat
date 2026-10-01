@@ -2,6 +2,14 @@ import type { DomainBundle } from "./domain";
 import { checkSeatMatching, compileDomains } from "./domain";
 import type { CompiledModel, CompiledRoom } from "./model";
 import { describeCols, describeRows, maxSameClass, roomCapacity, seatId } from "./numbering";
+import {
+  isAllocatableRoom,
+  MAX_ROOM_SEATS,
+  MAX_ROOM_SIDE,
+  MAX_TOTAL_SEATS,
+  oversizeReason,
+  totalGridSeats,
+} from "./room-limits";
 import type {
   Adjacency,
   Diagnostic,
@@ -9,6 +17,7 @@ import type {
   JsonPatchOp,
   RelaxMode,
   RoomSpec,
+  Student,
   Suggestion,
 } from "./types";
 import {
@@ -17,6 +26,11 @@ import {
   relaxedClassLimit,
   sameClassLimit,
 } from "./util";
+
+/** 学生缺学号：`job.json` 是外部数据，`id` 可能是 undefined / 数字 / 空格串， 所以按「不是非空字符串」判（类型上 `id` 是必填，运行时不一定）。 */
+function hasNoId(student: Student): boolean {
+  return typeof student.id !== "string" || student.id.trim() === "";
+}
 
 /** 班级上限用的「本考场最多能容纳同一个班多少人」：放宽后按 `relaxSameClass` 取。 */
 function effectiveSameClassLimit(room: RoomSpec, fallback: number, capacity: number): number {
@@ -93,6 +107,46 @@ export function validateRoomGeometry(job: Job): Diagnostic[] {
     });
   }
 
+  // 尺寸**上限**：`job.json` 可能是 AI 生成的，「多写几个零」绝不能变成 OOM
+  // （`rows: 999999` 曾让 CLI exit -6、浏览器标签页直接崩，没有任何诊断）。
+  const oversized = rooms
+    .map((room) => ({ room, reason: oversizeReason(room) }))
+    .filter(
+      (item): item is { room: (typeof rooms)[number]; reason: string } => item.reason !== undefined,
+    );
+  if (oversized.length > 0) {
+    // 逐间写清原因（老师才知道该改哪一间），但最多列 5 间，免得畸形 job 刷屏
+    const shown = oversized.slice(0, 5);
+    diagnostics.push({
+      code: "INVALID_ROOM_SIZE",
+      severity: "error",
+      message:
+        oversized.length === 1
+          ? `${shown[0]!.room.name ?? shown[0]!.room.id} 的尺寸太大：${shown[0]!.reason}`
+          : `有 ${oversized.length} 个考场的尺寸太大：${shown
+              .map((item) => `${item.room.name ?? item.room.id}（${item.reason}）`)
+              .join("；")}`,
+      evidence: {
+        roomIds: oversized.map((item) => item.room.id),
+        maxRoomSide: MAX_ROOM_SIDE,
+        maxRoomSeats: MAX_ROOM_SEATS,
+      },
+      suggestions: [],
+    });
+  }
+
+  const valid = rooms.filter((room) => isAllocatableRoom(room));
+  const seats = totalGridSeats(valid);
+  if (seats > MAX_TOTAL_SEATS) {
+    diagnostics.push({
+      code: "INVALID_ROOM_SIZE",
+      severity: "error",
+      message: `${valid.length} 个考场加起来 ${seats} 座，超过全部考场上限 ${MAX_TOTAL_SEATS} 座（请检查是否多写了几个零）`,
+      evidence: { rooms: valid.length, seats, maxTotalSeats: MAX_TOTAL_SEATS },
+      suggestions: [],
+    });
+  }
+
   return diagnostics;
 }
 
@@ -125,9 +179,23 @@ export function runPrecheck(
 
   /* ---------------- 数据完整性 ---------------- */
 
+  // 学生必须有学号：`id` 缺失/空串一律明确报错（以前「单个缺 id」会被静默接受，两个才因重复被报出来）
+  const missingIds = (job.students ?? []).filter((s) => hasNoId(s));
+  if (missingIds.length > 0) {
+    push({
+      code: "STUDENT_MISSING_ID",
+      severity: "error",
+      message: `有 ${missingIds.length} 名学生没有学号（id 缺失或为空），请补齐后再排`,
+      evidence: { count: missingIds.length },
+      suggestions: [],
+    });
+  }
+
   const seenIds = new Set<string>();
   const duplicateIds = new Set<string>();
   for (const s of job.students ?? []) {
+    // 缺学号已单独报过，这里不再重复算作「重复」
+    if (hasNoId(s)) continue;
     if (seenIds.has(s.id)) duplicateIds.add(s.id);
     seenIds.add(s.id);
   }

@@ -1,4 +1,5 @@
 import { maxSameClass, roomCapacity, seatNoToRC } from "./numbering";
+import { isAllocatableRoom, MAX_TOTAL_SEATS, roomGridSeats } from "./room-limits";
 import { formatCombination, parseCombination } from "./subjects";
 import type { Adjacency, DoorSide, Job, RoomSpec, Student } from "./types";
 
@@ -175,12 +176,20 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
   // 考场与座位
   const rooms: CompiledRoom[] = [];
   let seatCount = 0;
+  // 已分配出去的网格座位数：总上限之后的考场按「空考场」处理（诊断由 validateRoomGeometry 报）
+  let allocatedGridSeats = 0;
   for (let r = 0; r < job.rooms.length; r += 1) {
     const spec = job.rooms[r]!;
-    const capacity = roomCapacity(spec);
+    // ⚠️ 尺寸上限**必须**在这里兜住：`compileModel` 可能被直接调用（浏览器主线程 / worker），
+    // 不能指望调用方先跑 `validateRoomGeometry`。畸形超大尺寸若照原样分配 → OOM（见 room-limits.ts）。
+    const gridSeats = roomGridSeats(spec);
+    const allocatable =
+      isAllocatableRoom(spec) && allocatedGridSeats + gridSeats <= MAX_TOTAL_SEATS;
+    if (allocatable) allocatedGridSeats += gridSeats;
+    const capacity = allocatable ? roomCapacity(spec) : 0;
     // grid 语义不变：只放第 1..rows 排；加座单独放 extraSeat
-    const grid = new Int32Array(spec.rows * spec.cols).fill(-1);
-    const extraSeat = new Int32Array(spec.cols).fill(-1);
+    const grid = new Int32Array(allocatable ? gridSeats : 0).fill(-1);
+    const extraSeat = new Int32Array(allocatable ? Math.max(0, Math.floor(spec.cols)) : 0).fill(-1);
     for (let seatNo = 1; seatNo <= capacity; seatNo += 1) {
       const { row, col } = seatNoToRC(seatNo, spec.rows, spec.cols, spec.extraFrontSeats);
       if (row === 0) {
@@ -201,7 +210,7 @@ export function compileModel(job: Job, adjacency: Adjacency = "king"): CompiledM
       capacity,
       firstSeat: seatCount,
       seatCount: capacity,
-      maxSameClass: maxSameClass(spec, adjacency),
+      maxSameClass: allocatable ? maxSameClass(spec, adjacency) : 0,
       grid,
       extraSeat,
       extraCols,

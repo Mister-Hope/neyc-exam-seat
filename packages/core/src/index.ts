@@ -83,6 +83,8 @@ export {
 } from "./precheck";
 export type { PrecheckResult } from "./precheck";
 
+export { MAX_ROOM_SEATS, MAX_ROOM_SIDE, MAX_TOTAL_SEATS } from "./room-limits";
+
 export { collectConflicts, solve } from "./solver";
 export type { SolveInput, SolveOutput } from "./solver";
 

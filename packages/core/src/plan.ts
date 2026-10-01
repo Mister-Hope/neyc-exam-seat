@@ -4,6 +4,7 @@ import {
   SOFTENABLE_CODES,
   downgradeSoftenedDiagnostics,
 } from "./diagnostics-policy";
+import { compileDomains } from "./domain";
 import type { DomainBundle } from "./domain";
 import { compileModel } from "./model";
 import type { CompiledModel } from "./model";
@@ -96,8 +97,14 @@ export function precheckJob(job: Job, overrides?: PlanOptions): PrecheckOutput {
   // 房间几何校验必须在 compileModel 之前：非法/超大尺寸要在建模型时就被拦住，
   // 不能等到几何函数里抛异常（铁律 3：业务失败只用诊断表达）。
   const geometry = validateRoomGeometry(job);
+  const geometryFatal = geometry.some((diagnostic) => diagnostic.severity === "error");
   const model = compileModel(job, adjacency);
-  const pre = runPrecheck(model, { adjacency, downgraded, relax: options.relax });
+  // 几何已经非法（含超出尺寸上限）时不再跑后续预检：模型里的这些考场已被安全钳制为空，
+  // 再往下跑只会产出「座位不够 / 建议加考场」之类的噪音诊断（甚至生成海量建议）。**必须在
+  // `compileModel` 之前判定并钳制**，否则畸形尺寸会直接 OOM（见 room-limits.ts）。
+  const pre = geometryFatal
+    ? { diagnostics: [] as Diagnostic[], fatal: true, domains: compileDomains(model) }
+    : runPrecheck(model, { adjacency, downgraded, relax: options.relax });
   const diagnostics = [...geometry, ...pre.diagnostics];
   // 用户显式放宽：把「限定过紧」的预检 error 降级为 warning（保留 code/evidence），
   // 这样 `planDelivery()` 才会给 `ready-with-warnings` 而不是 fail-closed 的 `blocked`（F-1）。
@@ -110,7 +117,7 @@ export function precheckJob(job: Job, overrides?: PlanOptions): PrecheckOutput {
   if (softened.length > 0) downgradeSoftenedDiagnostics(diagnostics);
   return {
     diagnostics,
-    fatal: pre.fatal || geometry.some((d) => d.severity === "error"),
+    fatal: pre.fatal || geometryFatal,
     softened,
     adjacency,
     downgraded,
