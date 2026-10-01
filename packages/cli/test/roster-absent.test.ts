@@ -185,7 +185,7 @@ describe("exam-seat roster --absent", () => {
       expect(code).toBe(EXIT_USAGE);
       expect(JSON.parse(captured.stdout())).toMatchObject({
         ok: false,
-        error: "ABSENT_LIST_INVALID",
+        error: { code: "ABSENT_LIST_INVALID" },
       });
     });
   });

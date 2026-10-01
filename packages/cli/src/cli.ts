@@ -38,9 +38,42 @@ export const EXIT_INFEASIBLE = 3;
 
 const VERSION = "0.0.2";
 
-function fail(message: string): never {
-  process.stderr.write(`exam-seat: ${message}\n`);
-  process.exit(EXIT_USAGE);
+/**
+ * CLI 失败的稳定错误码（写进 `--json` 输出的 `error.code`）。
+ *
+ * - `USAGE`：参数/用法错误（未知命令、缺必填参数、非法取值）
+ * - `FILE_NOT_FOUND`：读不到 job / 名单文件
+ * - `INVALID_JSON`：job 文件不是合法 JSON 或缺少 students / rooms
+ * - `ABSENT_LIST_INVALID`：缺考名单的列认不出来，无法匹配
+ * - `INTERNAL`：非预期内部错误
+ */
+export type CliErrorCode =
+  | "USAGE"
+  | "FILE_NOT_FOUND"
+  | "INVALID_JSON"
+  | "ABSENT_LIST_INVALID"
+  | "INTERNAL";
+
+/** 可预期的 CLI 失败：由 `main()` 统一转成「stderr 人话 + `--json` 时 stdout 一个 JSON 对象」。 */
+export class CliFailureError extends Error {
+  readonly code: CliErrorCode;
+
+  constructor(message: string, code: CliErrorCode = "USAGE") {
+    super(message);
+    this.name = "CliFailureError";
+    this.code = code;
+  }
+}
+
+/** 当前正在解析/执行的 program（`fail()` 要按它判断是否 `--json`）。 */
+let activeProgram: Command | undefined;
+
+function jsonEnabled(): boolean {
+  return Boolean(activeProgram?.opts<{ json?: boolean }>().json);
+}
+
+function fail(message: string, code: CliErrorCode = "USAGE"): never {
+  throw new CliFailureError(message, code);
 }
 
 async function readStdin(): Promise<string> {
@@ -57,18 +90,19 @@ async function loadJob(path: string): Promise<Job> {
     try {
       text = await readFile(nodePath.resolve(path), "utf8");
     } catch {
-      return fail(`读不到 job 文件：${path}`);
+      fail(`读不到 job 文件：${path}`, "FILE_NOT_FOUND");
     }
   }
+  let parsed: Job | null;
   try {
-    const parsed = JSON.parse(text) as Job | null;
-    if (parsed == null || !Array.isArray(parsed.rooms) || !Array.isArray(parsed.students)) {
-      return fail("job 文件里必须同时有 students 和 rooms 两个数组");
-    }
-    return parsed;
+    parsed = JSON.parse(text) as Job | null;
   } catch (err) {
-    return fail(`job 文件不是合法 JSON：${(err as Error).message}`);
+    fail(`job 文件不是合法 JSON：${(err as Error).message}`, "INVALID_JSON");
   }
+  if (parsed == null || !Array.isArray(parsed.rooms) || !Array.isArray(parsed.students)) {
+    fail("job 文件里必须同时有 students 和 rooms 两个数组", "INVALID_JSON");
+  }
+  return parsed;
 }
 
 function writeJson(payload: unknown): void {
@@ -199,6 +233,7 @@ export async function main(argv: string[]): Promise<number> {
   let exitCode: number = EXIT_OK;
 
   const program = new Command();
+  activeProgram = program;
   program
     .name("exam-seat")
     .description(
@@ -212,8 +247,11 @@ export async function main(argv: string[]): Promise<number> {
     .option("--json", "输出机器可读的 JSON（stdout 只放一个 JSON 对象，日志走 stderr）")
     .exitOverride();
 
+  // commander 自己也会写错误行；记下来，避免 `--json` 时同一条错误在 stderr 打两遍
+  let commanderErrorWritten = false;
   program.configureOutput({
     writeErr: (str) => {
+      commanderErrorWritten = true;
       process.stderr.write(str);
     },
     writeOut: (str) => {
@@ -272,7 +310,11 @@ export async function main(argv: string[]): Promise<number> {
           // 缺考名单的列都认不出来：明确报错，别让它静默变成「一个人都没缺考」
           const message = fatalAbsent.map((issue) => issue.message).join("；");
           if (globalJson()) {
-            writeJson({ ok: false, error: "ABSENT_LIST_INVALID", message, issues: fatalAbsent });
+            writeJson({
+              ok: false,
+              error: { code: "ABSENT_LIST_INVALID", message },
+              issues: fatalAbsent,
+            });
           } else {
             log(`exam-seat: 缺考名单用不了：${message}`);
           }
@@ -675,14 +717,37 @@ export async function main(argv: string[]): Promise<number> {
   try {
     await program.parseAsync(argv);
   } catch (error) {
+    // 可预期的 CLI 失败（参数校验 / 文件读写 / job 非法）：人话走 stderr，`--json` 时 stdout 给一个 JSON
+    if (error instanceof CliFailureError) {
+      if (jsonEnabled()) {
+        writeJson({ ok: false, error: { code: error.code, message: error.message } });
+      }
+      process.stderr.write(`exam-seat: ${error.message}\n`);
+      return EXIT_USAGE;
+    }
     const err = error as { code?: string; exitCode?: number; message?: string; stack?: string };
     if (err.code === "commander.helpDisplayed" || err.code === "commander.version") return EXIT_OK;
     if (err.code?.startsWith("commander.")) {
-      process.stderr.write(`exam-seat: ${err.message}\n`);
+      const message = err.message ?? String(error);
+      if (jsonEnabled()) {
+        // JSON 里的 message 去掉 commander 的 "error: " 前缀，给 agent 一句干净的说明
+        writeJson({
+          ok: false,
+          error: { code: "USAGE", message: message.replace(/^error: /u, "") },
+        });
+        // commander 已经写过一遍就不再重复；没有写过（例如别处抛出的 commander 错误）补一句人话
+        if (!commanderErrorWritten) process.stderr.write(`exam-seat: ${message}\n`);
+      } else {
+        process.stderr.write(`exam-seat: ${message}\n`);
+      }
       return err.exitCode ?? EXIT_USAGE;
     }
     // 非预期错误：给一句人话，别把堆栈糊到 agent 脸上
-    process.stderr.write(`exam-seat: 内部错误：${err.message ?? String(error)}\n`);
+    const message = err.message ?? String(error);
+    if (jsonEnabled()) {
+      writeJson({ ok: false, error: { code: "INTERNAL", message } });
+    }
+    process.stderr.write(`exam-seat: 内部错误：${message}\n`);
     if (process.env.EXAM_SEAT_DEBUG) {
       process.stderr.write(`${err.stack ?? ""}\n`);
     }
