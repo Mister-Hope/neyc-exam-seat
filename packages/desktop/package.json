@@ -3,6 +3,7 @@
   "version": "0.0.2",
   "private": true,
   "description": "「考场排布」桌面版：Electron 外壳，用 app:// 自定义协议加载 packages/web 的构建产物（保证 Web Worker 求解器可用）。",
+  "license": "LicenseRef-Proprietary-NonCommercial",
   "type": "module",
   "main": "src/main.mjs",
   "scripts": {
@@ -10,7 +11,8 @@
     "build:win": "node scripts/build.mjs win",
     "dev": "node scripts/dev.mjs",
     "prepare-web": "node scripts/prepare-web.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "electron": "^44.5.1",

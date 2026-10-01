@@ -38,9 +38,11 @@ async function main() {
 
   // 把入口里的资源清单一并打出来，方便排查「worker 没被打进包」之类的问题
   const indexHtml = readFileSync(path.join(TARGET, "index.html"), "utf8");
-  const assets = [...indexHtml.matchAll(/(?:src|href)="(?<url>[^"]+)"/g)].map(
-    (match) => match.groups.url,
-  );
+  // 具名组在类型上可能 undefined（正则没匹配到就没有 `groups`），显式判掉：
+  // 拿不到 url 就跳过该项，不让 `undefined` 混进 assets。
+  const assets = [...indexHtml.matchAll(/(?:src|href)="(?<url>[^"]+)"/g)]
+    .map((match) => match.groups?.url)
+    .filter((url) => url !== undefined);
   log(`[prepare-web] 已同步 → ${path.relative(REPO_ROOT, TARGET)}`);
   for (const asset of assets) log(`  · ${asset}`);
 }

@@ -1,0 +1,42 @@
+{
+  // desktop 源码是**纯 JS（.mjs）**，没有 .ts —— 所以这里的类型门禁靠 `checkJs`：
+  // `tsc` 会真去读这些 .mjs 并报错（TS 6.0 实测生效，不需要 `// @ts-check` 注释）。
+  //
+  // ⚠️ 它**不在** `pnpm verify` 里跑（根 typecheck 有意用 `--filter '!./packages/desktop'` 排除，
+  // 避免日常验证拉 Electron）。由根脚本 `typecheck:desktop` 与 CI 单独跑一步——纯 tsc 不需要 Electron 二进制。
+  //
+  // 只放宽了 `noImplicitAny`：这批 .mjs 从来没被检查过，一开就是 39 条 TS7006
+  // （全是「参数/变量缺 JSDoc 注解」的**注解缺失**，不是 bug），补齐属于后续增量工作。
+  // 除此之外**全部按仓库最严档**（`strict` + `noUncheckedIndexedAccess` + `noUnusedParameters` +
+  // `noUnusedLocals`）——实测 0 error。注解补齐后可把最后这一项也打开。
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "noImplicitAny": false,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": ["src/**/*.mjs", "scripts/**/*.mjs"],
+  // 这些目录是构建产物 / 本机缓存（已被 .gitignore 忽略），不能进类型检查
+  "exclude": [
+    "node_modules/**",
+    ".cache/**",
+    "web-dist/**",
+    "build/**",
+    "release/**",
+    "smoke-out/**"
+  ]
+}

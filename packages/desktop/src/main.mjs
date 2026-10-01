@@ -221,7 +221,8 @@ async function setupWindow() {
       if (BrowserWindow.getAllWindows().length === 0) void createWindow();
     });
   } catch (error) {
-    logError(`[exam-seat] 启动失败：${error?.stack ?? error}`);
+    // catch 参数在 JS 里是 unknown：真判空拿 stack，拿不到就退化成字符串
+    logError(`[exam-seat] 启动失败：${error instanceof Error ? error.stack : String(error)}`);
     app.exit(1);
   }
 }

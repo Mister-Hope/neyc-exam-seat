@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "lib": ["ES2023"]
+  },
+  "include": ["scripts/**/*.ts"],
+  "exclude": ["scripts/release/out/**", "scripts/release/sea/dist/**", "**/node_modules/**"]
+}

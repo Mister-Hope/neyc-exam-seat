@@ -15,9 +15,13 @@ import path from "node:path";
 
 const APP_DIR = path.resolve(import.meta.dirname, "..");
 const REPO_ROOT = path.resolve(APP_DIR, "../..");
-const require = createRequire(path.join(REPO_ROOT, "package.json"));
+// 注意：**不要**把这个绑定命名为 `require` —— TS 6.0 在 `checkJs` + `noUnusedLocals` 下
+// 会把名为 `require` 的 `createRequire` 绑定误判成「声明未使用」（TS6133）。改名即可规避。
+const requireFromRepo = createRequire(path.join(REPO_ROOT, "package.json"));
 
+/** @param {unknown} message 要写进 stdout 的内容 */
 const log = (message) => process.stdout.write(`${message}\n`);
+/** @param {unknown} message 要写进 stderr 的内容 */
 const logError = (message) => process.stderr.write(`${message}\n`);
 
 const STEPS = [
@@ -39,14 +43,23 @@ const OUT_DIR = path.resolve(APP_DIR, arg("out", "smoke-out"));
 const NO_SANDBOX = process.argv.includes("--no-sandbox");
 const APP_PATH = arg("app", path.join(APP_DIR, "release/mac-arm64/考场排布.app"));
 
+/**
+ * 已完成步骤（失败时回显用）。
+ *
+ * @type {string[]}
+ */
 const steps = [];
 
+/** @param {string} message 步骤名 */
 function heading(message) {
   steps.push(message);
   log(`\n▶ ${message}`);
 }
+/** @param {string} message 通过的说明 */
 const pass = (message) => log(`  ✅ ${message}`);
+/** @param {string} message 附加说明 */
 const info = (message) => log(`  · ${message}`);
+/** @param {number} ms 等待毫秒数 */
 const sleep = (ms) =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -63,14 +76,21 @@ function resolveExecutable(appPath) {
   return resolved;
 }
 
+/**
+ * @returns {Promise<{ type?: string; url?: string; webSocketDebuggerUrl?: string }>} 第一个 app://
+ *   页面目标
+ */
 async function waitForPageTarget(timeoutMs = 90_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = "还没拿到调试端口";
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${PORT}/json/list`);
-      const targets = await response.json();
-      const page = targets.find((item) => item.type === "page" && item.url.startsWith("app://"));
+      // CDP 的 /json/list 返回的是外部 JSON（`response.json()` 类型是 unknown），
+      // 这里显式收窄成我们真正用到的三个字段；字段缺失时下面的可选链会兜住。
+      /** @type {{ type?: string; url?: string; webSocketDebuggerUrl?: string }[]} */
+      const targets = /** @type {any} */ (await response.json());
+      const page = targets.find((item) => item.type === "page" && item.url?.startsWith("app://"));
       if (page) return page;
       lastError = `目标列表里没有 app:// 页面：${targets.map((item) => item.url).join(", ")}`;
     } catch (error) {
@@ -189,6 +209,9 @@ async function runSmoke() {
   log(`▶ 启动桌面版：${path.relative(REPO_ROOT, executable)}`);
   // 某些开发壳（含本机 harness）会带着 ELECTRON_RUN_AS_NODE=1：那样 Electron 会当普通 Node 跑；
   // NODE_OPTIONS 在**打包后的** Electron 里会直接致命退出。两个都摘掉。
+  // 声明成「字符串字典」：process.env 里这两个键本来就可能不存在，
+  // 而我们要主动删掉它们，所以类型上必须允许任意键存在。
+  /** @type {Record<string, string | undefined>} */
   const appEnv = { ...process.env, EXAM_SEAT_DOWNLOAD_DIR: DOWNLOAD_DIR, EXAM_SEAT_SMOKE: "1" };
   delete appEnv.ELECTRON_RUN_AS_NODE;
   delete appEnv.NODE_OPTIONS;
@@ -197,9 +220,12 @@ async function runSmoke() {
   child.stderr.on("data", (chunk) => log(`  [app:err] ${String(chunk).trimEnd()}`));
 
   let cdp;
+  /** @type {string[]} */
   const consoleErrors = [];
   try {
     const target = await waitForPageTarget();
+    if (target.webSocketDebuggerUrl === undefined)
+      throw new Error("CDP 目标缺少 webSocketDebuggerUrl，无法连接");
     cdp = await Cdp.connect(target.webSocketDebuggerUrl);
     cdp.on((message) => {
       if (message.method === "Runtime.exceptionThrown") {
@@ -354,8 +380,9 @@ async function runSmoke() {
   }
 
   heading("⑤ 校验产物与日志");
-  const XLSX = require("xlsx");
+  const XLSX = requireFromRepo("xlsx");
   const xlsxFile = readdirSync(DOWNLOAD_DIR).find((name) => name.endsWith(".xlsx"));
+  if (xlsxFile === undefined) throw new Error(`下载目录里没有 .xlsx：${DOWNLOAD_DIR}`);
   const book = XLSX.read(readFileSync(path.join(DOWNLOAD_DIR, xlsxFile)), { type: "buffer" });
   if (book.SheetNames.length === 0) throw new Error("导出的 xlsx 没有工作表");
   pass(
@@ -363,6 +390,7 @@ async function runSmoke() {
   );
 
   const zipFile = readdirSync(DOWNLOAD_DIR).find((name) => name.endsWith(".zip"));
+  if (zipFile === undefined) throw new Error(`下载目录里没有 .zip：${DOWNLOAD_DIR}`);
   const zipBytes = readFileSync(path.join(DOWNLOAD_DIR, zipFile));
   if (zipBytes[0] !== 0x50 || zipBytes[1] !== 0x4b) throw new Error("导出的 ZIP 头不对");
   pass(`zip 可读：${zipFile}（${(zipBytes.length / 1024).toFixed(0)} KB）`);
@@ -382,7 +410,7 @@ async function runSmoke() {
 try {
   await runSmoke();
 } catch (error) {
-  logError(`\n❌ 桌面版烟雾测试失败：${error.message}`);
+  logError(`\n❌ 桌面版烟雾测试失败：${error instanceof Error ? error.message : String(error)}`);
   logError(`已完成步骤：\n${steps.map((item) => `  - ${item}`).join("\n")}`);
   process.exitCode = 1;
 }
