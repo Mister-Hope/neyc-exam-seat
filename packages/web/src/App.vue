@@ -29,7 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { confirmAction } from "@/composables/useConfirm";
 import { useExamJob } from "@/composables/useExamJob";
 import { JSON_MIME, downloadText, pickFile, readFileText } from "@/lib/download";
-import { jobFileName, parseJobText, serializeJob } from "@/lib/job";
+import { parseJobText, serializeJob } from "@/lib/job";
 import { clearExamSeatStorage } from "@/lib/persist";
 import { STEPS } from "@/router";
 import { useConstraintsStore } from "@/stores/constraints";
@@ -70,9 +70,7 @@ function applyImportedJob(text: string): void {
   const parsed = parseJobText(text);
   loadJob(parsed);
   resultStore.clear();
-  toast.success(
-    `job.json 已导入：${parsed.students.length} 名学生 / ${parsed.rooms.length} 个考场`,
-  );
+  toast.success(`排布状态已导入：${parsed.students.length} 名学生 / ${parsed.rooms.length} 个考场`);
 }
 
 async function importJobFile(): Promise<void> {
@@ -97,8 +95,8 @@ function importFromPaste(): void {
 }
 
 function exportJob(): void {
-  downloadText(serializeJob(job.value), jobFileName(job.value.meta?.title), JSON_MIME);
-  toast.success("已导出 job.json，可以交给 CLI / AI 接力");
+  downloadText(serializeJob(job.value), "排布状态.json", JSON_MIME);
+  toast.success("已导出排布状态，下次可以直接导入继续");
 }
 
 async function clearAll(): Promise<void> {
@@ -127,18 +125,22 @@ async function clearAll(): Promise<void> {
     >
       <div class="flex flex-wrap items-center gap-3 px-5 py-2.5">
         <div class="flex items-baseline gap-1.5 whitespace-nowrap">
-          <span class="text-lg font-bold">排考场</span>
-          <span class="text-muted-foreground text-xs">exam-seat</span>
+          <span class="text-lg font-bold">考场排布</span>
         </div>
-        <Input
-          v-model="options.title"
-          class="h-8 max-w-[22rem]"
-          placeholder="考试名称，例如 2026届高三一模"
-        />
+        <div class="flex flex-col gap-0.5">
+          <Input
+            v-model="options.title"
+            class="h-8 w-[22rem] max-w-[60vw]"
+            placeholder="考试名称，例如 2026届高三一模"
+          />
+          <span class="text-muted-foreground text-[11px] leading-none">
+            会作为导出表格的总标题，可以留空
+          </span>
+        </div>
         <div class="ml-auto flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" @click="importJobFile">导入 job.json</Button>
+          <Button variant="outline" size="sm" @click="importJobFile">导入排布状态</Button>
           <Button variant="outline" size="sm" @click="pasteVisible = true">粘贴导入</Button>
-          <Button size="sm" @click="exportJob">导出 job.json</Button>
+          <Button size="sm" @click="exportJob">导出排布状态</Button>
           <Button variant="destructive" size="sm" @click="clearAll">清空数据</Button>
         </div>
       </div>
@@ -187,16 +189,12 @@ async function clearAll(): Promise<void> {
     <Dialog v-model:open="pasteVisible">
       <DialogContent class="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>粘贴导入 job.json</DialogTitle>
+          <DialogTitle>粘贴导入排布状态</DialogTitle>
           <DialogDescription
-            >把 AI / CLI 生成的 job.json 粘到这里，导入后可继续核对。</DialogDescription
+            >把之前导出的排布状态内容整段粘到这里，导入后可继续核对。</DialogDescription
           >
         </DialogHeader>
-        <Textarea
-          v-model="pasteText"
-          :rows="14"
-          placeholder="把 AI / CLI 生成的 job.json 粘到这里"
-        />
+        <Textarea v-model="pasteText" :rows="14" placeholder="粘贴排布状态内容" />
         <p v-if="pasteError" class="text-destructive text-sm">{{ pasteError }}</p>
         <DialogFooter>
           <Button variant="outline" @click="pasteVisible = false">取消</Button>

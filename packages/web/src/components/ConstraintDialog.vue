@@ -374,9 +374,7 @@ function submit(): void {
                 加入
               </Button>
             </div>
-            <FieldDescription>
-              组合写法随意（物化政 / 物理+化学+政治 都认），由 core 规范化。
-            </FieldDescription>
+            <FieldDescription> 组合写法随意：物化政 / 物理+化学+政治 都认。 </FieldDescription>
           </FieldContent>
         </Field>
 

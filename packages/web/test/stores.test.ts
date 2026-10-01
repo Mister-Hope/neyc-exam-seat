@@ -13,13 +13,15 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     setActivePinia(createPinia());
   });
 
-  it("示例名单：18 个班 × 54 人 = 972 人", () => {
+  it("示例名单：3 个班 × 24 人 = 72 人，且都带选科", () => {
     const roster = useRosterStore();
     roster.loadDemo();
-    expect(roster.total).toBe(972);
-    expect(roster.classCount).toBe(18);
-    expect(roster.participants).toBe(972);
-    expect(roster.classSizes[0]).toMatchObject({ count: 54 });
+    expect(roster.total).toBe(72);
+    expect(roster.classCount).toBe(3);
+    expect(roster.participants).toBe(72);
+    expect(roster.classSizes[0]).toMatchObject({ count: 24 });
+    expect(roster.students.every((student) => (student.subjects?.length ?? 0) > 0)).toBe(true);
+    expect(new Set(roster.students.map((student) => student.combination)).size).toBeGreaterThan(1);
   });
 
   it("排除缺考 = Student.included:false，实际参考随之变化，可整体恢复", () => {
@@ -29,7 +31,7 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
 
     roster.setIncluded(ids, false);
     expect(roster.excludedCount).toBe(3);
-    expect(roster.participants).toBe(969);
+    expect(roster.participants).toBe(69);
     expect(roster.excludedStudents.map((student) => student.id)).toEqual(ids);
     expect(roster.isIncluded(roster.students[0]!)).toBe(false);
 
@@ -58,11 +60,12 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     rooms.replaceRooms([]);
     rooms.addRooms(3, "small");
     expect(rooms.rooms.map((room) => room.id)).toEqual(["R1", "R2", "R3"]);
-    expect(rooms.totalSeats).toBe(90);
-    expect(rooms.capacityPlan(100).deficit).toBe(10);
+    expect(rooms.totalSeats).toBe(105);
+    expect(rooms.capacityPlan(100).deficit).toBe(0);
+    expect(rooms.capacityPlan(100).spare).toBe(5);
 
     rooms.updateRoom("R2", { rows: 7, cols: 6, note: "张老师" });
-    expect(rooms.totalSeats).toBe(102);
+    expect(rooms.totalSeats).toBe(112);
     expect(rooms.roomById("R2")?.note).toBe("张老师");
 
     rooms.move("R3", -1);
@@ -101,11 +104,11 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     const rooms = useRoomsStore();
     rooms.replaceRooms([]);
     rooms.addRoom("small");
-    expect(rooms.totalSeats).toBe(30);
+    expect(rooms.totalSeats).toBe(35);
 
     rooms.setExtraFrontSeats("R1", [2, 4]);
     expect(rooms.roomById("R1")?.extraFrontSeats).toEqual([2, 4]);
-    expect(rooms.totalSeats).toBe(32);
+    expect(rooms.totalSeats).toBe(37);
     expect(rooms.extraSeatRooms).toBe(1);
 
     // 重复 / 越界值被过滤
@@ -115,7 +118,7 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     // 列数改小：越界的第 4 列必须丢掉，容量按新列数算
     rooms.updateRoom("R1", { cols: 3 });
     expect(rooms.roomById("R1")?.extraFrontSeats).toEqual([2]);
-    expect(rooms.totalSeats).toBe(19);
+    expect(rooms.totalSeats).toBe(22);
 
     rooms.setRelaxSameClass("R1", true);
     expect(rooms.roomById("R1")?.relaxSameClass).toBe(true);
@@ -132,7 +135,7 @@ describe("pinia stores（名单 / 排除、考场、限定）", () => {
     // 加座取消后字段不残留
     rooms.setExtraFrontSeats("R1", []);
     expect(rooms.roomById("R1")?.extraFrontSeats).toBeUndefined();
-    expect(rooms.totalSeats).toBe(18);
+    expect(rooms.totalSeats).toBe(21);
   });
 
   it("选项：默认值与三种降级设置都能改", () => {

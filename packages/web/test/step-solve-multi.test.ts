@@ -514,7 +514,25 @@ describe("第 ⑤ 步：带选科默认多场次（场次编排）", () => {
     app.unmount();
   });
 
-  it("单场 level = roomRelaxed：显示「已按考场放宽」而不是「已降级」", async () => {
+  it("高级选项：人话文案，时间用秒，不出现内部关键字", async () => {
+    const pinia = setupStore(withoutSubjects(), multiRooms());
+    const { app, container } = await mountSolve(pinia);
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("求解时间上限");
+    expect(text).toContain("秒，默认 10 秒");
+    expect(text).not.toContain("毫秒");
+    expect(text).not.toContain("softConstraints");
+    expect(text).not.toContain("minConflicts");
+    expect(text).not.toContain("job.json");
+
+    const seconds = container.querySelector<HTMLInputElement>('[aria-label="求解时间上限（秒）"]');
+    expect(seconds?.value).toBe("10");
+
+    app.unmount();
+  });
+
+  it("单场 level = roomRelaxed：显示「已放宽」而不是「已降级」", async () => {
     coreMocks.plan.mockReturnValue({ ...singleFixture(), level: "roomRelaxed" as const });
     const pinia = setupStore(withoutSubjects(), multiRooms());
     const { app, container } = await mountSolve(pinia);
@@ -523,8 +541,8 @@ describe("第 ⑤ 步：带选科默认多场次（场次编排）", () => {
     await flush();
 
     const text = container.textContent ?? "";
-    expect(text).toContain("已按考场放宽");
-    expect(text).toContain("roomRelaxed（本考场已放宽同班相邻，其余考场规则不变）");
+    expect(text).toContain("已放宽：本考场内同班相邻不算冲突");
+    expect(text).not.toContain("roomRelaxed");
     expect(text).not.toContain("已降级");
     // 主动放宽不是降级：结果仍按正常结果展示
     expect(useResultStore().isRoomRelaxed).toBe(true);

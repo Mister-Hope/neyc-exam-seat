@@ -9,17 +9,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { Diagnostic, Suggestion } from "@exam-seat/core";
 import { CircleAlertIcon, CircleCheckIcon, InfoIcon, TriangleAlertIcon } from "@lucide/vue";
 
-/** 诊断面板：直接把 core 给的 `message`（中文人话）显示出来， `suggestions[]` 渲染成一键按钮——每条建议都带可机器应用的 `patch`，点了就应用并重跑。 */
+/** 诊断面板：只给人话（core 的 `message` 原样展示），不显示内部代码名与原始数据； `suggestions[]` 渲染成一键按钮，点了就应用并重排。 */
 const props = withDefaults(
   defineProps<{
     diagnostics: Diagnostic[];
-    /** 是否显示 evidence 原始证据（默认收起，点开可看） */
-    showEvidence?: boolean;
     emptyText?: string;
     busy?: boolean;
   }>(),
   {
-    showEvidence: false,
     emptyText: "没有诊断信息",
     busy: false,
   },
@@ -38,7 +35,7 @@ const levelOf = (diagnostic: Diagnostic): Level => {
   return "info";
 };
 
-/** 用 Badge 的语义变体表达严重级别，不写原始色值。 */
+/** 用 Badge 的语义变体 + 中文级别名表达严重程度。 */
 const badgeVariant: Record<Level, "default" | "secondary" | "destructive" | "outline"> = {
   success: "default",
   warning: "secondary",
@@ -61,19 +58,6 @@ const iconOf = (level: Level): unknown => {
 };
 
 const items = computed(() => props.diagnostics);
-
-function evidenceText(diagnostic: Diagnostic): string {
-  const { evidence } = diagnostic;
-  if (!evidence) return "";
-  const compact: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(evidence)) {
-    compact[key] =
-      Array.isArray(value) && value.length > 8
-        ? [...value.slice(0, 8), `…共 ${value.length} 项`]
-        : value;
-  }
-  return JSON.stringify(compact);
-}
 </script>
 
 <template>
@@ -90,17 +74,16 @@ function evidenceText(diagnostic: Diagnostic): string {
       :variant="levelOf(diagnostic) === 'error' ? 'destructive' : 'default'"
     >
       <component :is="iconOf(levelOf(diagnostic))" />
-      <AlertTitle class="flex flex-wrap items-center gap-1.5">
+      <AlertTitle class="flex flex-wrap items-baseline gap-1.5">
         <Badge :variant="badgeVariant[levelOf(diagnostic)]">{{
           levelText[levelOf(diagnostic)]
         }}</Badge>
-        <span class="font-mono text-[11px] opacity-75">{{ diagnostic.code }}</span>
-        {{ diagnostic.message }}
+        <span>{{ diagnostic.message }}</span>
       </AlertTitle>
-      <AlertDescription v-if="showEvidence && diagnostic.evidence" class="font-mono break-all">
-        {{ evidenceText(diagnostic) }}
-      </AlertDescription>
-      <div v-if="diagnostic.suggestions.length > 0" class="mt-1.5 flex flex-wrap gap-1.5">
+      <AlertDescription
+        v-if="diagnostic.suggestions.length > 0"
+        class="mt-1.5 flex flex-wrap gap-1.5"
+      >
         <TooltipProvider v-for="suggestion in diagnostic.suggestions" :key="suggestion.id">
           <Tooltip>
             <TooltipTrigger as-child>
@@ -116,14 +99,7 @@ function evidenceText(diagnostic: Diagnostic): string {
             <TooltipContent>{{ suggestion.effect ?? "应用这条修改" }}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-      </div>
+      </AlertDescription>
     </Alert>
   </div>
 </template>
-
-<style scoped>
-/* 诊断里的等宽 code 片段统一用 Tailwind 写在了模板上，这里只保留一处细调 */
-:deep(code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-</style>

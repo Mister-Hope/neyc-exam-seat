@@ -795,13 +795,36 @@ describe("分班 / 分考场整包（真实 io 往返）", () => {
       expect(back).toHaveLength(1);
       expect(back[0]!.name.length).toBeLessThanOrEqual(31);
     }
-    // 表头含准考证号列；借考学生在备注里写明时段 + 科目
+    // v3 备注规则：主考场缺科写「不考：X」，外来单科写「只考：X」，外来考满整间不写；
+    // 一律不带时段、不带「借考」字样、不带括号。
     const politics = readWorkbook(entries[1]!.bytes)[0]!;
     const politicsRows = [politics.headers, ...politics.rows];
     expect(
       politicsRows.some((row) => row.join("|").includes("座位号|班级|姓名|准考证号|备注")),
     ).toBe(true);
-    expect(politics.rows.some((row) => row[4]?.includes("借考（T6 生物/政治 政治）"))).toBe(true);
+    // 政治单科房间里的物化政学生 = 外来但考满该间全部科目 → 该行备注必须为空
+    const politicsStudent = politics.rows.find((row) => row.includes("S2"));
+    expect(politicsStudent).toBeDefined();
+    expect(politicsStudent![4] ?? "").toBe("");
+    // 整张表的备注只有两种合法形状，且不许出现时段 / 借考 / 括号
+    const politicsDataRows = politics.rows.filter((row) => /^S\d+$/.test(row[3] ?? ""));
+    expect(politicsDataRows.length).toBeGreaterThan(0);
+    const remarks = politicsDataRows.map((row) => row[4] ?? "");
+    // 只允许空，或「只考：X」/「不考：X」
+    expect(
+      remarks.filter((remark) => remark !== "" && !/^(?:只考|不考)：.+$/.test(remark)),
+    ).toEqual([]);
+    for (const remark of remarks) {
+      expect(remark).not.toContain("时段");
+      expect(remark).not.toContain("借考");
+      expect(remark).not.toContain("（");
+    }
+
+    // 第一考场（语数生）是物化政学生的主考场：他在这里缺生物 → 「不考：生物」；物化生考生全考 → 空
+    const mainRoom = readWorkbook(entries[0]!.bytes)[0]!;
+    const mainByStudent = new Map(mainRoom.rows.map((row) => [row[3] ?? "", row]));
+    expect(mainByStudent.get("S2")?.[4]).toBe("不考：生物");
+    expect(mainByStudent.get("S1")?.[4] ?? "").toBe("");
   });
 
   it("工作表名里的禁用字符不会漏进 ZIP 条目名", () => {

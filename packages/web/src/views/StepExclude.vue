@@ -204,6 +204,7 @@ async function onAbsentFile(event: Event): Promise<void> {
             <UploadIcon data-icon="inline-start" />
             导入缺考名单
           </Button>
+          <span class="text-muted-foreground text-xs">（班级+姓名 / 准考证号）</span>
           <input
             ref="absentInput"
             type="file"

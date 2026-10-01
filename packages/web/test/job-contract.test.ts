@@ -326,3 +326,61 @@ describe("job.json v3：加座 / 放宽同班相邻 / 借考 / 显式时段必�
     ).toThrow(/extraFrontSeats/);
   });
 });
+
+describe("job.json v4：专属组合考场（RoomSpec.combination）必须无损往返", () => {
+  const v4: Job = {
+    jobVersion: 4,
+    meta: { title: "2026届高三四模" },
+    options: { seed: 3 },
+    students: [
+      {
+        id: "2026010001",
+        name: "张三",
+        className: "高三(1)班",
+        combination: "物化生",
+        subjects: ["physics", "chemistry", "biology"],
+      },
+    ],
+    rooms: [
+      { id: "R1", name: "第一考场", rows: 7, cols: 6, combination: "物化生" },
+      { id: "R2", name: "第二考场", rows: 7, cols: 5, combination: "史地政" },
+      { id: "R3", name: "第三考场", rows: 7, cols: 6 },
+    ],
+    constraints: [],
+  };
+
+  it("导出 → 导入逐字段相等（combination 不丢，写法原样保留）", () => {
+    const roundTrip = parseJobText(serializeJob(v4));
+    expect(roundTrip).toEqual(v4);
+    expect(roundTrip.rooms[0]?.combination).toBe("物化生");
+    // 写法任意：core 归一，这里原样带回去
+    expect(roundTrip.rooms[1]?.combination).toBe("史地政");
+    expect(roundTrip.rooms[2]?.combination).toBeUndefined();
+  });
+
+  it("草稿往返不丢字段", () => {
+    const draft = draftFromJob(v4);
+    const rebuilt = buildJob(draft);
+    expect(rebuilt.rooms).toEqual(v4.rooms);
+    draft.rooms[0]!.combination = "政史地";
+    expect(v4.rooms[0]?.combination).toBe("物化生");
+  });
+
+  it("非法值被过滤：非字符串 / 纯空白丢掉，两侧空白 trim", () => {
+    const parsed = parseJob({
+      students: [],
+      rooms: [
+        { id: "R1", rows: 7, cols: 6, combination: "物化生" },
+        { id: "R2", rows: 7, cols: 6, combination: "   " },
+        { id: "R3", rows: 7, cols: 6, combination: 42 },
+        { id: "R4", rows: 7, cols: 6, combination: " 政史地 " },
+      ],
+    });
+    expect(parsed.rooms.map((room) => room.combination)).toEqual([
+      "物化生",
+      undefined,
+      undefined,
+      "政史地",
+    ]);
+  });
+});

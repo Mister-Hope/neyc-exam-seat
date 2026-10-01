@@ -32,7 +32,8 @@ import {
 import VirtualTable from "@/components/VirtualTable.vue";
 import { confirmAction } from "@/composables/useConfirm";
 import { useExamJob } from "@/composables/useExamJob";
-import { XLSX_MIME, ZIP_MIME, downloadBytes, downloadText } from "@/lib/download";
+import { XLSX_MIME, ZIP_MIME, downloadBytes } from "@/lib/download";
+import { exportTitle } from "@/lib/job";
 import { filterStudents } from "@/lib/search";
 import type { SeatOccupant } from "@/lib/seat-grid";
 import {
@@ -194,6 +195,15 @@ const singleRelaxedRoomNames = computed(() =>
     .map((room) => room.name ?? room.id),
 );
 
+/** 结果级别的人话（不暴露内部关键字）。 */
+function levelLabel(level: string): string {
+  if (level === "roomRelaxed") return "已放宽：本考场内同班相邻不算冲突";
+  if (level === "orthogonal") return "已降级：只要求前后左右不同班";
+  if (level === "softConstraints") return "已降级：限定为违反最少";
+  if (level === "minConflicts") return "已降级：相邻同班最少";
+  return "严格：相邻不同班";
+}
+
 const degradedBanner = computed(() => {
   const { result } = resultStore;
   if (!result) return null;
@@ -209,7 +219,7 @@ const degradedBanner = computed(() => {
   if (result.level !== "strict") {
     return {
       type: "warning" as const,
-      title: `已降级：level = ${result.level}，导出的校验报告里会写明`,
+      title: `${levelLabel(result.level)}，导出的校验报告里会写明`,
     };
   }
   return { type: "success" as const, title: "完美：零冲突，全部限定满足" };
@@ -314,7 +324,7 @@ async function exportWorkbook(): Promise<void> {
   ) {
     return;
   }
-  const title = resultStore.job?.meta?.title ?? "考场安排";
+  const title = exportTitle(resultStore.job?.meta?.title);
   const bytes = buildPlanWorkbook(result, title);
   downloadBytes(bytes, `${title}-考场安排名单.xlsx`, XLSX_MIME);
   toast.success("已导出：考场安排名单.xlsx（名单 / 按班级 / 校验报告）");
@@ -413,19 +423,13 @@ async function exportRoomSheets(): Promise<void> {
   toast.success("已导出：考场座位表.xlsx（逐考场网格，含讲台侧加座）");
 }
 
-function exportPlanJson(): void {
-  const payload = resultStore.result ?? resultStore.planAll;
-  if (!payload) return;
-  downloadText(JSON.stringify(payload, null, 2), "plan.json");
-}
-
 /** 按求解结果移除空置考场（同时改 job 与考场 store，之后需要重排）。 */
 async function removeEmptyRooms(): Promise<void> {
   const names = emptyRoomNames.value;
   if (names.length === 0) return;
   const confirmed = await confirmAction({
     title: "移除空置考场",
-    description: `有 ${names.length} 个考场一个学生都没安排：${names.join("、")}。移除后这份结果就作废了，需要回「排考场」重跑，确认移除？`,
+    description: `有 ${names.length} 个考场一个学生都没安排：${names.join("、")}。移除后这份结果就作废了，需要回「考场排布」重跑，确认移除？`,
     confirmText: "移除",
     cancelText: "保留",
     danger: true,
@@ -433,7 +437,7 @@ async function removeEmptyRooms(): Promise<void> {
   if (!confirmed) return;
   const { removed } = resultStore.removeEmptyRooms();
   if (removed.length > 0) {
-    toast.success(`已移除空置考场：${removed.join("、")}；配置已变，请回「排考场」重跑`);
+    toast.success(`已移除空置考场：${removed.join("、")}；配置已变，请回「考场排布」重跑`);
   } else {
     toast.info("没有需要移除的考场");
   }
@@ -459,7 +463,7 @@ function updatePreviewRoom(value: unknown): void {
     <Empty v-if="!hasAnything">
       <EmptyHeader>
         <EmptyMedia variant="icon"><CalendarSearchIcon /></EmptyMedia>
-        <EmptyTitle>还没有求解结果，先去「排考场」</EmptyTitle>
+        <EmptyTitle>还没有求解结果，先去「考场排布」</EmptyTitle>
       </EmptyHeader>
       <EmptyContent>
         <Button @click="router.push('/solve')">去排考场</Button>
@@ -820,11 +824,7 @@ function updatePreviewRoom(value: unknown): void {
               </Table>
             </div>
 
-            <DiagnosticsPanel
-              v-if="multiDiagnostics.length > 0"
-              :diagnostics="multiDiagnostics"
-              show-evidence
-            />
+            <DiagnosticsPanel v-if="multiDiagnostics.length > 0" :diagnostics="multiDiagnostics" />
           </CardContent>
         </Card>
 
@@ -866,7 +866,6 @@ function updatePreviewRoom(value: unknown): void {
         <div class="flex flex-wrap items-center justify-between gap-2">
           <Button variant="outline" @click="router.push('/solve')">上一步</Button>
           <div class="flex flex-wrap gap-2">
-            <Button variant="outline" @click="exportPlanJson">导出 plan.json</Button>
             <Button @click="exportClassSchedule">导出 按班级考场安排.xlsx</Button>
             <Button @click="exportInvigilator">导出 考场监考表.xlsx</Button>
             <Button variant="outline" @click="exportClassFilesZip">下载分班文件（ZIP）</Button>
@@ -879,10 +878,10 @@ function updatePreviewRoom(value: unknown): void {
 
       <!-- ============================ 单场结果（行为不变） ============================ -->
       <template v-else>
-        <Alert v-if="stale">
+        <Alert v-if="stale" variant="destructive">
           <TriangleAlertIcon />
           <AlertTitle>
-            当前配置已经改过，这份结果是旧配置算出来的；导出的名单还是旧结果，建议回「排考场」重跑一次
+            当前配置已经改过，这份结果是旧配置算出来的；导出的名单还是旧结果，建议回「考场排布」重跑一次
           </AlertTitle>
         </Alert>
 
@@ -939,7 +938,6 @@ function updatePreviewRoom(value: unknown): void {
               </div>
               <div class="flex flex-wrap items-center gap-2">
                 <Button @click="exportWorkbook">导出 xlsx</Button>
-                <Button variant="outline" @click="exportPlanJson">导出 plan.json</Button>
               </div>
             </div>
 
@@ -965,12 +963,7 @@ function updatePreviewRoom(value: unknown): void {
 
         <Card>
           <CardHeader>
-            <CardTitle>
-              校验报告
-              <span class="text-muted-foreground text-xs font-normal">
-                （独立校验器 validate()，与求解器分开实现）
-              </span>
-            </CardTitle>
+            <CardTitle> 校验报告 </CardTitle>
           </CardHeader>
           <CardContent class="flex flex-col gap-3">
             <Alert v-if="report && report.ok && reportWarnings.length === 0">
@@ -1134,12 +1127,7 @@ function updatePreviewRoom(value: unknown): void {
 
         <Card>
           <CardHeader>
-            <CardTitle>
-              座位网格预览
-              <span class="text-muted-foreground text-xs font-normal">
-                （只作页面预览，正式交付是上面的名单）
-              </span>
-            </CardTitle>
+            <CardTitle> 座位网格预览 </CardTitle>
           </CardHeader>
           <CardContent class="flex flex-col gap-3">
             <div class="flex flex-wrap items-center gap-2">
@@ -1176,7 +1164,6 @@ function updatePreviewRoom(value: unknown): void {
         <div class="flex flex-wrap items-center justify-between gap-2">
           <Button variant="outline" @click="router.push('/solve')">上一步</Button>
           <div class="flex flex-wrap gap-2">
-            <Button variant="outline" @click="exportPlanJson">导出 plan.json</Button>
             <Button variant="outline" @click="exportRoomSheets">导出 考场座位表.xlsx</Button>
             <Button @click="exportWorkbook">导出 考场安排名单.xlsx</Button>
           </div>

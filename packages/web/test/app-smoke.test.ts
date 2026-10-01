@@ -40,7 +40,7 @@ describe("六个步骤页挂载冒烟", () => {
     await nextTick();
     await nextTick();
     expect(container.innerHTML.length).toBeGreaterThan(200);
-    expect(container.textContent).toContain("排考场");
+    expect(container.textContent).toContain("考场排布");
     app.unmount();
   });
 });

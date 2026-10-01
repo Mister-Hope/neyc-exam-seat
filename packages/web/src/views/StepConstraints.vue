@@ -196,7 +196,7 @@ function resetQuery(): void {
 
 function openCreate(): void {
   if (selectedKeys.value.length === 0) {
-    toast.warning("先在左边的表里勾选学生（可以先按班级筛选再「全选当前结果」）");
+    toast.warning("先勾选学生");
     return;
   }
   editing.value = null;
@@ -248,19 +248,19 @@ function applyFix(row: RuleRow): void {
     <Alert v-if="fatalCount > 0" variant="destructive" class="mb-3">
       <CircleAlertIcon />
       <AlertTitle>
-        预检发现 {{ fatalCount }} 个致命问题，先按下面的红字提示改掉，再去排考场
+        预检发现 {{ fatalCount }} 个致命问题，先按下面的红字提示改掉，再到「考场排布」重新排
       </AlertTitle>
     </Alert>
 
     <Card>
       <CardHeader>
         <CardTitle>选择学生</CardTitle>
-        <CardDescription>按班级筛选 → 全选当前结果 → 添加限定</CardDescription>
+        <CardDescription>选学生 → 设条件 → 添加规则</CardDescription>
       </CardHeader>
       <CardContent class="flex flex-col gap-3">
         <div class="flex flex-wrap items-end gap-3">
           <div class="flex flex-col gap-1.5">
-            <Label for="constraint-query">查询</Label>
+            <Label for="constraint-query">搜索</Label>
             <Input
               id="constraint-query"
               v-model="query"
@@ -282,7 +282,7 @@ function applyFix(row: RuleRow): void {
 
         <div class="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" @click="selectAllFiltered">
-            全选当前结果（{{ rows.length }} 人）
+            全选（{{ rows.length }} 人）
           </Button>
           <Button variant="ghost" size="sm" @click="clearSelection">清空勾选</Button>
           <Button size="sm" :disabled="selectedKeys.length === 0" @click="openCreate">
@@ -332,10 +332,7 @@ function applyFix(row: RuleRow): void {
     <Card class="mt-4">
       <CardHeader>
         <CardTitle>限定规则（{{ ruleRows.length }} 条）</CardTitle>
-        <CardDescription>
-          同一学生被多条命中时取交集；考场限定是单选；可用座位数用 core 的 compileConstraintSeats
-          实时算
-        </CardDescription>
+        <CardDescription>同一学生被多条命中时取交集；考场限定是单选。</CardDescription>
       </CardHeader>
       <CardContent>
         <TooltipProvider>
@@ -461,7 +458,7 @@ function applyFix(row: RuleRow): void {
 
     <div class="mt-4 flex justify-between">
       <Button variant="outline" @click="router.push('/rooms')">上一步</Button>
-      <Button @click="router.push('/solve')">下一步：排考场</Button>
+      <Button @click="router.push('/solve')">下一步：考场排布</Button>
     </div>
 
     <ConstraintDialog

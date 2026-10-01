@@ -6,7 +6,6 @@ import { toast } from "vue-sonner";
 import MultiSelect from "@/components/MultiSelect.vue";
 import SeatGridPreview from "@/components/SeatGridPreview.vue";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,6 +17,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   Select,
   SelectContent,
@@ -27,7 +27,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -37,16 +36,28 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { confirmAction } from "@/composables/useConfirm";
-import { ROOM_PRESETS, capacityWarning, inferRoomKind, roomKindLabel } from "@/lib/seat-grid";
+import { ROOM_PRESETS, capacityWarning, inferRoomKind } from "@/lib/seat-grid";
 import type { RoomKind } from "@/lib/seat-grid";
 import { useRoomsStore } from "@/stores/rooms";
 import { useRosterStore } from "@/stores/roster";
-import { SECONDARY_SUBJECTS, SUBJECT_LABELS, roomCapacity } from "@exam-seat/core";
+import {
+  SECONDARY_SUBJECTS,
+  SUBJECT_LABELS,
+  normalizeCombination,
+  roomCapacity,
+} from "@exam-seat/core";
 import type { DoorSide, RoomSpec } from "@exam-seat/core";
-import { CalendarSearchIcon, TriangleAlertIcon } from "@lucide/vue";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CalendarSearchIcon,
+  Trash2Icon,
+  TriangleAlertIcon,
+} from "@lucide/vue";
 
-/** 第 ③ 步：配置考场。类型（大 / 小 / 自定义 行×列）、门的位置、备注（监考老师）全在这张表里改， 每个考场都可以展开一张座位编号缩略图（按物理列序画，门在右侧，所见即所得）。 */
+/** 第 ③ 步：配置考场。大小（大 / 小 / 自定义）、门的位置、备注都在这一张表里改， 每个考场都可以展开一张座位缩略图（按物理列序画，门在右侧，所见即所得）。 */
 const rooms = useRoomsStore();
 const roster = useRosterStore();
 const router = useRouter();
@@ -57,7 +68,7 @@ const expandAll = ref(false);
 const expandedIds = ref<string[]>([]);
 
 /** 表格列数（展开行 colspan 用）。 */
-const COLUMN_COUNT = 14;
+const COLUMN_COUNT = 15;
 
 const plan = computed(() => rooms.capacityPlan(roster.participants));
 const warning = computed(() => capacityWarning(plan.value));
@@ -72,11 +83,37 @@ const dedicatedLabels: Record<string, string> = Object.fromEntries(
   dedicatedSubjectOptions.map((option) => [option.value, option.label]),
 );
 
-const kindOptions: { value: RoomKind; label: string }[] = [
-  { value: "large", label: ROOM_PRESETS.large.label },
-  { value: "small", label: ROOM_PRESETS.small.label },
-  { value: "custom", label: "自定义" },
-];
+/** 名单里出现过的组合：按 core 的归一化口径去重，不自己造写法。 */
+const rosterCombinations = computed(() => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const student of roster.students) {
+    const raw = student.combination;
+    if (!raw) continue;
+    const value = normalizeCombination(raw) || raw.trim();
+    if (value.length === 0 || seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+});
+
+/**
+ * 某一行的「专属组合」下拉选项 = 名单里的组合 + 这一行的原值。
+ *
+ * 原值可能不是归一写法（例如 job 里写 `史地政`，候选里只有归一的 `政史地`）：额外并一项原值， 保证导入后下拉能回显当前设置；存储值原样保留，core 照旧归一。
+ */
+function combinationOptionsFor(room: RoomSpec): string[] {
+  const raw = room.combination?.trim();
+  const base = rosterCombinations.value;
+  if (!raw || base.includes(raw)) return base;
+  return [...base, raw];
+}
+
+/** 留空 = 常规（自动）安排。 */
+function setCombination(room: RoomSpec, value: string): void {
+  rooms.updateRoom(room.id, { combination: value.length > 0 ? value : undefined });
+}
 
 function setDedicatedSubjects(room: RoomSpec, value: (string | number)[]): void {
   rooms.updateRoom(room.id, {
@@ -110,7 +147,7 @@ function isRelaxed(room: RoomSpec): boolean {
   return value != null && value !== false;
 }
 
-/** 数字 = 同班上限；`true` / 缺省显示为空（不填 = 完全放开）。 */
+/** 数字 = 同班学生数上限；`true` / 缺省显示为空（不填 = 不限）。 */
 function relaxLimit(room: RoomSpec): number | undefined {
   return typeof room.relaxSameClass === "number" ? room.relaxSameClass : undefined;
 }
@@ -153,9 +190,24 @@ function toggleExpand(room: RoomSpec): void {
     : [...expandedIds.value, room.id];
 }
 
+/** 大 → 小 → 自定义 → 大 循环；自定义默认 5 列 × 6 排（30 座）。 */
 function applyKind(room: RoomSpec, kind: RoomKind | undefined): void {
   if (kind === "large") rooms.updateRoom(room.id, { rows: 7, cols: 6 });
-  else if (kind === "small") rooms.updateRoom(room.id, { rows: 6, cols: 5 });
+  else if (kind === "small") rooms.updateRoom(room.id, { rows: 7, cols: 5 });
+  else if (kind === "custom") rooms.updateRoom(room.id, { rows: 6, cols: 5 });
+}
+
+function cycleKind(room: RoomSpec): void {
+  const kind = inferRoomKind(room);
+  applyKind(room, kind === "large" ? "small" : kind === "small" ? "custom" : "large");
+}
+
+/** 徽标文案：大(6列7排) / 小(5列7排) / 自定义。 */
+function kindBadgeLabel(room: RoomSpec): string {
+  const kind = inferRoomKind(room);
+  if (kind === "large") return ROOM_PRESETS.large.label;
+  if (kind === "small") return ROOM_PRESETS.small.label;
+  return "自定义";
 }
 
 function setDoorSide(room: RoomSpec, value: unknown): void {
@@ -214,14 +266,14 @@ async function dropEmptyRooms(): Promise<void> {
             @input="setBatchCount(($event.target as HTMLInputElement).value)"
           />
           <Select :model-value="batchKind" @update:model-value="batchKind = $event as RoomKind">
-            <SelectTrigger class="h-7 w-56" size="sm">
+            <SelectTrigger class="h-7 w-40" size="sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="large">{{ ROOM_PRESETS.large.label }}</SelectItem>
                 <SelectItem value="small">{{ ROOM_PRESETS.small.label }}</SelectItem>
-                <SelectItem value="custom">自定义（先建 6 列 × 6 排，再逐行改）</SelectItem>
+                <SelectItem value="custom">自定义</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -245,23 +297,24 @@ async function dropEmptyRooms(): Promise<void> {
         </Empty>
 
         <div v-else class="w-full overflow-x-auto">
-          <Table class="min-w-[1500px]">
+          <Table class="min-w-[1460px]">
             <TableHeader>
               <TableRow>
-                <TableHead class="w-12">#</TableHead>
-                <TableHead class="w-40">考场名称</TableHead>
-                <TableHead class="w-36">地点</TableHead>
-                <TableHead class="w-48">类型</TableHead>
-                <TableHead class="w-24">排数</TableHead>
-                <TableHead class="w-24">列数</TableHead>
-                <TableHead class="w-20">容量</TableHead>
-                <TableHead class="w-40">讲台侧加座</TableHead>
-                <TableHead class="w-52">放宽同班相邻</TableHead>
-                <TableHead class="w-28">门的位置</TableHead>
-                <TableHead class="w-36">备注（监考老师）</TableHead>
+                <TableHead class="w-10">#</TableHead>
+                <TableHead class="w-44">考场名称</TableHead>
+                <TableHead class="w-44">地点</TableHead>
+                <TableHead class="w-24">类型</TableHead>
+                <TableHead class="w-16">排数</TableHead>
+                <TableHead class="w-16">列数</TableHead>
+                <TableHead class="w-16">容量</TableHead>
+                <TableHead class="w-32">讲台侧加座</TableHead>
+                <TableHead class="w-60">放宽同班相邻按考场</TableHead>
+                <TableHead class="w-48">专属组合</TableHead>
                 <TableHead class="w-40">专用科目</TableHead>
-                <TableHead class="w-40">操作</TableHead>
-                <TableHead class="w-20">座位图</TableHead>
+                <TableHead class="w-40">备注</TableHead>
+                <TableHead class="w-28">门的位置</TableHead>
+                <TableHead class="w-28">操作</TableHead>
+                <TableHead class="w-16">座位图</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -271,39 +324,31 @@ async function dropEmptyRooms(): Promise<void> {
                   <TableCell>
                     <Input
                       :model-value="room.name ?? ''"
-                      class="h-7"
+                      class="h-7 min-w-36"
+                      :aria-label="`第${index + 1}行考场名称`"
                       @input="room.name = ($event.target as HTMLInputElement).value"
                     />
                   </TableCell>
                   <TableCell>
                     <Input
                       :model-value="room.location ?? ''"
-                      class="h-7"
+                      class="h-7 min-w-36"
                       placeholder="例如：高二一班"
+                      :aria-label="`第${index + 1}行地点`"
                       @input="room.location = ($event.target as HTMLInputElement).value"
                     />
                   </TableCell>
                   <TableCell>
-                    <div class="flex items-center gap-1.5">
-                      <Select
-                        :model-value="inferRoomKind(room)"
-                        @update:model-value="applyKind(room, $event as RoomKind)"
-                      >
-                        <SelectTrigger class="h-7 w-28" size="sm"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectItem
-                              v-for="option in kindOptions"
-                              :key="option.value"
-                              :value="option.value"
-                            >
-                              {{ option.label }}
-                            </SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                      <Badge variant="secondary">{{ roomKindLabel(room) }}</Badge>
-                    </div>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      class="rounded-full"
+                      :data-testid="`room-kind-${room.id}`"
+                      :aria-label="`考场大小：${kindBadgeLabel(room)}，点击切换`"
+                      @click="cycleKind(room)"
+                    >
+                      {{ kindBadgeLabel(room) }}
+                    </Button>
                   </TableCell>
                   <TableCell>
                     <Input
@@ -311,7 +356,7 @@ async function dropEmptyRooms(): Promise<void> {
                       type="number"
                       min="1"
                       max="30"
-                      class="h-7 w-20"
+                      class="h-7 w-14 px-1 text-center"
                       :aria-label="`${room.name ?? room.id} 排数`"
                       @input="setRows(room, ($event.target as HTMLInputElement).value)"
                     />
@@ -322,7 +367,7 @@ async function dropEmptyRooms(): Promise<void> {
                       type="number"
                       min="1"
                       max="30"
-                      class="h-7 w-20"
+                      class="h-7 w-14 px-1 text-center"
                       :aria-label="`${room.name ?? room.id} 列数`"
                       @input="setCols(room, ($event.target as HTMLInputElement).value)"
                     />
@@ -337,33 +382,85 @@ async function dropEmptyRooms(): Promise<void> {
                       trigger-class="w-full"
                       @update:model-value="setExtraSeats(room, $event)"
                     />
-                    <div class="text-muted-foreground mt-1 text-[11px] leading-snug">
-                      选中的业务列在讲台前各加 1 座；容量按「排 × 列 + 加座数」算
+                  </TableCell>
+                  <TableCell>
+                    <div class="flex flex-col gap-1">
+                      <label class="flex items-center gap-1.5 text-xs">
+                        <Checkbox
+                          :model-value="isRelaxed(room)"
+                          :aria-label="`${room.name ?? room.id} 放宽本考场`"
+                          @update:model-value="toggleRelax(room, $event === true)"
+                        />
+                        放宽本考场
+                      </label>
+                      <div v-if="isRelaxed(room)" class="flex items-center gap-1.5">
+                        <span class="text-muted-foreground text-[11px] whitespace-nowrap"
+                          >同班学生数上限</span
+                        >
+                        <Input
+                          :model-value="relaxLimit(room) ?? ''"
+                          type="number"
+                          min="1"
+                          max="999"
+                          placeholder="不限"
+                          class="h-7 w-16 px-1 text-center"
+                          :aria-label="`${room.name ?? room.id} 同班学生数上限`"
+                          @input="setRelaxLimit(room, ($event.target as HTMLInputElement).value)"
+                        />
+                      </div>
+                      <div
+                        v-if="isRelaxed(room)"
+                        class="text-muted-foreground text-[11px] leading-snug"
+                      >
+                        上限由考场大小决定（大考场约 9）；勾选后本考场内同班相邻不算冲突
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div class="flex items-center gap-2">
-                      <Switch
-                        :model-value="isRelaxed(room)"
-                        size="sm"
-                        :aria-label="`${room.name ?? room.id} 放宽同班相邻`"
-                        @update:model-value="toggleRelax(room, $event === true)"
-                      />
-                      <Input
-                        v-if="isRelaxed(room)"
-                        :model-value="relaxLimit(room) ?? ''"
-                        type="number"
-                        min="1"
-                        max="999"
-                        placeholder="不填 = 完全放开"
-                        class="h-7 w-32"
-                        :aria-label="`${room.name ?? room.id} 同班上限`"
-                        @input="setRelaxLimit(room, ($event.target as HTMLInputElement).value)"
-                      />
-                    </div>
+                    <NativeSelect
+                      :id="`room-combination-${room.id}`"
+                      class="w-full"
+                      :modelValue="room.combination ?? ''"
+                      :aria-label="`${room.name ?? room.id} 专属组合`"
+                      @update:modelValue="setCombination(room, String($event))"
+                    >
+                      <NativeSelectOption value="">常规（自动）</NativeSelectOption>
+                      <NativeSelectOption
+                        v-for="combo in combinationOptionsFor(room)"
+                        :key="combo"
+                        :value="combo"
+                      >
+                        {{ combo }}
+                      </NativeSelectOption>
+                    </NativeSelect>
                     <div class="text-muted-foreground mt-1 text-[11px] leading-snug">
-                      只影响本考场：同班相邻不再算冲突；数字 = 同班学生数上限
+                      想把考政史地（或物化生）的整批学生集中到一个考场，就在这里指定
                     </div>
+                    <div
+                      v-if="room.combination && (room.dedicatedSubjects?.length ?? 0) > 0"
+                      class="text-muted-foreground mt-1 text-[11px] leading-snug"
+                    >
+                      设了专属组合后，本考场不再走专用科目
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <MultiSelect
+                      :model-value="room.dedicatedSubjects ?? []"
+                      :options="dedicatedSubjectOptions.map((option) => option.value)"
+                      :option-labels="dedicatedLabels"
+                      placeholder="常规考场"
+                      trigger-class="w-full"
+                      @update:model-value="setDedicatedSubjects(room, $event)"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      :model-value="room.note ?? ''"
+                      class="h-7 min-w-32"
+                      placeholder="例如：张老师"
+                      :aria-label="`${room.name ?? room.id} 备注`"
+                      @input="room.note = ($event.target as HTMLInputElement).value"
+                    />
                   </TableCell>
                   <TableCell>
                     <ToggleGroup
@@ -378,53 +475,52 @@ async function dropEmptyRooms(): Promise<void> {
                     </ToggleGroup>
                   </TableCell>
                   <TableCell>
-                    <Input
-                      :model-value="room.note ?? ''"
-                      class="h-7"
-                      placeholder="例如：张老师"
-                      @input="room.note = ($event.target as HTMLInputElement).value"
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <MultiSelect
-                      :model-value="room.dedicatedSubjects ?? []"
-                      :options="dedicatedSubjectOptions.map((option) => option.value)"
-                      :option-labels="dedicatedLabels"
-                      placeholder="通用考场"
-                      trigger-class="w-full"
-                      @update:model-value="setDedicatedSubjects(room, $event)"
-                    />
-                    <div class="text-muted-foreground mt-1 text-[11px] leading-snug">
-                      只接收考该科目的非常规组合考生；一个考场可兼多科
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div class="flex flex-wrap gap-1">
-                      <Button
-                        variant="link"
-                        size="xs"
-                        :disabled="index === 0"
-                        @click="rooms.move(room.id, -1)"
-                      >
-                        上移
-                      </Button>
-                      <Button
-                        variant="link"
-                        size="xs"
-                        :disabled="index === rooms.rooms.length - 1"
-                        @click="rooms.move(room.id, 1)"
-                      >
-                        下移
-                      </Button>
-                      <Button
-                        variant="link"
-                        size="xs"
-                        class="text-destructive"
-                        @click="removeRoom(room)"
-                      >
-                        删除
-                      </Button>
-                    </div>
+                    <TooltipProvider>
+                      <div class="flex items-center gap-0.5">
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              :disabled="index === 0"
+                              :aria-label="`把${room.name ?? room.id}上移`"
+                              @click="rooms.move(room.id, -1)"
+                            >
+                              <ArrowUpIcon />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>上移</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              :disabled="index === rooms.rooms.length - 1"
+                              :aria-label="`把${room.name ?? room.id}下移`"
+                              @click="rooms.move(room.id, 1)"
+                            >
+                              <ArrowDownIcon />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>下移</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger as-child>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              class="text-destructive"
+                              :aria-label="`删除${room.name ?? room.id}`"
+                              @click="removeRoom(room)"
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>删除</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </TooltipProvider>
                   </TableCell>
                   <TableCell>
                     <Button variant="outline" size="xs" @click="toggleExpand(room)">
@@ -474,7 +570,7 @@ async function dropEmptyRooms(): Promise<void> {
           <div>
             <dt class="text-muted-foreground text-xs">提示</dt>
             <dd class="text-muted-foreground">
-              放宽考场会在监考表上标注；借考（subjectRoom）请用 job.json 导入
+              放宽的考场会在监考表上标注；个别科目去指定考场（借考）需要导入排布状态时带入
             </dd>
           </div>
         </dl>

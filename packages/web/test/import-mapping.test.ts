@@ -280,19 +280,19 @@ describe("名单导入 · 列映射与预填", () => {
     app.unmount();
   });
 
-  it("页面：必填列没认出来时把该下拉标红并提示手动指定", async () => {
+  it("页面：必填列识别失败时把该下拉标红并提示手动指定", async () => {
     const { app, container } = await mountImport((roster) => {
       roster.importSheets([sheet("名单", ["名字", "备注"], [["张三", "x"]])], "缺列.xlsx");
     });
 
     const errorItems = container.querySelectorAll("[data-invalid='true']");
     expect(errorItems.length).toBeGreaterThan(0);
-    expect(container.textContent).toContain("没认出来这些必填列");
-    // 必填列没认出来时错误文案要一直挂在字段下面，且下拉停在「还没认出来」的占位项
+    expect(container.textContent).toContain("这些必填列需要手动指定");
+    // 必填列没认出来时错误文案要一直挂在字段下面，且下拉停在「识别失败」的占位项
     expect(container.querySelector<HTMLSelectElement>("#mapping-id")?.value).toBe("-1");
     await sleep(150);
     await nextTick();
-    expect(container.textContent).toContain("没认出来，请手动指定");
+    expect(container.textContent).toContain("识别失败，请手动指定");
     app.unmount();
   });
 

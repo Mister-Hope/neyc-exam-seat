@@ -709,10 +709,10 @@ describe("第 ⑥ 步结果页：多场次 / 单场", () => {
     await nextTick();
 
     const { result } = useResultStore();
-    expect(mocks.buildPlanWorkbook).toHaveBeenCalledWith(result, "排考场");
+    expect(mocks.buildPlanWorkbook).toHaveBeenCalledWith(result, "考场排布");
     expect(mocks.downloadBytes).toHaveBeenCalledWith(
       expect.any(Uint8Array),
-      "排考场-考场安排名单.xlsx",
+      "考场排布-考场安排名单.xlsx",
       XLSX_MIME,
     );
   });

@@ -16,12 +16,12 @@ interface PersistedOptions {
 /** Job 的 meta 与 options：种子、邻接规则、降级模式、时间上限。 */
 export const useOptionsStore = defineStore("options", () => {
   const saved = loadState<PersistedOptions>(STORAGE_NAME, {
-    title: "排考场",
+    title: "",
     createdAt: new Date().toISOString(),
     options: { ...DEFAULT_OPTIONS },
   });
 
-  const title = ref(saved.title ?? "排考场");
+  const title = ref(saved.title ?? "");
   const createdAt = ref(saved.createdAt ?? new Date().toISOString());
   const options = ref<Required<PlanOptions>>({ ...DEFAULT_OPTIONS, ...saved.options });
 
@@ -54,7 +54,7 @@ export const useOptionsStore = defineStore("options", () => {
   }
 
   function reset(): void {
-    title.value = "排考场";
+    title.value = "";
     createdAt.value = new Date().toISOString();
     options.value = { ...DEFAULT_OPTIONS };
   }

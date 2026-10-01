@@ -38,8 +38,6 @@ export function toRosterMapping(partial: Partial<RosterMapping>): RosterMapping 
     id: partial.id ?? -1,
     name: partial.name ?? -1,
     className: partial.className ?? -1,
-    gender: partial.gender,
-    note: partial.note,
     combination: partial.combination,
     absent: partial.absent,
   };

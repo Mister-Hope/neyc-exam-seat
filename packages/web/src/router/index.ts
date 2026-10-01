@@ -10,7 +10,7 @@ export interface StepDefinition {
   component: () => Promise<unknown>;
 }
 
-/** 六个步骤页。`el-steps` 的顺序、路由、标题都从这一份定义来，避免两处写重复。 用 hash 路由：纯前端无后端，丢到任何静态目录（甚至 file://）都能直接打开。 */
+/** 六个步骤页。步骤条的顺序、路由、标题都从这一份定义来，避免两处写重复。 用 hash 路由：纯前端无后端，丢到任何静态目录（甚至 file://）都能直接打开。 */
 export const STEPS: StepDefinition[] = [
   {
     path: "/import",
@@ -23,14 +23,14 @@ export const STEPS: StepDefinition[] = [
     path: "/exclude",
     title: "排除缺考",
     short: "排除缺考",
-    description: "查询 → 全选结果 → 批量排除",
+    description: "筛选学生，把缺考的人标为不参加",
     component: () => import("@/views/StepExclude.vue"),
   },
   {
     path: "/rooms",
     title: "配置考场",
     short: "配置考场",
-    description: "考场数量、大小、门的位置、监考老师，附座位编号缩略图",
+    description: "考场数量、大小、位置、备注，附座位缩略图",
     component: () => import("@/views/StepRooms.vue"),
   },
   {
@@ -42,9 +42,9 @@ export const STEPS: StepDefinition[] = [
   },
   {
     path: "/solve",
-    title: "排考场",
-    short: "排考场",
-    description: "预检 → Web Worker 求解 → 完美 / 已降级 / 排不出来",
+    title: "考场排布",
+    short: "考场排布",
+    description: "预检 → 排座 → 查看冲突与限定",
     component: () => import("@/views/StepSolve.vue"),
   },
   {

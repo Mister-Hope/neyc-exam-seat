@@ -29,10 +29,10 @@ import { useResultStore } from "@/stores/result";
 import type { SolverMode } from "@/workers/solver-protocol";
 import { subjectLabel } from "@exam-seat/core";
 import type { Adjacency, RelaxMode, Suggestion } from "@exam-seat/core";
-import { CircleAlertIcon, CircleCheckIcon, TriangleAlertIcon } from "@lucide/vue";
+import { CircleAlertIcon, CircleCheckIcon, InfoIcon, TriangleAlertIcon } from "@lucide/vue";
 
 /**
- * 第 ⑤ 步：排考场。
+ * 第 ⑤ 步：考场排布。
  *
  * 先跑 `precheckJob`：有致命问题就停在这一页，把 `diagnostic.message` 原样展示， 并把 `suggestions[].patch` 渲染成按钮（点了就应用到
  * job 再自动重跑预检）。 预检通过才进 Worker 求解，进度可取消；单场结果四态：完美 / 主动放宽 / 已降级 / 排不出来。
@@ -76,26 +76,23 @@ const fatalDiagnostics = computed(() =>
 );
 const levelText = computed(() => {
   const level = resultStore.result?.level;
-  if (level === "strict") return "严格（8 邻域 + 限定硬约束）";
-  if (level === "roomRelaxed") return "roomRelaxed（本考场已放宽同班相邻，其余考场规则不变）";
-  if (level === "orthogonal") return "orthogonal（只要求前后左右不同班，对角允许同班）";
-  if (level === "softConstraints") return "softConstraints（限定降为高权重惩罚）";
-  if (level === "minConflicts") return "minConflicts（允许同班相邻，最小化冲突）";
+  if (level === "strict") return "严格：相邻不同班";
+  if (level === "roomRelaxed") return "已放宽：本考场内同班相邻不算冲突";
+  if (level === "orthogonal") return "已降级：只要求前后左右不同班";
+  if (level === "softConstraints") return "已降级：限定为违反最少";
+  if (level === "minConflicts") return "已降级：相邻同班最少";
   return "";
 });
 
 const degradeReason = computed(() => {
   const level = resultStore.result?.level;
-  if (level === "roomRelaxed") {
-    return "你在第 ③ 步给这个考场开了「放宽同班相邻」：这是主动放宽，不是求解失败，监考表上会标注";
-  }
   if (level === "orthogonal") {
     return precheck.value.downgraded
-      ? "班级数不足 9 个，算法自动退化为「前后左右不同班」"
-      : "按你的设置使用了 4 邻域";
+      ? "班级数不足 9 个，自动改为只要求前后左右不同班"
+      : "按你的设置只要求前后左右不同班";
   }
   if (level === "softConstraints" || level === "minConflicts")
-    return "你在高级选项里主动选择了降级模式";
+    return "个别限定无法同时满足，已按违反最少安排，请核对下面的诊断";
   return "";
 });
 
@@ -131,6 +128,12 @@ const stageText = computed(() => {
 function setNumberOption(setter: (value: number) => void, value: string | number): void {
   const parsed = Number(value);
   if (Number.isFinite(parsed)) setter(parsed);
+}
+
+/** 时间上限界面用「秒」，内部仍然是毫秒。 */
+function setTimeLimitSeconds(value: string | number): void {
+  const seconds = Math.trunc(Number(value));
+  if (Number.isFinite(seconds) && seconds >= 1) options.setTimeLimit(Math.min(60, seconds) * 1000);
 }
 
 function applyDiagnosticSuggestion(suggestion: Suggestion): void {
@@ -230,12 +233,7 @@ watch(runMode, (next, previous) => {
 
     <Card>
       <CardHeader>
-        <CardTitle>
-          预检
-          <span class="text-muted-foreground text-xs font-normal">
-            ｜先判定可行性并给出「为什么排不出来 + 怎么放宽」，再决定是否求解
-          </span>
-        </CardTitle>
+        <CardTitle>预检</CardTitle>
       </CardHeader>
       <CardContent class="flex flex-col gap-2">
         <Alert v-if="precheck.fatal" variant="destructive">
@@ -265,12 +263,7 @@ watch(runMode, (next, previous) => {
 
     <Card>
       <CardHeader>
-        <CardTitle
-          >高级选项
-          <span class="text-muted-foreground text-xs font-normal"
-            >（写进 job.json 的 options）</span
-          ></CardTitle
-        >
+        <CardTitle>高级选项</CardTitle>
       </CardHeader>
       <CardContent class="flex max-w-3xl flex-col gap-3">
         <div class="flex flex-wrap items-center gap-3">
@@ -284,7 +277,6 @@ watch(runMode, (next, previous) => {
             aria-label="随机种子"
             @input="setNumberOption(options.setSeed, ($event.target as HTMLInputElement).value)"
           />
-          <span class="text-muted-foreground text-xs">同输入同种子必得同结果，方便复现</span>
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
@@ -320,29 +312,27 @@ watch(runMode, (next, previous) => {
             <SelectTrigger class="h-8 w-80" size="sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="none">none：不降级（推荐）</SelectItem>
-                <SelectItem value="softConstraints">softConstraints：限定改为违反最少</SelectItem>
-                <SelectItem value="minConflicts">minConflicts：只求冲突最少</SelectItem>
+                <SelectItem value="none">不降级（推荐）</SelectItem>
+                <SelectItem value="softConstraints">限定尽量满足（允许个别违反）</SelectItem>
+                <SelectItem value="minConflicts">优先减少相邻同班</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
-          <Label class="w-32 shrink-0">时间上限</Label>
+          <Label class="w-32 shrink-0">求解时间上限</Label>
           <Input
-            :model-value="options.options.timeLimitMs"
+            :model-value="Math.round(options.options.timeLimitMs / 1000)"
             type="number"
-            min="1000"
-            max="60000"
-            step="1000"
-            class="h-8 w-44"
-            aria-label="时间上限（毫秒）"
-            @input="
-              setNumberOption(options.setTimeLimit, ($event.target as HTMLInputElement).value)
-            "
+            min="1"
+            max="60"
+            step="1"
+            class="h-8 w-24"
+            aria-label="求解时间上限（秒）"
+            @input="setTimeLimitSeconds(($event.target as HTMLInputElement).value)"
           />
-          <span class="text-muted-foreground text-xs">毫秒，默认 10000</span>
+          <span class="text-muted-foreground text-xs">秒，默认 10 秒</span>
         </div>
       </CardContent>
     </Card>
@@ -489,7 +479,6 @@ watch(runMode, (next, previous) => {
           <DiagnosticsPanel
             v-if="resultStore.planAll.diagnostics.length > 0"
             :diagnostics="resultStore.planAll.diagnostics"
-            show-evidence
             @apply="applyDiagnosticSuggestion"
           />
         </template>
@@ -505,27 +494,22 @@ watch(runMode, (next, previous) => {
             <AlertDescription>
               {{ resultStore.result.stats.participants }} 名考生坐进
               {{ resultStore.result.stats.roomsUsed }} 个考场，用了
-              {{ resultStore.result.stats.elapsedMs }} 毫秒。
+              {{ (resultStore.result.stats.elapsedMs / 1000).toFixed(1) }} 秒。
             </AlertDescription>
           </Alert>
 
           <Alert v-else-if="resultStore.result.ok && !resultStore.isDegraded">
-            <TriangleAlertIcon />
-            <AlertTitle>已按考场放宽：level = {{ resultStore.result.level }}</AlertTitle>
-            <AlertDescription>
-              <div>{{ levelText }}</div>
-              <div v-if="degradeReason">{{ degradeReason }}</div>
-              <div>放宽只影响开了开关的考场；监考表表头会标注「本考场已放宽同班相邻」。</div>
-            </AlertDescription>
+            <InfoIcon />
+            <AlertTitle>已放宽：本考场内同班相邻不算冲突</AlertTitle>
+            <AlertDescription> 只影响勾选了「放宽本考场」的考场，监考表会标注。 </AlertDescription>
           </Alert>
 
           <Alert v-else-if="resultStore.result.ok">
             <TriangleAlertIcon />
-            <AlertTitle>已降级：level = {{ resultStore.result.level }}</AlertTitle>
+            <AlertTitle>{{ levelText }}</AlertTitle>
             <AlertDescription>
-              <div>{{ levelText }}</div>
               <div v-if="degradeReason">{{ degradeReason }}</div>
-              <div>降级结果也会写进导出的「校验报告」表，请务必向相关老师说明。</div>
+              <div>降级结果会写进导出的校验报告，请向相关老师说明。</div>
             </AlertDescription>
           </Alert>
 
@@ -580,7 +564,6 @@ watch(runMode, (next, previous) => {
           <DiagnosticsPanel
             v-if="resultStore.result.diagnostics.length > 0"
             :diagnostics="resultStore.result.diagnostics"
-            show-evidence
             @apply="applyDiagnosticSuggestion"
           />
         </template>

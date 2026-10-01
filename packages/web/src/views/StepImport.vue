@@ -64,10 +64,8 @@ const mappingFields: {
   { key: "id", label: "准考证号", required: true, hint: "学号 / 准考证号 / 考证号" },
   { key: "name", label: "姓名", required: true },
   { key: "className", label: "班级", required: true },
+  { key: "combination", label: "选科", required: false, hint: "据此排多场次" },
   { key: "absent", label: "缺考", required: false, hint: "有内容即不参加" },
-  { key: "gender", label: "性别", required: false },
-  { key: "combination", label: "选科", required: false },
-  { key: "note", label: "备注", required: false },
 ];
 
 const headerOptions = computed(() =>
@@ -198,7 +196,8 @@ function onSheetChange(value?: unknown): void {
           <FileSpreadsheetIcon class="text-muted-foreground size-8" />
           <p class="text-sm font-medium">把 Excel 名单拖到这里，或点击选择</p>
           <p class="text-muted-foreground text-xs">
-            需要包含「准考证号（学号 / 考证号）/ 姓名 / 班级」三列，其余列自动忽略；列映射会自动预填
+            至少要「准考证号（学号 / 考证号）/ 姓名 /
+            班级」三列；有「选科」列会自动读取（据此排多场次），有「缺考」列会自动排除；其它列忽略
           </p>
           <Button variant="outline" size="sm" @click.stop="pickFile">
             <UploadIcon data-icon="inline-start" />
@@ -221,7 +220,7 @@ function onSheetChange(value?: unknown): void {
 
       <CardFooter class="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" @click="roster.loadDemo()">
-          载入示例名单（18 个班 × 54 人）
+          载入示例名单（3 个班 × 24 人，带选科）
         </Button>
         <Button v-if="roster.total > 0" variant="outline" size="sm" @click="roster.reset()">
           清空名单
@@ -264,8 +263,9 @@ function onSheetChange(value?: unknown): void {
             orientation="horizontal"
             :data-invalid="field.missing ? 'true' : undefined"
           >
-            <FieldLabel :for="`mapping-${field.key}`" class="w-20 shrink-0">
+            <FieldLabel :for="`mapping-${field.key}`" class="flex w-28 shrink-0 items-center gap-1">
               {{ field.label }}
+              <Badge v-if="field.required" variant="secondary">必填</Badge>
             </FieldLabel>
             <FieldContent>
               <div class="flex flex-wrap items-center gap-1.5">
@@ -277,7 +277,7 @@ function onSheetChange(value?: unknown): void {
                   @update:modelValue="onMappingChange(field.key, $event)"
                 >
                   <NativeSelectOption :value="-1" disabled>
-                    {{ field.required ? "还没认出来，请手动指定" : "不使用" }}
+                    {{ field.required ? "识别失败，请手动指定" : "不使用" }}
                   </NativeSelectOption>
                   <NativeSelectOption
                     v-for="option in headerOptions"
@@ -287,7 +287,6 @@ function onSheetChange(value?: unknown): void {
                     {{ option.label }}
                   </NativeSelectOption>
                 </NativeSelect>
-                <Badge v-if="field.required" variant="secondary">必填</Badge>
                 <Button
                   v-if="field.mapped"
                   variant="ghost"
@@ -303,7 +302,7 @@ function onSheetChange(value?: unknown): void {
                 {{ field.auto ? "自动识别" : "手动指定" }}：{{ field.header || "(空表头)" }} →
                 {{ field.column }} 列<template v-if="field.hint">（{{ field.hint }}）</template>
               </FieldDescription>
-              <FieldError v-if="field.missing">没认出来，请手动指定</FieldError>
+              <FieldError v-if="field.missing">识别失败，请手动指定</FieldError>
             </FieldContent>
           </Field>
         </FieldGroup>
@@ -311,7 +310,7 @@ function onSheetChange(value?: unknown): void {
         <Alert v-if="missingColumns.length > 0" variant="destructive">
           <CircleAlertIcon />
           <AlertTitle>
-            没认出来这些必填列：{{
+            这些必填列需要手动指定：{{
               missingColumns.map((field) => field.label).join("、")
             }}，请在下面手动指定
           </AlertTitle>

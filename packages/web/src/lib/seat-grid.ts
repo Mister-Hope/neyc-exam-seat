@@ -164,13 +164,13 @@ export function emptySeatGrid(rows: number, cols: number): (SeatCell | null)[][]
 
 export type RoomKind = "large" | "small" | "custom";
 
-/** 大考场 = 6 列 × 7 排 = 42；小考场 = 5 列 × 6 排 = 30。 */
+/** 大考场 = 6 列 × 7 排 = 42；小考场 = 5 列 × 7 排 = 35（老师学校的真实规格）。 */
 export const ROOM_PRESETS: Record<
   "large" | "small",
   { rows: number; cols: number; label: string }
 > = {
-  large: { rows: 7, cols: 6, label: "大（6 列 × 7 排 = 42）" },
-  small: { rows: 6, cols: 5, label: "小（5 列 × 6 排 = 30）" },
+  large: { rows: 7, cols: 6, label: "大(6列7排)" },
+  small: { rows: 7, cols: 5, label: "小(5列7排)" },
 };
 
 export function inferRoomKind(room: Pick<RoomSpec, "rows" | "cols">): RoomKind {

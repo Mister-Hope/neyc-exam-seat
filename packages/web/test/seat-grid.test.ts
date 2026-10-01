@@ -166,11 +166,11 @@ describe("非矩形考场：讲台侧加座（docs/design.md §4.5）", () => {
 describe("考场类型预设", () => {
   it("认得出大 / 小 / 自定义", () => {
     expect(inferRoomKind({ rows: 7, cols: 6 })).toBe("large");
-    expect(inferRoomKind({ rows: 6, cols: 5 })).toBe("small");
+    expect(inferRoomKind({ rows: 7, cols: 5 })).toBe("small");
     expect(inferRoomKind({ rows: 6, cols: 4 })).toBe("custom");
-    expect(roomKindLabel({ rows: 6, cols: 4 })).toBe("自定义");
+    expect(roomKindLabel({ rows: 6, cols: 5 })).toBe("自定义");
     expect(ROOM_PRESETS.large.rows * ROOM_PRESETS.large.cols).toBe(42);
-    expect(ROOM_PRESETS.small.rows * ROOM_PRESETS.small.cols).toBe(30);
+    expect(ROOM_PRESETS.small.rows * ROOM_PRESETS.small.cols).toBe(35);
   });
 });
 

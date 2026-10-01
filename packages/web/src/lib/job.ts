@@ -46,7 +46,7 @@ function mergeOptions(options: PlanOptions | undefined): Required<PlanOptions> {
 
 export function createEmptyDraft(): JobDraft {
   return {
-    title: "排考场",
+    title: "",
     createdAt: new Date().toISOString(),
     students: [],
     rooms: [],
@@ -112,7 +112,7 @@ export function buildJob(draft: JobDraft): Job {
 /** JOB → 草稿（AI 生成的 job 导回网页时走这里，缺省项补默认值）。 */
 export function draftFromJob(job: Job): JobDraft {
   return {
-    title: job.meta?.title ?? "排考场",
+    title: job.meta?.title ?? "",
     createdAt: job.meta?.createdAt ?? new Date().toISOString(),
     students: cloneStudents(job.students),
     rooms: cloneRooms(job.rooms),
@@ -123,6 +123,11 @@ export function draftFromJob(job: Job): JobDraft {
 
 export function serializeJob(job: Job): string {
   return `${JSON.stringify(job, null, 2)}\n`;
+}
+
+/** 导出用的总标题：老师没填考试名称时退回「考场排布」。 */
+export function exportTitle(title: string | undefined): string {
+  return (title ?? "").trim() || "考场排布";
 }
 
 export function jobFileName(title: string | undefined, suffix = "job"): string {
@@ -205,6 +210,10 @@ export function parseJob(raw: unknown): Job {
     // v2：专用考场标记，例如 ['politics', 'geography']
     const dedicated = stringList(item.dedicatedSubjects, `rooms[${i}].dedicatedSubjects`);
     if (dedicated) room.dedicatedSubjects = dedicated;
+    // v4：专属组合考场（只接收该选科组合的常规整批学生）；写法任意，core 会归一，这里原样保留
+    if (typeof item.combination === "string" && item.combination.trim().length > 0) {
+      room.combination = item.combination.trim();
+    }
     // v3：讲台侧加座（业务列号）；只保留 1..cols 内的整数，去重升序
     const extra = normalizeExtraSeats(
       item.extraFrontSeats,
