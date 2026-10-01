@@ -121,3 +121,17 @@ export function mulberry32(seed: number): () => number {
 export function ceilDiv(a: number, b: number): number {
   return Math.ceil(a / b);
 }
+
+/**
+ * 通用字符串比较器：**逐 UTF-16 码元**比较，全序、稳定、与运行环境无关。
+ *
+ * 为什么不用 `localeCompare(..., "zh")`：它的结果取决于运行环境的 ICU 构建（Node 版本、浏览器内核、 甚至浏览器的系统语言 / 区域设置），同一份 job 在
+ * Node 与浏览器里可能导出不同的**行序**， 直接破坏「同输入同 seed 必得完全一致的结果」这条铁律。`a < b` 这类关系比较按 ECMAScript 规范 就是逐 UTF-16
+ * 码元比较，任何环境结果一致。
+ *
+ * ⚠️ 这是**稳定序**，不是**语言序**：不承诺拼音序 / 笔顺，也不承诺与任何 ICU 版本一致， 更不承诺「看上去更顺眼」。只用来决定列表行的先后（展示 /
+ * 导出顺序），不参与任何语义判断； 需要业务含义的顺序（如选科组合）请用 {@link compareCombinationNames}。
+ */
+export function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}

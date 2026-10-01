@@ -92,13 +92,22 @@ describe("预检：加考场建议按本 job 最大考场取模板（不写死 4
   });
 
   it("没有任何考场时退回 6 列 × 7 排；带加座的考场连加座列一起复制", () => {
-    // 无考场：班级上限为 0 → CLASS_LIMIT_EXCEEDED 会带上加考场建议
+    // 无考场：班级上限为 0 → CLASS_LIMIT_EXCEEDED 带上「按同班名额算」的加考场建议（task-66）
+    // 10 个班各 1 人 → 6×7 在 8 邻域下每间最多放该班 12 人 → 加 1 间就够
     const noRooms = precheckJob(job([], 10));
     const fallback = noRooms.diagnostics
       .find((d) => d.code === "CLASS_LIMIT_EXCEEDED")!
-      .suggestions.find((s) => s.id === "add-rooms")!;
-    expect(fallback.label).toBe("加 1 个考场（6 列 × 7 排，42 座）");
-    expect(fallback.effect).toBe("增加 42 个座位");
+      .suggestions.find((s) => s.id === "add-rooms-for-class")!;
+    expect(fallback.label).toContain("6 列 × 7 排");
+    expect(fallback.label).toContain("每个最多放该班 12 人");
+    expect(fallback.label).toContain("0 → 12");
+    expect(fallback.patch).toEqual([
+      {
+        op: "add",
+        path: "/rooms/-",
+        value: { id: "R1", name: "第1考场", rows: 7, cols: 6, doorSide: "right" },
+      },
+    ]);
 
     // 37 座（5 列 × 7 排 + 第 2、4 列加座）→ 模板要连 extraFrontSeats 一起复制
     const withExtras: RoomSpec = {

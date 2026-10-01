@@ -1,7 +1,7 @@
 import type { DomainBundle } from "./domain";
 import { checkSeatMatching, compileDomains } from "./domain";
-import type { CompiledModel } from "./model";
-import { describeCols, describeRows, roomCapacity, seatId } from "./numbering";
+import type { CompiledModel, CompiledRoom } from "./model";
+import { describeCols, describeRows, maxSameClass, roomCapacity, seatId } from "./numbering";
 import type {
   Adjacency,
   Diagnostic,
@@ -101,8 +101,21 @@ export function runPrecheck(
   ctx: { adjacency: Adjacency; downgraded: boolean; relax: RelaxMode },
 ): PrecheckResult {
   const diagnostics: Diagnostic[] = [];
+  // 同一 job 里多条诊断常常给出**同一条建议**（例如 10 个班都超上限时，每条诊断都带上「加考场」）：
+  // 按「建议 id + patch」去重，同一条动作只出现一次，免得老师看到一屏重复按钮。
+  const emittedSuggestionKeys = new Set<string>();
   const push = (d: Diagnostic): void => {
-    diagnostics.push(d);
+    if (d.suggestions === undefined || d.suggestions.length === 0) {
+      diagnostics.push(d);
+      return;
+    }
+    const suggestions = d.suggestions.filter((suggestion) => {
+      const key = JSON.stringify({ id: suggestion.id, patch: suggestion.patch });
+      if (emittedSuggestionKeys.has(key)) return false;
+      emittedSuggestionKeys.add(key);
+      return true;
+    });
+    diagnostics.push(suggestions.length === d.suggestions.length ? d : { ...d, suggestions });
   };
 
   const job = model.job;
@@ -316,7 +329,7 @@ export function runPrecheck(
           limit,
           cappedRooms: cappedRooms.map((item) => ({ roomId: item.room.spec.id, cap: item.cap })),
         },
-        suggestions: capacitySuggestions(job, size - limit),
+        suggestions: classLimitSuggestions(model, cls, ctx.adjacency),
       });
     }
   }
@@ -562,6 +575,129 @@ function upgradeRoomPatch(room: RoomSpec, index: number, biggest: RoomSpec): Jso
   return patch;
 }
 
+/** 本 job 里座位数最大的**已编译**考场（没有任何考场时 `undefined`）。 */
+function biggestCompiledRoom(rooms: readonly CompiledRoom[]): CompiledRoom | undefined {
+  let biggest: CompiledRoom | undefined;
+  for (const room of rooms) {
+    if (biggest === undefined || room.capacity > biggest.capacity) biggest = room;
+  }
+  return biggest;
+}
+
+/**
+ * 新增 `addCount` 个考场的 JSON Patch：新考场照 `template` 的几何复制。
+ *
+ * Id 从「现有考场数 + 1」起跳号并跳过已用 id，保证**同输入同结果**（铁律 2）。
+ */
+function addRoomsPatch(
+  existingIds: readonly string[],
+  template: RoomSpec,
+  addCount: number,
+): JsonPatchOp[] {
+  const usedIds = new Set(existingIds);
+  const ids: string[] = [];
+  let nextNumber = existingIds.length + 1;
+  while (ids.length < addCount) {
+    const id = `R${nextNumber}`;
+    nextNumber += 1;
+    if (usedIds.has(id)) continue;
+    usedIds.add(id);
+    ids.push(id);
+  }
+  return ids.map((id) => ({
+    op: "add" as const,
+    path: "/rooms/-",
+    value: {
+      id,
+      name: `第${id.slice(1)}考场`,
+      rows: template.rows,
+      cols: template.cols,
+      doorSide: template.doorSide ?? "right",
+      ...(template.extraFrontSeats === undefined
+        ? {}
+        : { extraFrontSeats: [...template.extraFrontSeats] }),
+    },
+  }));
+}
+
+/**
+ * `CLASS_LIMIT_EXCEEDED` 的**专用**建议。
+ *
+ * 缺口是「该班的**同班名额**不够」，不是「座位不够」：把座位缺口算法（{@link capacitySuggestions}） 搬过来会得出「加 1
+ * 间就够」这种**点了也不够**的结论（report P1-4：真正要 7 间才过预检）， 而且「让最后 N 名学生不参加」会排到无关的小班去。所以这里：
+ *
+ * 1. **加考场按「每个新考场最多能放该班多少人」算**（受 `maxSameClass` / `relaxSameClass` 约束，
+ *    与座位数不一定相同），文案里如实写明「加几间、加完能容纳该班多少人」；
+ * 2. **少排人只能从触发诊断的那个班取**；取不到（人数不够）就**不给这条建议** —— 宁可少给，不可误导；
+ * 3. 不做任何新的硬阻断，也不改 `CLASS_LIMIT_EXCEEDED` 的严重级。
+ */
+function classLimitSuggestions(
+  model: CompiledModel,
+  cls: number,
+  adjacency: Adjacency,
+): Suggestion[] {
+  const out: Suggestion[] = [];
+  const rooms = model.rooms;
+  const className = model.classNames[cls] ?? "";
+  const size = model.classSizes[cls] ?? 0;
+  const limit = rooms.reduce(
+    (sum, room) => sum + effectiveSameClassLimit(room.spec, room.maxSameClass, room.capacity),
+    0,
+  );
+  const deficit = size - limit;
+  if (deficit <= 0) return out;
+  const existingIds = rooms.map((room) => room.spec.id);
+
+  // 1) 加考场：每个新考场能容纳该班的**人数**（同班名额），按它算要加几间。
+  //    完全没有考场时退回 6 列 × 7 排模板，同班名额按几何上限算（与 `compileModel` 同源）。
+  const template = biggestCompiledRoom(rooms);
+  const templateSpec = template?.spec ?? FALLBACK_ROOM_TEMPLATE;
+  const templateCapacity = Math.max(1, roomCapacity(templateSpec));
+  const perRoom = Math.max(
+    1,
+    template === undefined
+      ? maxSameClass(templateSpec, adjacency)
+      : effectiveSameClassLimit(template.spec, template.maxSameClass, templateCapacity),
+  );
+  const addCount = Math.ceil(deficit / perRoom);
+  const after = limit + addCount * perRoom;
+  out.push({
+    id: "add-rooms-for-class",
+    label:
+      `再加 ${addCount} 个考场（${templateSpec.cols} 列 × ${templateSpec.rows} 排，每个最多放该班 ${perRoom} 人）` +
+      `：${className} 的可容纳人数 ${limit} → ${after}，才够放 ${size} 人`,
+    effect: `${className} 可容纳人数 ${limit} → ${after}（差 ${deficit} 人）`,
+    patch: addRoomsPatch(existingIds, templateSpec, addCount),
+  });
+
+  // 2) 少排这个班的人：**只从触发诊断的班级里取**，取不到就不给建议
+  const jobStudents = model.job.students ?? [];
+  const jobIndexById = new Map<string, number>();
+  jobStudents.forEach((student, index) => {
+    if (!jobIndexById.has(student.id)) jobIndexById.set(student.id, index);
+  });
+  const classIndices: number[] = [];
+  for (let i = 0; i < model.students.length; i += 1) {
+    if (model.classOfStudent[i] !== cls) continue;
+    const index = jobIndexById.get(model.students[i]!.id);
+    if (index !== undefined) classIndices.push(index);
+  }
+  if (classIndices.length >= deficit) {
+    const chosen = classIndices.slice(-deficit);
+    out.push({
+      id: "exclude-class-students",
+      label: `让 ${className} 里最后 ${deficit} 名学生不参加本次考试`,
+      effect: `${className} 的考生数减到 ${classIndices.length - deficit} 人（不超过上限 ${limit} 人）`,
+      patch: chosen.map((index) => ({
+        op: "replace" as const,
+        path: `/students/${index}/included`,
+        value: false,
+      })),
+    });
+  }
+  return out;
+}
+
 function capacitySuggestions(job: Job, deficit: number): Suggestion[] {
   const out: Suggestion[] = [];
   if (deficit <= 0) return out;
@@ -606,17 +742,6 @@ function capacitySuggestions(job: Job, deficit: number): Suggestion[] {
   // 最大考场也可能只有 0 个座位（行列数非法时）—— 兜到 1，避免 ceil(deficit / 0) = Infinity 变成死循环
   const templateCapacity = Math.max(1, roomCapacity(template));
   const addCount = Math.max(1, Math.ceil(deficit / templateCapacity));
-  // 新考场的 id 从 rooms.length + 1 往上找，跳过已经用掉的编号
-  const usedIds = new Set(rooms.map((room) => room.id));
-  const newRooms: string[] = [];
-  let nextNumber = rooms.length + 1;
-  while (newRooms.length < addCount) {
-    const id = `R${nextNumber}`;
-    nextNumber += 1;
-    if (usedIds.has(id)) continue;
-    usedIds.add(id);
-    newRooms.push(id);
-  }
   out.push({
     id: "add-rooms",
     label:
@@ -624,20 +749,11 @@ function capacitySuggestions(job: Job, deficit: number): Suggestion[] {
         ? `加 1 个考场（${template.cols} 列 × ${template.rows} 排，${templateCapacity} 座）`
         : `加 ${addCount} 个考场（共 ${addCount * templateCapacity} 座）`,
     effect: `增加 ${addCount * templateCapacity} 个座位`,
-    patch: newRooms.map((id) => ({
-      op: "add" as const,
-      path: "/rooms/-",
-      value: {
-        id,
-        name: `第${id.slice(1)}考场`,
-        rows: template.rows,
-        cols: template.cols,
-        doorSide: template.doorSide ?? "right",
-        ...(template.extraFrontSeats === undefined
-          ? {}
-          : { extraFrontSeats: [...template.extraFrontSeats] }),
-      },
-    })),
+    patch: addRoomsPatch(
+      rooms.map((room) => room.id),
+      template,
+      addCount,
+    ),
   });
 
   // 3) 少排几个人

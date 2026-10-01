@@ -106,6 +106,7 @@ export type { PrecheckOutput } from "./plan";
 
 export {
   canonicalJson,
+  compareText,
   fingerprint,
   isSameClassRelaxed,
   mulberry32,
