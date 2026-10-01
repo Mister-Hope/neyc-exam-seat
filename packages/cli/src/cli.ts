@@ -36,7 +36,7 @@ export const EXIT_USAGE = 1;
 export const EXIT_DEGRADED = 2;
 export const EXIT_INFEASIBLE = 3;
 
-const VERSION = "0.0.2";
+const VERSION = "0.0.3";
 
 /**
  * CLI 失败的稳定错误码（写进 `--json` 输出的 `error.code`）。
