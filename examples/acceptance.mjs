@@ -2112,7 +2112,7 @@ check(
   `座位方案 ${constraintResult.seatings?.length ?? 0} 套；硬规则违规 ${hardRuleViolations(constraintResult).length} 处`,
 );
 
-/* ---------- 19. 考场级放宽 / 按科目借考 / 加座考场 / 显式时段（docs/需求-考场级限制与放宽.md） ---------- */
+/* ---------- 19. 考场级放宽 / 按科目借考 / 加座考场 / 显式时段（见 docs/design.md §5.8） ---------- */
 
 /** 跑一次 plan 并把 plan.json 读回来（第 19 节自己的小工具）。 */
 const runPlanJob = (label, job, extraArgs = []) => {
