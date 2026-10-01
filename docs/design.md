@@ -818,20 +818,26 @@ interface RoomSpec {
 
 - **合并工作簿** `按班级考场安排.xlsx`：sheet 1 =「**总表**」（全校，按班级 + 学号排序），之后**每班一张 sheet，sheet 名 = 班级名**；
 - **逐份文件目录** `按班级考场安排/<班级>.xlsx`：每班一个文件，内容就是该班那张 sheet；
-- 列：`班级 | 姓名 | 准考证号 | 主考场 | 主考场地点 | 单科考场1 | 单科考场1地点 | …`
-  —— **每个考场列后面紧跟一列它的「地点」**，单科考场列按实际用到的最大数出现（用不到就不出）：
+- 列：`班级 | 姓名 | 准考证号 | 主考场 | 主座位号 | 单科考场1 | 座位号1 | 单科考场2 | 座位号2 | …`
+  —— **每个考场占一组两列：考场（已含地点）+ 座位号**；考场组数按实际用到的最大数出现（用不到就不出）：
 
-| 班级      | 姓名 | 准考证号 | 主考场   | 主考场地点 | 单科考场1            | 单科考场1地点 | 单科考场2 | 单科考场2地点 |
-| --------- | ---- | -------- | -------- | ---------- | -------------------- | ------------- | --------- | ------------- |
-| 高三(7)班 | 李娜 | 20240202 | 第三考场 | 高二一班   | 第二十考场（政治）   | 生物实验室    |           |               |
-| 高三(9)班 | 王强 | 20240303 | 第五考场 | 高一·四班  | 第二十一考场（地理） | 录播教室      |           |               |
+| 班级 | 姓名 | 准考证号 | 主考场            | 主座位号 | 单科考场1            | 座位号1 |
+| ---- | ---- | -------- | ----------------- | -------- | -------------------- | ------- |
+| 2501 | 李娜 | 20240202 | 第三考场·高二一班 | 12       | 第二十考场（政治）   | 3       |
+| 2509 | 王强 | 20240303 | 第五考场·高一四班 | 7        | 第二十一考场（地理） | 1       |
 
 - **班级列每行都要填**（不再只写第一行）；
-- **主考场列只写「第N考场」**（不带括号）；**单科考场列**才写 `第N考场（科目、科目）`，
-  科目用全名、多科用「、」连接。主考场 = 该生座位时段最多的那个考场（并列取 `byStudent.rooms` 里靠前的）；
+- **主考场列只写「第N考场·地点」**（不带科目括号）；**单科考场列**才写 `第N考场（科目、科目）`，
+  科目用全名、多科用「、」连接。主考场 = **该生考「语数外」的那间考场**（取不到时退回
+  「座位时段最多的那间」，`studentMainRoomId`——与监考表备注共用同一判定，§5.6 备注列规则）；
 - 考场名用 `baseRoomName` 去掉 job 里那些「（语史政数英地）」后缀，标题里也不出现两个括号；
-- **地点列**取该考场在这名学生那套座位里的 `location`；缺失时退回 `job.rooms[].location`，再缺留空
-  （`roomLocation()`）。表头文案就是列名本身（`主考场地点`、`单科考场1地点`…）。
+- **考场列的地点用「·」拼接**（`roomColumnValue`）：`<考场名>·<地点>`，分隔符 U+00B7、前后不加空格；
+  地点为空（或清理后为空）时**只写考场名、不留「·」**。
+  地点文本里的**中点类字符只在拼接时去掉**（`cleanLocationText` 去 `·•・‧∙` 并把连续空白压成一个空格），
+  `byStudent[].rooms[].location` 与 `job.rooms[].location` 的**原始值不动**；
+  地点取该考场在这名学生那套座位里的 `location`，缺失时退回 `job.rooms[].location`，再缺留空（`roomLocation()`）；
+- **座位号列是数字单元格**（不是文本，Excel 里可直接排序 / 筛选）：取该生**在该考场各时段的座位号**，
+  **去重后升序**（同一座号在多个时段复用只出现一次；多个号则「、」连接成文本）。
 
 **姓名：默认不截断，只在整表超 A4 时才截**
 
@@ -1634,7 +1640,7 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 
 **现状**
 
-`docs/需求-考场级限制与放宽.md` §3.4 建议的第三条出口还没做：目前「时段塌陷」只能靠
+（需求已并入本文）§5.8 里提到的第三条出口还没做：目前「时段塌陷」只能靠
 `options.slots` / `options.forbiddenSameSlot` 解决，没有「这个学生只在统计里、不自动排座」的开关。
 本轮的退路是：把这类学生放进 job 参与推导，再用 `constraints` 手工钉位——不够直接。
 
@@ -1671,6 +1677,32 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 
 ---
 
+### 议题 19：导出/展示层的行序仍依赖 ICU —— 未解决
+
+**现状**
+
+core 已于 v8.4 去掉 ICU 依赖（`compareCombinationNames()` 冻结序，只影响「组合人数并列」时的分房顺序）。
+但 io 与 web 还有 7 处 `localeCompare(..., "zh")`：
+
+- `io/src/index.ts`（名单 sheet 行序）、`io/src/schedule-export.ts`（班级/考场分份文件行序）—— **会影响导出文件的行顺序**；
+- `web/src/lib/session-export.ts`、`web/src/stores/result.ts`、`web/src/stores/roster.ts` —— 只影响展示与下载顺序。
+
+这些都不影响分房结果（铁律 2 管的是求解），但**同一份 job 在不同 Node / 浏览器 ICU 下可能得到不同的名单行序**，
+老师对比两次导出的文件时会以为出了问题。
+
+**验收标准**
+
+1. io 的 2 处改用 core 导出的稳定比较器（需要在 core 里提供一个通用版，或 io 自备冻结序表）；
+2. web 的 5 处至少在注释里写明「顺序随 ICU 可能变化，不影响结果」；有条件时同样改为稳定比较；
+3. 同一份 job 在 Node 与浏览器里导出的**行序一致**（可用验收脚本对两种环境各跑一次做断言）。
+
+**约束**
+
+- 不改变任何**分房/座位**结果；只影响行序；
+- 先回写本节与 §5.6 再动代码。
+
+---
+
 ### 议题 10：行高不按换行内容自适应 —— 未解决
 
 **现状**
@@ -1691,3 +1723,64 @@ canonicalJson(value) / fingerprint(job) / mulberry32(seed)
 - 先回写 `docs/design.md` §5.6 的打印设置表再动代码。
 
 ---
+
+## 18. 已知缺陷登记（外部 review 的独立复核结论）
+
+> 外部两份 review（GPT Astra Pro / Opus 5.5）提出的指控，由 verifier / io-cli / web-ui 分别**独立复核**后的结论。
+> 每条写：结论 / 证据（命令·文件:行号） / 影响面 / 复核人 / 状态。**修复完成后把该条移入 §16 变更记录并在本节删除**；
+> 修复任务由 lead 统一排期，复核人只做验证。全部复核均用合成数据，未使用真实名单。
+
+### R-1 结构错误可以绕过导出门禁（`SEARCH_FAILED` 被当成可交付）
+
+- **结论：成立（P1，真实可复现路径，无需篡改结果）**
+- **证据**：`packages/core/src/plan.ts:318-332`（自校验失败 → 把 validator error **统一包装成 `SEARCH_FAILED`(error)**，原始码只剩 `evidence.validatorCode`）、
+  `plan.ts:142-146`（`blocksListExport()` 明确不拦 `SEARCH_FAILED`）、`packages/cli/src/cli.ts:544-556`（`writeWorkbooks: !blocked` → 照常写两份 xlsx）、
+  `packages/io/src/node.ts:127-137`（io 写出器内部**没有任何闸门**）。
+- **最小复现**：8 名普通学生 + **两间 id 都是 `R1` 的考场**（各带 `extraFrontSeats`）→
+  `node packages/cli/bin/exam-seat.mjs plan --job /tmp/gate-job-min.json --out-dir /tmp/gate-out-min` →
+  **exit 2**，`考场安排名单.xlsx` 与 `考场座位表.xlsx` 都写出，`plan.json` 里 `ok:false` + `SEARCH_FAILED(ENTRY_NUMBERING_MISMATCH)`。
+  人数扫描：≥8 人触发（3–7 人时 validate 通过）。两份交付物还互相矛盾：座位表把该生画在「加座」行，名单表写「座位号 8」。
+- **另**：① 重复占座 / ② 未知学生（名单外的人）/ ③ 漏排 求解器**不会自然产出**，只在结果被篡改后调用 io 导出时复现（同样写出 xlsx、无 error 诊断）；
+  **多场次导出路径（CLI + Web）都没有调用 `validateAll()`**，与 §8.2 的约定不符。
+- **影响面**：结构错误的名单会被当成正确交付物发给老师。
+- **复核人 / 报告**：verifier（task-43，`/tmp/review-export-gate.md`）· **状态：待修**
+
+### R-2 复用 `--out-dir` 会留下旧名单
+
+- **结论：成立（P1，交付可靠性）**
+- **证据**：`packages/io/src/node.ts:127-129`、`133`、`161-173`（只 `mkdirSync`；`writeWorkbooks:false` 只跳过写入、**不清理**已有 Excel，而 `plan.json`/`job.json` 仍无条件覆盖）、
+  `packages/cli/src/cli.ts:491-500`、`544-555`（提示语未说明目录里可能仍有上一次的名单）。
+- **最小复现**：同一个 `--out-dir` 先跑成功 job 再跑失败 job（`rooms: []`）→ 目录里留下「新 plan.json + 旧名单 Excel」；
+  成功→成功且班级变少时，旧班级文件同样残留。
+- **影响面**：老师可能把上一次的名单当成这一次的交付物。
+- **复核人 / 报告**：io-cli（task-46，`/tmp/review-outdir-stale.md`）· **状态：待修**
+
+### R-3 缺考名单「班级+姓名」重名会静默误排除
+
+- **结论：成立（P1，数据正确性）**
+- **证据**：`packages/io/src/index.ts:476-483`（`byNameClass` 同键只保留第一个下标）、`:494`（只取一个下标）、`:496-503`（只有「未匹配」才进 `unmatched` + warning，**多重匹配无任何诊断**）、`:505`。
+- **最小复现**：主名单里同班两名完全同名学生，缺考名单只写「班级+姓名」→ 实测 `matched = [第一个]`、`unmatched = []`、`issues = []`，第二个照常参加。
+- **影响面**：漏排/误排，且界面与 CLI 都不报警。
+- **复核人 / 报告**：verifier（task-47，`/tmp/review-absent-duplicate.md`）· **状态：待修**
+
+### R-4 JSON Patch 原型污染
+
+- **结论：部分成立** —— **污染原语成立，但当前不可达**（需要低成本防御，不是当前可利用漏洞）
+- **证据**：`packages/web/src/lib/json-patch.ts:44-58`（用 `token in record` 判存在，`in` 命中继承属性 → 第 54 行返回 `Object.prototype`）、
+  `:60` / `:86`（`record[token] = clone(op.value)` / `Reflect.deleteProperty`）、`:100`（**无 token 黑名单/白名单**）。
+  用真实模块实测：`add /__proto__/polluted` → `({}).polluted === "PWNED"`；`remove /__proto__/toString` 能删掉原型方法；`replace` 仅在继承属性已存在时才走通。
+- **可达性**：所有 patch 都由 core 诊断生成（路径是字面量 + 数字下标）；`job.json` 导入是**纯数据**且过白名单，网页没有「粘贴 patch」入口 → **当前没有任何输入路径能控制 `path`**。
+- **影响面**：当下零影响；属真实原语缺陷，建议按「`Object.hasOwn` + 拒绝 `__proto__`/`constructor`/`prototype` + 回归测试」低成本预防。
+- **复核人 / 报告**：web-ui（task-48，`/tmp/review-json-patch.md`）· **状态：待修（低成本防御）**
+
+### R-5 桌面版：下载静默覆盖 / 无 CSP / 同窗口导航未拦
+
+- **结论：成立（下载覆盖、无 CSP）＋ 部分成立（导航拦截；新窗口已拦、`will-navigate` 缺失）**
+- **证据**：`packages/desktop/src/main.mjs:151-163`（`configureDownloads()` 直接 `setSavePath`：`existsSync` / 序号 / 确认分支全无 → 同名静默覆盖，`:157`/`:158`）、
+  主进程全文无 CSP（无 `onHeadersReceived`，`packages/web/index.html` 也无 meta）、
+  `main.mjs:189-192` 有 `setWindowOpenHandler`（外链走 `shell.openExternal`）但**无 `will-navigate`**（同窗口可被导航到远程页）。
+  对照项已做对：`contextIsolation:true`（`:176`）、`sandbox:true`（`:178`）、自定义协议路径越界检查（`:104-110`）。
+- **影响面**：老师的旧导出被无声替换；渲染进程若被注入，可加载远程脚本 / 把窗口导航走（拿不到本机能力，但能读 `localStorage` 里的名单与结果）。
+- **复核人 / 报告**：verifier（task-49B，`/tmp/review-desktop.md`，静态分析，未启动 Electron）· **状态：待修**
+
+> 登记口径：本节数字与行号以复核当时的代码为准。R-1/R-2/R-5 里提到的路径与行号在修复后可能失效，派修复任务时以最新代码为准。

@@ -6,7 +6,14 @@
  * 退出码 0 = 全部通过；1 = 有指标没过。
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2765,6 +2772,19 @@ const orderKey = (name) => {
 /** 两个 sheet 的行内容是否逐格一致。 */
 const sameRows = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/** 科目括号：单科考场形如「第37考场（政治）·生物实验室」；主考场不带科目括号（但地点里可能有 (1) 这种半角括号）。 */
+const subjectBracket = (cell) => String(cell).match(/（(?<subject>[^（）]+)）/u)?.groups?.subject;
+
+/** §22 回归断言用的合成学生：`count` 人，可选班级前缀。 */
+const studentsOf = (count, className = "2501") =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `${className}-${index}`,
+    name: `同学生${className}${index}`,
+    className,
+    combination: "物化生",
+    subjects: ["physics", "chemistry", "biology"],
+  }));
+
 /** 考场基础名：去掉 job 里那些「（语史政数英地）」后缀。 */
 const roomBaseName = (room) =>
   String(room.name ?? room.id)
@@ -2883,8 +2903,7 @@ const columnWidthCm = (xml) => {
   const specialCells = totalBody
     .flatMap((row) => roomCols.slice(1).map((index) => String(row[index] ?? "")))
     .filter(Boolean);
-  // 科目括号：单科考场形如「第37考场（政治）·生物实验室」；主考场不带科目括号（但地点里可能有 (1) 这种半角括号）
-  const subjectBracket = (cell) => String(cell).match(/（(?<subject>[^（）]+)）/u)?.groups?.subject;
+  // 科目括号的判定见模块级 `subjectBracket`（单科考场形如「第37考场（政治）·生物实验室」）
   check(
     "总表：主考场不带科目括号、单科考场带科目括号，且考场列用「·」拼地点",
     primaryCells.length > 0 &&
@@ -3431,6 +3450,146 @@ const columnWidthCm = (xml) => {
     (upgrade.diagnostics ?? []).some((diagnostic) => diagnostic.code === "CAPACITY_INSUFFICIENT") &&
       upgradeLabels.some((label) => /35 座 → 改成 42 座/.test(label) && /多放 7 人/.test(label)),
     `建议=${upgradeLabels.join("；")}`,
+  );
+}
+
+/* ---------- 22. 外部 review 的独立复核结论（docs/design.md §18）固化为回归断言 ---------- */
+{
+  const dir = path.join(work, "review-regressions");
+  mkdirSync(dir, { recursive: true });
+  const writeJob = (name, data) => {
+    const target = path.join(dir, name);
+    writeFileSync(target, JSON.stringify(data, null, 2));
+    return target;
+  };
+  // R-1. 结构错误不得交付：两间同 id 考场 + 加座 → 自校验失败，必须拦下名单导出
+  const dupRoomJob = {
+    jobVersion: 2,
+    meta: { title: "R1 复现" },
+    options: { seed: 20261001 },
+    students: studentsOf(10),
+    rooms: [
+      { id: "R1", name: "第1考场", rows: 3, cols: 4, extraFrontSeats: [1, 2] },
+      { id: "R1", name: "第2考场", rows: 3, cols: 4, extraFrontSeats: [1, 2] },
+    ],
+  };
+  const dupRoomPath = writeJob("r1-dup-room.json", dupRoomJob);
+  const dupOutDir = path.join(dir, "r1-out");
+  const dupRun = runFull(["plan", "--job", dupRoomPath, "--out-dir", dupOutDir]);
+  const dupFiles = existsSync(dupOutDir) ? readdirSync(dupOutDir) : [];
+  check(
+    "R-1：重复考场 id 必须拦下导出（非 0 退出，且一份名单都不写）",
+    dupRun.status !== 0 &&
+      dupFiles.length === 0 &&
+      /重复|唯一/u.test(`${dupRun.stdout}${dupRun.stderr}`),
+    `exit=${dupRun.status} 目录文件=${JSON.stringify(dupFiles)}`,
+  );
+
+  // R-1b. 结构错误（自校验不通过）也要拦在导出之前，并且保留原始问题码
+  const badStructurePath = writeJob("r1b-bad-structure.json", {
+    jobVersion: 2,
+    meta: { title: "R1b 复现" },
+    options: { seed: 20261001 },
+    students: studentsOf(6),
+    rooms: [{ id: "R1", name: "第1考场", rows: 2, cols: 3 }],
+    constraints: [
+      {
+        id: "C1",
+        target: { students: ["G0", "G1"] },
+        rowRef: { kind: "absolute", rows: [1] },
+        colRef: { kind: "absolute", cols: [1] },
+      },
+    ],
+  });
+  const badStructureOut = path.join(dir, "r1b-out");
+  const badStructureRun = runFull([
+    "--json",
+    "plan",
+    "--job",
+    badStructurePath,
+    "--out-dir",
+    badStructureOut,
+  ]);
+  const badStructurePlan = JSON.parse(badStructureRun.stdout || "{}");
+  const badStructureFiles = existsSync(badStructureOut) ? readdirSync(badStructureOut) : [];
+  check(
+    "R-1b：自校验失败时保留原始问题码（不再只有泛化的 SEARCH_FAILED）",
+    badStructurePlan.delivery === "blocked" ||
+      (badStructurePlan.diagnostics ?? []).some((d) => d.code !== "SEARCH_FAILED"),
+    `delivery=${badStructurePlan.delivery} 诊断=${(badStructurePlan.diagnostics ?? []).map((d) => d.code).join(",")}`,
+  );
+  check(
+    "R-1b：delivery=blocked 时不得写出名单（只留 plan.json / job.json）",
+    badStructureFiles.every((name) => name.endsWith(".json")),
+    `文件=${JSON.stringify(badStructureFiles)}`,
+  );
+
+  // R-2. 复用输出目录：成功 → 失败 不得残留上一次的名单
+  const okJobPath = writeJob("r2-ok.json", {
+    jobVersion: 2,
+    meta: { title: "R2 复现" },
+    options: { seed: 20261001 },
+    students: [...studentsOf(4, "2601"), ...studentsOf(4, "2602")],
+    rooms: [
+      { id: "R1", name: "第1考场", rows: 3, cols: 4 },
+      { id: "R2", name: "第2考场", rows: 3, cols: 4 },
+    ],
+  });
+  const reuseDir = path.join(dir, "reuse-out");
+  mkdirSync(reuseDir, { recursive: true });
+  // 放一个用户自己的文件，必须不被清理
+  writeFileSync(path.join(reuseDir, "我的笔记.txt"), "别删我");
+  const firstRun = runFull(["plan", "--job", okJobPath, "--out-dir", reuseDir]);
+  const hadWorkbook =
+    existsSync(path.join(reuseDir, "按班级考场安排.xlsx")) &&
+    existsSync(path.join(reuseDir, "考场监考表.xlsx"));
+  // 第二次：把考场去掉，制造「排不出来」
+  const failJobPath = writeJob("r2-fail.json", {
+    jobVersion: 2,
+    meta: { title: "R2 复现（失败）" },
+    options: { seed: 20261001 },
+    students: studentsOf(500, "2601"),
+    rooms: [{ id: "R1", name: "第1考场", rows: 3, cols: 4 }],
+  });
+  const secondRun = runFull(["plan", "--job", failJobPath, "--out-dir", reuseDir]);
+  const staleWorkbook =
+    existsSync(path.join(reuseDir, "按班级考场安排.xlsx")) ||
+    existsSync(path.join(reuseDir, "考场监考表.xlsx")) ||
+    existsSync(path.join(reuseDir, "按班级考场安排")) ||
+    existsSync(path.join(reuseDir, "考场监考表"));
+  check(
+    "R-2：同一输出目录「成功 → 失败」后，不得残留上一次的名单与分份目录",
+    firstRun.status === 0 && hadWorkbook && secondRun.status !== 0 && !staleWorkbook,
+    `首跑 exit=${firstRun.status}（名单=${hadWorkbook}）；二跑 exit=${secondRun.status}（残留名单=${staleWorkbook}）`,
+  );
+  check(
+    "R-2：清理只删本工具产物，用户自己的文件必须保留",
+    existsSync(path.join(reuseDir, "我的笔记.txt")),
+    `笔记.txt 存在=${existsSync(path.join(reuseDir, "我的笔记.txt"))}`,
+  );
+
+  // R-3. 缺考名单「班级+姓名」重名：不得静默排除任意一个
+  // 用一份「同班两个同名」的合成名单：R-3 只与输入契约有关，不需要真实姓名
+  const dupRosterPath = path.join(dir, "r3-roster.xlsx");
+  writeSheet(dupRosterPath, [
+    ["班级", "姓名", "准考证号", "选科"],
+    ["2401", "张伟", "Z001", "物化生"],
+    ["2401", "张伟", "Z002", "物化生"],
+    ["2401", "李明", "Z003", "物化生"],
+  ]);
+  const absentPath = path.join(dir, "r3-absent.xlsx");
+  writeSheet(absentPath, [
+    ["班级", "姓名"],
+    ["2401", "张伟"],
+  ]);
+  const absentRun = runFull(["--json", "roster", "--file", dupRosterPath, "--absent", absentPath]);
+  const absentJson = JSON.parse(absentRun.stdout || "{}");
+  const absentText = JSON.stringify(absentJson);
+  const excludedCount = (absentJson.students ?? []).filter((s) => s.included === false).length;
+  check(
+    "R-3：缺考名单「班级+姓名」匹配到多人时不得静默排除（要有歧义诊断）",
+    absentRun.status === 0 && excludedCount === 0 && /歧义|匹配到|ambiguous/iu.test(absentText),
+    `exit=${absentRun.status} 被排除=${excludedCount} 输出片段=${absentText.slice(0, 240)}`,
   );
 }
 
