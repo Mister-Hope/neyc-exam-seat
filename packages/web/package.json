@@ -1,6 +1,6 @@
 {
   "name": "@exam-seat/web",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "排考场 Web 应用：导入名单、排除缺考、配置考场、设置限定、求解、导出名单。纯前端单页应用，job.json 为唯一契约。",
   "type": "module",

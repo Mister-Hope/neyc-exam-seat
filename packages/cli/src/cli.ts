@@ -35,7 +35,7 @@ export const EXIT_USAGE = 1;
 export const EXIT_DEGRADED = 2;
 export const EXIT_INFEASIBLE = 3;
 
-const VERSION = "0.0.1";
+const VERSION = "0.0.2";
 
 function fail(message: string): never {
   process.stderr.write(`exam-seat: ${message}\n`);

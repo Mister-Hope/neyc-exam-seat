@@ -1,6 +1,6 @@
 {
   "name": "@exam-seat/core",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "排考场核心算法包：蛇形编号、限定编译、预检诊断、模拟退火求解、独立校验。零运行时依赖。",
   "files": [
     "dist"

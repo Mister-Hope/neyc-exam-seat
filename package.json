@@ -1,6 +1,6 @@
 {
   "name": "exam-seat",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "排考场工具：核心算法包 + CLI + Web 应用 + AI Skill",
   "type": "module",
