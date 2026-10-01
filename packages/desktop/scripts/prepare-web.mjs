@@ -27,7 +27,9 @@ async function main() {
   }
 
   if (!existsSync(path.join(WEB_DIST, "index.html"))) {
-    throw new Error(`找不到 ${WEB_DIST}/index.html，先构建 packages/web`);
+    throw new Error(
+      `找不到 ${WEB_DIST}/index.html，先跑 \`pnpm --filter @exam-seat/web build\`（根 pnpm build 不会构建 web）`,
+    );
   }
 
   rmSync(TARGET, { recursive: true, force: true });

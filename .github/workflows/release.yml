@@ -89,8 +89,12 @@ jobs:
       - name: 安装依赖
         run: pnpm ci
 
-      - name: 构建核心包（web 产物由 desktop 的 prepare-web 负责）
-        run: pnpm build
+      # 注意：根 `pnpm build` 排除了 packages/desktop，而 packages/web 是 private、没有自己的
+      # build 参与根递归构建，所以这里必须**显式**构建 web，否则 prepare-web 找不到 web/dist。
+      - name: 构建核心包与网页产物
+        run: |
+          pnpm build
+          pnpm --filter @exam-seat/web build
 
       # mac 需要额外把 zip 也传上去（免安装绿色包）
       - name: 打包桌面版（${{ matrix.platform }}）
