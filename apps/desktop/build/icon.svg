@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    「考场排布」应用图标源文件。
+    图形 = 讲台 + 4×5 座位网格，其中一个座位高亮（对应「排考场」这件事）。
+    导出见同目录 README.md（icon.png / icon.icns / icon.ico）。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e40af" />
+      <stop offset="1" stop-color="#2563eb" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bg)" />
+
+  <!-- 讲台 -->
+  <rect x="352" y="146" width="320" height="58" rx="29" ry="29" fill="#ffffff" opacity="0.85" />
+
+  <!-- 座位网格：4 行 × 5 列 -->
+  <g fill="#ffffff" opacity="0.94">
+    <rect x="110" y="280" width="132" height="132" rx="30" ry="30" />
+    <rect x="278" y="280" width="132" height="132" rx="30" ry="30" />
+    <rect x="446" y="280" width="132" height="132" rx="30" ry="30" />
+    <rect x="614" y="280" width="132" height="132" rx="30" ry="30" />
+    <rect x="782" y="280" width="132" height="132" rx="30" ry="30" />
+
+    <rect x="110" y="448" width="132" height="132" rx="30" ry="30" />
+    <rect x="614" y="448" width="132" height="132" rx="30" ry="30" />
+    <rect x="782" y="448" width="132" height="132" rx="30" ry="30" />
+
+    <rect x="110" y="616" width="132" height="132" rx="30" ry="30" />
+    <rect x="278" y="616" width="132" height="132" rx="30" ry="30" />
+    <rect x="446" y="616" width="132" height="132" rx="30" ry="30" />
+    <rect x="614" y="616" width="132" height="132" rx="30" ry="30" />
+    <rect x="782" y="616" width="132" height="132" rx="30" ry="30" />
+
+    <rect x="110" y="784" width="132" height="132" rx="30" ry="30" />
+    <rect x="278" y="784" width="132" height="132" rx="30" ry="30" />
+    <rect x="446" y="784" width="132" height="132" rx="30" ry="30" />
+    <rect x="614" y="784" width="132" height="132" rx="30" ry="30" />
+    <rect x="782" y="784" width="132" height="132" rx="30" ry="30" />
+  </g>
+
+  <!-- 高亮的那个座位（正在被安排的人） -->
+  <rect x="278" y="448" width="132" height="132" rx="30" ry="30" fill="#fbbf24" />
+  <rect x="446" y="448" width="132" height="132" rx="30" ry="30" fill="#f59e0b" opacity="0.55" />
+</svg>

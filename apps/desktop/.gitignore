@@ -1,0 +1,11 @@
+# 由 scripts/prepare-web.mjs 生成的网页产物副本（packages/web/dist 的拷贝）
+web-dist/
+
+# electron-builder 产物（dmg / exe / unpacked app）
+release/
+
+# 烟雾测试产物（截图、导出文件）
+smoke-out/
+
+# 本机沙箱环境把 Electron / electron-builder 的下载缓存放到工作区内（默认在 ~/Library/Caches，受限时用得上）
+.cache/

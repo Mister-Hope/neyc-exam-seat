@@ -1,0 +1,63 @@
+# Electron 打包配置（apps/desktop）
+#
+# - `web-dist/`：由 `scripts/prepare-web.mjs` 从 packages/web/dist 同步过来，作为 resources/web 进包；
+# - `build/`：图标（icon.icns / icon.ico，源文件 icon.svg）；
+# - `release/`：产物目录（dmg / exe）；
+# - 不签名：CSC_IDENTITY_AUTO_DISCOVERY=false（在 scripts/build.mjs 里设置），
+#   mac 里也显式 `identity: null`，避免 electron-builder 去找钥匙串。
+# - 对外分发文件名保持英文（exam-seat-desktop-…），应用名 / 窗口标题用中文「考场排布」。
+appId: cn.neyc.exam-seat
+productName: 考场排布
+copyright: NEYC · exam-seat
+
+directories:
+  output: release
+  buildResources: build
+
+# 只打主进程源码与 package.json：没有生产依赖，node_modules 不需要进包
+files:
+  - src/**/*
+  - package.json
+  - "!**/*.map"
+
+extraResources:
+  - from: web-dist
+    to: web
+    filter:
+      - "**/*"
+
+asar: true
+
+mac:
+  category: public.app-category.education
+  identity: null
+  icon: build/icon.icns
+  # 本机是 arm64，只出 arm64 包。
+  # dmg 给老师用；zip 作为免安装的绿色包（也是本机没法调 hdiutil 时的本地验证路径）。
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+  artifactName: exam-seat-desktop-${version}-mac-arm64.${ext}
+
+dmg:
+  title: 考场排布 ${version}
+
+win:
+  icon: build/icon.ico
+  target:
+    # nsis 安装包：单文件 .exe、可选安装目录，比 portable 更接近老师的使用习惯
+    - target: nsis
+      arch:
+        - x64
+  artifactName: exam-seat-desktop-${version}-win-x64.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 考场排布
