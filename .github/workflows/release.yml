@@ -115,7 +115,7 @@ jobs:
 
       - name: 发布到该 tag 的 Release
         if: needs.version.outputs.is_tag == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: ${{ matrix.glob }}
@@ -189,7 +189,7 @@ jobs:
 
       - name: 发布到该 tag 的 Release
         if: needs.version.outputs.is_tag == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: ${{ matrix.glob }}
@@ -238,7 +238,7 @@ jobs:
 
       - name: 发布到该 tag 的 Release
         if: needs.version.outputs.is_tag == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           files: scripts/release/out/exam-seat-agent-bundle-*.zip
