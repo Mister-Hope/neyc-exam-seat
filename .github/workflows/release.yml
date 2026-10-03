@@ -107,7 +107,7 @@ jobs:
         run: ls -la packages/desktop/release
 
       - name: 上传 workflow 产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.glob }}
@@ -181,7 +181,7 @@ jobs:
           esac
 
       - name: 上传 workflow 产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.glob }}
@@ -211,7 +211,7 @@ jobs:
         run: pnpm ci
 
       - name: 下载两平台的 CLI 二进制
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: cli-*
           merge-multiple: true
@@ -230,7 +230,7 @@ jobs:
             --version "${VERSION}"
 
       - name: 上传 workflow 产物
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: agent-bundle
           path: scripts/release/out/exam-seat-agent-bundle-*.zip
