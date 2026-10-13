@@ -1,13 +1,15 @@
 packages:
   - packages/*
 
+virtualStoreType: global
+
 allowBuilds:
-  vue-demi: true
   # electron 的 postinstall 会下载 ~100MB 二进制；显式关掉：
   # `pnpm install` / CI 保持轻量，打包时由 electron-builder 自己下载对应平台的 Electron 发行版。
   electron: false
   # electron-builder 的传递依赖，只有做 Squirrel 安装包才需要它的 postinstall（我们走 nsis），显式关掉避免 pnpm 报「被忽略的构建脚本」。
   electron-winstaller: false
+  vue-demi: true
 
 minimumReleaseAgeExclude:
   - "@mr-hope/*"

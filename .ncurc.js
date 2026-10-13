@@ -10,6 +10,7 @@ export default {
 
     return 1;
   },
+  workspaces: true,
   upgrade: true,
   timeout: 360000,
   target: (name) => {
