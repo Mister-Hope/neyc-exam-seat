@@ -84,7 +84,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/setup@v3
         with:
-          runtime: node@24
+          runtime: node@^24.22.1
 
       - name: 安装依赖
         run: pnpm ci
@@ -145,7 +145,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/setup@v3
         with:
-          runtime: node@24
+          runtime: node@^24.22.1
 
       - name: 安装依赖
         run: pnpm ci
@@ -205,7 +205,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/setup@v3
         with:
-          runtime: node@24
+          runtime: node@^24.22.1
 
       - name: 安装依赖
         run: pnpm ci
