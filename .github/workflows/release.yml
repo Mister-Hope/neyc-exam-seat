@@ -85,9 +85,7 @@ jobs:
         uses: pnpm/setup@v3
         with:
           runtime: node@^24.22.1
-
-      - name: 安装依赖
-        run: pnpm ci
+          require-lockfile: true
 
       # 注意：根 `pnpm build` 排除了 packages/desktop，而 packages/web 是 private、没有自己的
       # build 参与根递归构建，所以这里必须**显式**构建 web，否则 prepare-web 找不到 web/dist。
@@ -146,9 +144,7 @@ jobs:
         uses: pnpm/setup@v3
         with:
           runtime: node@^24.22.1
-
-      - name: 安装依赖
-        run: pnpm ci
+          require-lockfile: true
 
       # CLI 二进制内联了 core/io（alias 到 src），所以不依赖 pnpm build；这里仍跑一次，
       # 保证「和发布出去的其他产物同源」，也顺手验证仓库在当前 tag 上是可构建的
@@ -206,9 +202,7 @@ jobs:
         uses: pnpm/setup@v3
         with:
           runtime: node@^24.22.1
-
-      - name: 安装依赖
-        run: pnpm ci
+          require-lockfile: true
 
       - name: 下载两平台的 CLI 二进制
         uses: actions/download-artifact@v8
